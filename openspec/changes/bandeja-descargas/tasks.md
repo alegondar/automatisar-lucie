@@ -18,7 +18,7 @@
 ## 3. Movimiento Seguro, Bitácora y Reversibilidad
 
 - [x] 3.1 Implementar `GestorMovimientosBandeja` con confinamiento estricto de rutas a `~/Descargas` mediante `os.path.realpath`, verificando el rechazo de rutas externas con tests unitarios.
-- [x] 3.2 Implementar la simulación previa y resolución de destino: hacia escenas existentes en `~/Descargas` (entran directo a la carpeta sin alterarla) o escenas nuevas (`<destino>/<personaje>/videos sin editar/<escena>/`), aplicando sufijos numéricos correlativos ` (1)`, ` (2)` ante colisiones en el destino inicial.
+- [x] 3.2 Implementar la simulación previa y resolución de destino según tipo de archivo: videos a '<destino>/<personaje>/videos sin editar/<escena>/' e imágenes a '<destino>/<personaje>/<carpeta_imagenes>/<escena>/' (con 'carpeta_imagenes' configurable en config_bandeja.json, por defecto 'imagenes'), repartiendo lotes mixtos y aplicando sufijos numéricos correlativos ante colisiones.
 - [x] 3.3 Implementar la ejecución de movimientos exclusivamente con `os.rename` y el asentamiento en la bitácora `.jsonl`, verificando que el archivo se reubique sin duplicar ni borrar.
 - [x] 3.4 Implementar la función de deshacer (undo) con `os.rename`, verificando que si la ruta original ya está ocupada se rechace la operación con mensaje explicativo, sin pisar ni sufijar jamás.
 
@@ -34,7 +34,7 @@
 - [x] 5.1 Crear en `test_bandeja_descargas.py` pruebas unitarias en `/tmp` para la validación exhaustiva de nombres de escena (caracteres prohibidos, nombres reservados Windows, trailing dot/space, longitud > 100 y realpath confinada).
 - [x] 5.2 Crear en `test_bandeja_descargas.py` pruebas para la protección anti-CSRF, validación de cabeceras Host y Content-Type, verificando que solicitudes POST sin token o con Host foráneo respondan 403 Forbidden.
 - [x] 5.3 Crear en `test_bandeja_descargas.py` pruebas para `/api/miniatura` asegurando que rechace rutas directas, solo acepte IDs registrados y construya el comando de `ffmpeg` seguro con `--` y sin shell.
-- [x] 5.4 Crear en `test_bandeja_descargas.py` pruebas para el enrutamiento de escenas existentes en Descargas (los archivos entran tal cual a la carpeta sin reordenarla ni moverla) y escenas nuevas en `<destino>`.
+- [x] 5.4 Crear en `test_bandeja_descargas.py` pruebas para el enrutamiento según tipo de archivo (videos a 'videos sin editar', imágenes a 'carpeta_imagenes' configurable, partición en lote mixto) y escenas existentes en Descargas.
 - [x] 5.5 Crear en `test_bandeja_descargas.py` pruebas para la función de deshacer, confirmando que si la ruta original está ocupada se rechaza con error claro, sin pisar ni sufijar jamás.
 - [x] 5.6 Crear en `test_bandeja_descargas.py` pruebas para la lista blanca, estabilidad de descargas (5s) y agrupación temporal de lotes.
 - [x] 5.7 Integrar `bandeja_descargas.py` en la auditoría estática AST anti-borrado de `seguridad_anti_borrado.py`, verificando que mantenga 0 violaciones de las 11 primitivas prohibidas.

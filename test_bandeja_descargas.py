@@ -345,6 +345,103 @@ class TestGestorMovimientosYDeshacer(unittest.TestCase):
         with open(arch, "rb") as f:
             self.assertEqual(f.read(), b"archivo nuevo en el mismo lugar")
 
+    def test_movimiento_lote_mixto_videos_e_imagenes(self):
+        """Un lote mixto reparte videos a 'videos sin editar' e imágenes a 'carpeta_imagenes'."""
+        video_arch = os.path.join(self.descargas, "grok-video-mixto.mp4")
+        foto_arch = os.path.join(self.descargas, "lucie_20261003120000.png")
+        with open(video_arch, "wb") as f:
+            f.write(b"video data")
+        with open(foto_arch, "wb") as f:
+            f.write(b"foto data")
+
+        sim = self.gestor.simular_movimiento_lote(
+            archivos=[
+                {"ruta": video_arch, "tamanio": 10, "hash": "h_vid"},
+                {"ruta": foto_arch, "tamanio": 9, "hash": "h_img"}
+            ],
+            personaje="lucie",
+            nombre_escena="parque_primavera",
+            es_existente_descargas=False
+        )
+
+        self.assertEqual(len(sim["movimientos"]), 2)
+        dest_vid = sim["movimientos"][0]["destino"]
+        dest_img = sim["movimientos"][1]["destino"]
+
+        self.assertEqual(
+            dest_vid,
+            os.path.join(self.destino_base, "lucie", "videos sin editar", "parque_primavera", "grok-video-mixto.mp4")
+        )
+        self.assertEqual(
+            dest_img,
+            os.path.join(self.destino_base, "lucie", "imagenes", "parque_primavera", "lucie_20261003120000.png")
+        )
+
+        # Ejecutar movimiento
+        res = self.gestor.ejecutar_movimiento_lote(sim, lote_id="lote_mixto")
+        self.assertTrue(res["exito"])
+        self.assertFalse(os.path.exists(video_arch))
+        self.assertFalse(os.path.exists(foto_arch))
+        self.assertTrue(os.path.exists(dest_vid))
+        self.assertTrue(os.path.exists(dest_img))
+
+        # Deshacer y verificar reversión limpia
+        res_deshacer = self.gestor.deshacer_operacion(res["id_operacion"])
+        self.assertTrue(res_deshacer["exito"])
+        self.assertTrue(os.path.exists(video_arch))
+        self.assertTrue(os.path.exists(foto_arch))
+
+    def test_carpeta_imagenes_personalizada(self):
+        """Permite configurar un nombre alternativo para la subcarpeta de imágenes."""
+        gestor_custom = GestorMovimientosBandeja(
+            ruta_descargas=self.descargas,
+            ruta_destino_base=self.destino_base,
+            db=self.db,
+            ruta_bitacora=os.path.join(self.tmp_dir, "bitacora_custom.jsonl"),
+            carpeta_imagenes="fotos_sesion"
+        )
+        foto_arch = os.path.join(self.descargas, "toma_20261003140000.webp")
+        with open(foto_arch, "wb") as f:
+            f.write(b"webp data")
+
+        sim = gestor_custom.simular_movimiento_lote(
+            archivos=[{"ruta": foto_arch, "tamanio": 9, "hash": "h_custom"}],
+            personaje="mailen",
+            nombre_escena="estudio",
+            es_existente_descargas=False
+        )
+
+        dest_img = sim["movimientos"][0]["destino"]
+        self.assertEqual(
+            dest_img,
+            os.path.join(self.destino_base, "mailen", "fotos_sesion", "estudio", "toma_20261003140000.webp")
+        )
+
+        res = gestor_custom.ejecutar_movimiento_lote(sim, lote_id="lote_custom")
+        self.assertTrue(res["exito"])
+        self.assertTrue(os.path.exists(dest_img))
+
+    def test_descubrimiento_escenas_destino_videos_e_imagenes(self):
+        """Descubre escenas ya existentes en destino tanto bajo 'videos sin editar' como en 'imagenes'."""
+        escena_vid = os.path.join(self.destino_base, "lucie", "videos sin editar", "escena_video_previa")
+        escena_img = os.path.join(self.destino_base, "lucie", "imagenes", "escena_foto_previa")
+        os.makedirs(escena_vid, exist_ok=True)
+        os.makedirs(escena_img, exist_ok=True)
+
+        config = ConfiguracionBandeja()
+        config.ruta_descargas = self.descargas
+        config.ruta_destino_base = self.destino_base
+        config.carpeta_imagenes = "imagenes"
+
+        vigilante = VigilanteBandeja(
+            config, self.db, FiltroListaBlanca(config), DetectorDescargasActivas(0.1), AgrupadorLotes(10)
+        )
+        vigilante.escanear()
+        estado = vigilante.obtener_estado()
+        nombres_escenas = [e["nombre"] for e in estado["escenas"]]
+        self.assertIn("escena_video_previa", nombres_escenas)
+        self.assertIn("escena_foto_previa", nombres_escenas)
+
 
 class TestServidorHTTPYSeguridad(unittest.TestCase):
     """Pruebas del servidor HTTP local, protección anti-CSRF, cabeceras y miniaturas seguras."""

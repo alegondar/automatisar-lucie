@@ -1,6 +1,7 @@
 {
   "ruta_descargas": "~/Descargas",
   "ruta_destino_base": "~/Descargas/_lucie",
+  "carpeta_imagenes": "imagenes",
   "puerto_servidor": 8766,
   "host_servidor": "127.0.0.1",
   "intervalo_sondeo_segundos": 5,

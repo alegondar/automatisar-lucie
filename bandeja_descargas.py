@@ -36,6 +36,7 @@ from urllib.parse import parse_qs, urlparse
 
 # Constantes del sistema
 EXTENSIONES_MEDIA_DEFECTO = [".mp4", ".mov", ".webm", ".jpg", ".jpeg", ".png", ".webp"]
+EXTENSIONES_IMAGENES_DEFECTO = {".jpg", ".jpeg", ".png", ".webp"}
 EXTENSIONES_TEMP_DEFECTO = [".crdownload", ".part", ".tmp"]
 NOMBRES_RESERVADOS_WINDOWS = {
     "CON", "PRN", "AUX", "NUL",
@@ -79,6 +80,7 @@ class ConfiguracionBandeja:
         self.ruta_config = ruta_config
         self.ruta_descargas = os.path.expanduser("~/Descargas")
         self.ruta_destino_base = os.path.expanduser("~/Descargas/_lucie")
+        self.carpeta_imagenes = "imagenes"
         self.puerto_servidor = 8766
         self.host_servidor = "127.0.0.1"
         self.intervalo_sondeo_segundos = 5
@@ -100,6 +102,8 @@ class ConfiguracionBandeja:
                 self.ruta_descargas = os.path.abspath(os.path.expanduser(datos["ruta_descargas"]))
             if "ruta_destino_base" in datos:
                 self.ruta_destino_base = os.path.abspath(os.path.expanduser(datos["ruta_destino_base"]))
+            if "carpeta_imagenes" in datos:
+                self.carpeta_imagenes = str(datos["carpeta_imagenes"]).strip() or "imagenes"
             if "puerto_servidor" in datos:
                 self.puerto_servidor = int(datos["puerto_servidor"])
             if "host_servidor" in datos:
@@ -300,7 +304,8 @@ class ValidadorEscenas:
 
     @staticmethod
     def validar_nombre_escena(nombre: str, ruta_destino_base: str, ruta_descargas: str,
-                              es_existente_descargas: bool = False, personaje: str = "lucie") -> Tuple[bool, str]:
+                              es_existente_descargas: bool = False, personaje: str = "lucie",
+                              carpeta_imagenes: str = "imagenes") -> Tuple[bool, str]:
         """
         Valida que el nombre de escena sea seguro, cumpla reglas de longitud y caracteres,
         y no escape de su destino base.
@@ -335,13 +340,19 @@ class ValidadorEscenas:
             if es_existente_descargas:
                 ruta_final = os.path.join(ruta_descargas, nombre)
                 base_confinada = os.path.realpath(ruta_descargas)
+                ruta_final_real = os.path.realpath(ruta_final)
+                if not (ruta_final_real == base_confinada or ruta_final_real.startswith(base_confinada + os.sep)):
+                    return False, "La ruta de la escena escapa de los límites permitidos del directorio de destino."
             else:
-                ruta_final = os.path.join(ruta_destino_base, personaje, "videos sin editar", nombre)
                 base_confinada = os.path.realpath(ruta_destino_base)
-
-            ruta_final_real = os.path.realpath(ruta_final)
-            if not (ruta_final_real == base_confinada or ruta_final_real.startswith(base_confinada + os.sep)):
-                return False, "La ruta de la escena escapa de los límites permitidos del directorio de destino."
+                subcarpetas = ["videos sin editar"]
+                if carpeta_imagenes and carpeta_imagenes not in subcarpetas:
+                    subcarpetas.append(carpeta_imagenes)
+                for sub in subcarpetas:
+                    ruta_final = os.path.join(ruta_destino_base, personaje, sub, nombre)
+                    ruta_final_real = os.path.realpath(ruta_final)
+                    if not (ruta_final_real == base_confinada or ruta_final_real.startswith(base_confinada + os.sep)):
+                        return False, "La ruta de la escena escapa de los límites permitidos del directorio de destino."
         except Exception as e:
             return False, f"Error al validar confinamiento de la escena: {str(e)}"
 
@@ -447,11 +458,12 @@ class GestorMovimientosBandeja:
     """
 
     def __init__(self, ruta_descargas: str, ruta_destino_base: str, db: GestorBaseDatosBandeja,
-                 ruta_bitacora: str = "bitacora_bandeja.jsonl"):
+                 ruta_bitacora: str = "bitacora_bandeja.jsonl", carpeta_imagenes: str = "imagenes"):
         self.ruta_descargas = os.path.realpath(ruta_descargas)
         self.ruta_destino_base = os.path.realpath(ruta_destino_base)
         self.db = db
         self.ruta_bitacora = ruta_bitacora
+        self.carpeta_imagenes = (carpeta_imagenes or "imagenes").strip()
         self._lock = threading.Lock()
 
     def _validar_confinamiento(self, ruta: str):
@@ -489,7 +501,8 @@ class GestorMovimientosBandeja:
         # 1. Validar nombre de escena
         valido, motivo = ValidadorEscenas.validar_nombre_escena(
             nombre_escena, self.ruta_destino_base, self.ruta_descargas,
-            es_existente_descargas=es_existente_descargas, personaje=personaje
+            es_existente_descargas=es_existente_descargas, personaje=personaje,
+            carpeta_imagenes=self.carpeta_imagenes
         )
         if not valido:
             raise ErrorValidacionEscena(motivo)
@@ -505,7 +518,12 @@ class GestorMovimientosBandeja:
             if es_existente_descargas:
                 carpeta_destino = os.path.join(self.ruta_descargas, nombre_escena)
             else:
-                carpeta_destino = os.path.join(self.ruta_destino_base, personaje, "videos sin editar", nombre_escena)
+                _, ext = os.path.splitext(nombre_archivo.lower())
+                if ext in EXTENSIONES_IMAGENES_DEFECTO:
+                    subcarpeta_tipo = self.carpeta_imagenes
+                else:
+                    subcarpeta_tipo = "videos sin editar"
+                carpeta_destino = os.path.join(self.ruta_destino_base, personaje, subcarpeta_tipo, nombre_escena)
 
             self._validar_confinamiento(carpeta_destino)
             destino_inicial = os.path.join(carpeta_destino, nombre_archivo)
@@ -875,17 +893,22 @@ class VigilanteBandeja:
         if os.path.exists(self.config.ruta_destino_base):
             try:
                 for pers in ("lucie", "roli", "mailen"):
-                    carpeta_videos = os.path.join(self.config.ruta_destino_base, pers, "videos sin editar")
-                    if os.path.isdir(carpeta_videos):
-                        for sub in os.listdir(carpeta_videos):
-                            ruta_sub = os.path.join(carpeta_videos, sub)
-                            if os.path.isdir(ruta_sub):
-                                escenas_existentes.append({
-                                    "nombre": sub,
-                                    "personaje": pers,
-                                    "tipo": "destino_existente",
-                                    "ruta": ruta_sub
-                                })
+                    subcarpetas_tipo = ["videos sin editar"]
+                    if self.config.carpeta_imagenes and self.config.carpeta_imagenes not in subcarpetas_tipo:
+                        subcarpetas_tipo.append(self.config.carpeta_imagenes)
+                    for sub_tipo in subcarpetas_tipo:
+                        carpeta_tipo = os.path.join(self.config.ruta_destino_base, pers, sub_tipo)
+                        if os.path.isdir(carpeta_tipo):
+                            for sub in os.listdir(carpeta_tipo):
+                                ruta_sub = os.path.join(carpeta_tipo, sub)
+                                if os.path.isdir(ruta_sub):
+                                    if not any(e["nombre"] == sub and e["personaje"] == pers for e in escenas_existentes):
+                                        escenas_existentes.append({
+                                            "nombre": sub,
+                                            "personaje": pers,
+                                            "tipo": "destino_existente",
+                                            "ruta": ruta_sub
+                                        })
             except OSError:
                 pass
 
@@ -1695,7 +1718,9 @@ def main():
     filtro = FiltroListaBlanca(config)
     detector = DetectorDescargasActivas()
     agrupador = AgrupadorLotes(config.ventana_lote_minutos)
-    movimientos = GestorMovimientosBandeja(config.ruta_descargas, config.ruta_destino_base, db)
+    movimientos = GestorMovimientosBandeja(
+        config.ruta_descargas, config.ruta_destino_base, db, carpeta_imagenes=config.carpeta_imagenes
+    )
     miniaturas = GeneradorMiniaturas(db)
 
     vigilante = VigilanteBandeja(config, db, filtro, detector, agrupador)

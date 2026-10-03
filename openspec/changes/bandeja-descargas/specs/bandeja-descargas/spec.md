@@ -32,8 +32,8 @@ El sistema SHALL ignorar archivos temporales con sufijos de descarga (.crdownloa
 - **WHEN** un archivo de video está siendo escrito en disco y su tamaño difiere entre lecturas separadas por 5 segundos
 - **THEN** el sistema pospone su inclusión en lotes hasta que permanezca estable
 
-### Requirement: Reconocimiento y enrutamiento hacia escenas existentes sin movimiento
-El sistema SHALL escanear las carpetas de primer nivel en `~/Descargas` cuyos nombres comiencen con alias registrados de personajes y ofrecerlas como escenas existentes sin moverlas. Si el usuario selecciona una escena existente en `~/Descargas`, los archivos se moverán directamente dentro de ella; las escenas nuevas se crearán en `<destino>/<personaje>/videos sin editar/<escena>/`.
+### Requirement: Reconocimiento y enrutamiento hacia escenas según tipo de archivo
+El sistema SHALL enrutar el destino de los archivos según su tipo: videos (mp4, mov, webm) hacia `<destino>/<personaje>/videos sin editar/<escena>/`, e imágenes (jpg, jpeg, png, webp) hacia `<destino>/<personaje>/<carpeta_imagenes>/<escena>/` (con `carpeta_imagenes` configurable en `config_bandeja.json`, por defecto "imagenes"). Los lotes mixtos se repartirán automáticamente entre ambas carpetas. Si se selecciona una escena existente en `~/Descargas`, los archivos se moverán directamente dentro de ella sin reordenarla ni moverla.
 
 #### Scenario: Detección de carpeta de escena existente
 - **WHEN** existe una carpeta `roli parque` en `~/Descargas`
@@ -43,9 +43,9 @@ El sistema SHALL escanear las carpetas de primer nivel en `~/Descargas` cuyos no
 - **WHEN** el usuario selecciona una escena existente ubicada en `~/Descargas` como destino de un lote
 - **THEN** los archivos del lote se mueven directamente al interior de dicha carpeta sin reordenar ni mover la carpeta contenedora
 
-#### Scenario: Creación de escena nueva en destino
-- **WHEN** el usuario define una escena nueva para un lote
-- **THEN** los archivos se organizan bajo `<destino>/<personaje>/videos sin editar/<escena>/`
+#### Scenario: Enrutamiento diferenciado en lote mixto hacia escena nueva
+- **WHEN** un lote contiene videos (ej. `grok-video-1.mp4`) e imágenes (ej. `lucie_20261003120000.png`) para una escena nueva `toma1` del personaje `lucie`
+- **THEN** el sistema asigna el video a `<destino>/lucie/videos sin editar/toma1/` y la imagen a `<destino>/lucie/<carpeta_imagenes>/toma1/`, mostrándolo en la simulación previa
 
 ### Requirement: Validación estricta de nombres de escena y verificación de destino
 El sistema SHALL validar el nombre de cualquier escena y rechazarlo con mensaje claro si contiene "/", "\", "..", caracteres de control, caracteres inválidos en Windows/exFAT (<, >, :, ", |, ?, *), si termina en punto o espacio, si coincide con nombres reservados de Windows (CON, PRN, AUX, NUL, COM1-9, LPT1-9) o si supera 100 caracteres, verificando con realpath que el destino resida dentro de `<destino>` o de la escena existente.

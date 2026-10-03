@@ -47,6 +47,7 @@ El flujo de producción de contenidos para el proyecto Lucie genera continuament
   {
     "ruta_descargas": "~/Descargas",
     "ruta_destino_base": "~/Descargas/_lucie",
+    "carpeta_imagenes": "imagenes",
     "puerto_servidor": 8766,
     "host_servidor": "127.0.0.1",
     "intervalo_sondeo_segundos": 5,
@@ -72,11 +73,14 @@ El flujo de producción de contenidos para el proyecto Lucie genera continuament
   - Confinamiento con `os.path.realpath`: calcula la ruta absoluta final y verifica que empiece estrictamente con el directorio de destino canónico.
 - **Razón**: Asegura interoperabilidad total si el contenido luego se copia a discos exFAT/FAT32 y previene vulnerabilidades de path traversal.
 
-### 4. Enrutamiento de Destino: Escenas Existentes vs Nuevas
+### 4. Enrutamiento de Destino: Escenas Existentes vs Nuevas (Diferenciado por Tipo)
 - **Decisión**:
   - **Escena existente en `~/Descargas` (carpeta con alias)**: Si el usuario selecciona una carpeta existente de Descargas (ej. `~/Descargas/roli parque`), los archivos del lote se mueven directamente al interior de esa carpeta (`~/Descargas/roli parque/<archivo>`). La carpeta existente no se mueve, no se renombra ni se altera en su estructura.
-  - **Escena nueva o existente en `<destino>`**: Se crea y utiliza la ruta canónica `<destino>/<personaje>/videos sin editar/<escena>/<archivo>`.
-- **Razón**: Permite alimentar carpetas de trabajo activas sin duplicar jerarquías innecesarias.
+  - **Escena nueva o existente en `<destino>`**:
+    - **Videos (`.mp4`, `.mov`, `.webm`)**: se enrutan a `<destino>/<personaje>/videos sin editar/<escena>/<archivo>`.
+    - **Imágenes (`.jpg`, `.jpeg`, `.png`, `.webp`)**: se enrutan a `<destino>/<personaje>/<carpeta_imagenes>/<escena>/<archivo>`, donde `carpeta_imagenes` es configurable en `config_bandeja.json` (por defecto `"imagenes"`).
+    - **Lotes mixtos**: se dividen automáticamente según la extensión de cada archivo; la simulación previa (`/api/simular-mover`) detalla explícitamente el origen y destino exacto de cada elemento.
+- **Razón**: Respeta la organización de assets del proyecto, separando fotogramas/imágenes fijas de los videos sin editar mientras mantiene la agrupación temática por escena.
 
 ### 5. Protección Anti-CSRF y Validación de Cabeceras
 - **Decisión**:
