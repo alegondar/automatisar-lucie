@@ -1,0 +1,19 @@
+{
+  "carpetas_ignoradas": [
+    "_a_revisar",
+    "code",
+    "System Volume Information",
+    "$RECYCLE.BIN",
+    ".Trash-*"
+  ],
+  "umbral_similitud_carpetas": 0.75,
+  "prefijo_destino_duplicados": "_a_revisar/duplicados",
+  "reglas_duplicados": {
+    "prioridad_carpetas": [
+      "videos completos"
+    ],
+    "criterio_desempate": "mas_reciente"
+  },
+  "tolerancia_mtime_segundos": 2.0,
+  "ruta_alias_personajes": "alias-personajes.json"
+}

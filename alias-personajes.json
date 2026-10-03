@@ -1,0 +1,23 @@
+{
+  "reglas": [
+    {
+      "patrones": ["roli*", "laroli*", "magui*"],
+      "personaje": "roli",
+      "destino_carpeta": "roli",
+      "requiere_confirmacion": false
+    },
+    {
+      "patrones": ["lucie*", "luci*"],
+      "personaje": "lucie",
+      "destino_carpeta": "lucie",
+      "requiere_confirmacion": false
+    },
+    {
+      "patrones": ["mailen*"],
+      "personaje": "mailen",
+      "destino_carpeta": "mailen",
+      "requiere_confirmacion": true,
+      "nota": "a confirmar"
+    }
+  ]
+}
