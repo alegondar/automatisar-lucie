@@ -1,0 +1,27 @@
+{
+  "ruta_descargas": "~/Descargas",
+  "ruta_destino_base": "~/Descargas/_lucie",
+  "puerto_servidor": 8766,
+  "host_servidor": "127.0.0.1",
+  "intervalo_sondeo_segundos": 5,
+  "ventana_lote_minutos": 10,
+  "extensiones_media": [
+    ".mp4",
+    ".mov",
+    ".webm",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp"
+  ],
+  "patrones_candidatos": {
+    "grok": "grok-video-*",
+    "nano_banana_regex": "^.+_\\d{14}\\.(jpg|jpeg|png|webp)$",
+    "flow": ""
+  },
+  "extensiones_temporales": [
+    ".crdownload",
+    ".part",
+    ".tmp"
+  ]
+}

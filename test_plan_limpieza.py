@@ -80,6 +80,7 @@ class TestSeguridadAntiBorradoAST(unittest.TestCase):
             os.path.join(repo_dir, "plan_limpieza.py"),
             os.path.join(repo_dir, "inventario_pendrive.py"),
             os.path.join(repo_dir, "seguridad_anti_borrado.py"),
+            os.path.join(repo_dir, "bandeja_descargas.py"),
         ]
         violaciones = auditar_archivos_proyecto(repo_dir, archivos_a_incluir=archivos_operativos)
         if violaciones:
