@@ -51,7 +51,7 @@ class ViolacionSoloLecturaError(Exception):
 @dataclass
 class AccionPlan:
     id: int
-    tipo: str  # 'mover_duplicado', 'duplicado_intra_carpeta_manual', 'mover_suelto', 'suelto_sin_clasificar', 'diferencia_carpeta_sospechosa', 'carpeta_vacia'
+    tipo: str  # 'mover_duplicado', 'duplicado_intra_carpeta_manual', 'duplicado_protegido_manual', 'mover_suelto', 'suelto_sin_clasificar', 'diferencia_carpeta_sospechosa', 'carpeta_vacia'
     origen: str
     destino: Optional[str]
     motivo: str
@@ -62,6 +62,9 @@ class AccionPlan:
 class ConfiguracionLimpieza:
     carpetas_ignoradas: List[str] = field(default_factory=lambda: [
         "_a_revisar", "code", "System Volume Information", "$RECYCLE.BIN", ".Trash-*"
+    ])
+    carpetas_protegidas: List[str] = field(default_factory=lambda: [
+        "laroli", "videos1/laroli"
     ])
     umbral_similitud_carpetas: float = 0.75
     prefijo_destino_duplicados: str = "_a_revisar/duplicados"
@@ -82,6 +85,8 @@ def cargar_configuracion(ruta_config: str = "config_limpieza.json") -> Configura
                 data = json.load(f)
             if "carpetas_ignoradas" in data:
                 config.carpetas_ignoradas = data["carpetas_ignoradas"]
+            if "carpetas_protegidas" in data:
+                config.carpetas_protegidas = data["carpetas_protegidas"]
             if "umbral_similitud_carpetas" in data:
                 config.umbral_similitud_carpetas = float(data["umbral_similitud_carpetas"])
             if "prefijo_destino_duplicados" in data:
@@ -125,6 +130,24 @@ def es_ruta_ignorada(ruta_relativa: str, carpetas_ignoradas: List[str]) -> bool:
         for ign in carpetas_ignoradas:
             ign_lower = ign.lower()
             if fnmatch.fnmatch(p_lower, ign_lower) or p_lower == ign_lower:
+                return True
+    return False
+
+
+def esta_en_carpeta_protegida(ruta_relativa: str, carpetas_protegidas: List[str]) -> bool:
+    """
+    Verifica si una ruta relativa se encuentra dentro de alguna de las carpetas protegidas.
+    Compara los componentes de la ruta normalizada para evitar falsos positivos por prefijo de texto.
+    """
+    if not carpetas_protegidas:
+        return False
+    norm_r = os.path.normpath(ruta_relativa).replace("\\", "/")
+    r_parts = tuple(part for part in norm_r.split("/") if part and part != ".")
+    for cp in carpetas_protegidas:
+        norm_cp = os.path.normpath(cp).replace("\\", "/")
+        cp_parts = tuple(part for part in norm_cp.split("/") if part and part != ".")
+        if len(r_parts) > len(cp_parts):
+            if tuple(p.lower() for p in r_parts[:len(cp_parts)]) == tuple(p.lower() for p in cp_parts):
                 return True
     return False
 
@@ -217,6 +240,7 @@ class GeneradorPlanLimpieza:
         duplicados_confirmados = [lista for lista in grupos_hash.values() if len(lista) > 1]
         duplicados_inter_count = 0
         duplicados_intra_count = 0
+        duplicados_protegidos_count = 0
         espacio_recuperable_duplicados = 0
 
         for grupo in duplicados_confirmados:
@@ -225,22 +249,51 @@ class GeneradorPlanLimpieza:
                 for a in grupo
             )))
 
-            # (A) DUPLICADOS INTRA-CARPETA (misma carpeta de primer nivel): DECIDIR A MANO
-            if len(carpetas_p1_unicas) == 1:
+            # Comprobar si ALGUNA copia reside en una carpeta protegida
+            copias_en_protegida = [
+                a for a in grupo
+                if esta_en_carpeta_protegida(a.ruta_relativa, self.config.carpetas_protegidas)
+            ]
+
+            detalles_copias = []
+            for a in grupo:
+                mtime_dt = datetime.fromtimestamp(a.mtime)
+                detalles_copias.append({
+                    "ruta_relativa": a.ruta_relativa,
+                    "tamanio_bytes": a.tamanio_bytes,
+                    "tamanio_legible": formatear_bytes(a.tamanio_bytes),
+                    "mtime": a.mtime,
+                    "fecha": mtime_dt.strftime("%Y-%m-%d %H:%M:%S")
+                })
+
+            # (A) DUPLICADOS CON COPIA EN CARPETA PROTEGIDA: NO MOVER NINGUNA COPIA (DECIDIR A MANO)
+            if copias_en_protegida:
+                duplicados_protegidos_count += 1
+                carpetas_prot_detectadas = sorted(list(set(
+                    cp for cp in self.config.carpetas_protegidas
+                    if any(esta_en_carpeta_protegida(a.ruta_relativa, [cp]) for a in grupo)
+                )))
+
+                self.acciones.append(AccionPlan(
+                    id=self._siguiente_id(),
+                    tipo="duplicado_protegido_manual",
+                    origen=grupo[0].ruta_relativa,
+                    destino=None,
+                    motivo=f"Duplicados exactos con copia en carpeta protegida ({', '.join(carpetas_prot_detectadas)}). No se mueve ninguna copia automáticamente; decidir a mano.",
+                    detalles={
+                        "sha256": grupo[0].sha256,
+                        "tamanio_bytes": grupo[0].tamanio_bytes,
+                        "carpeta": ", ".join(carpetas_p1_unicas),
+                        "carpetas_protegidas": carpetas_prot_detectadas,
+                        "copias": detalles_copias
+                    }
+                ))
+
+            # (B) DUPLICADOS INTRA-CARPETA (misma carpeta de primer nivel): DECIDIR A MANO
+            elif len(carpetas_p1_unicas) == 1:
                 duplicados_intra_count += 1
                 carpeta_nombre = carpetas_p1_unicas[0]
                 rutas_grupo = [a.ruta_relativa for a in grupo]
-                
-                detalles_copias = []
-                for a in grupo:
-                    mtime_dt = datetime.fromtimestamp(a.mtime)
-                    detalles_copias.append({
-                        "ruta_relativa": a.ruta_relativa,
-                        "tamanio_bytes": a.tamanio_bytes,
-                        "tamanio_legible": formatear_bytes(a.tamanio_bytes),
-                        "mtime": a.mtime,
-                        "fecha": mtime_dt.strftime("%Y-%m-%d %H:%M:%S")
-                    })
 
                 self.acciones.append(AccionPlan(
                     id=self._siguiente_id(),
@@ -256,7 +309,7 @@ class GeneradorPlanLimpieza:
                     }
                 ))
             else:
-                # (B) DUPLICADOS INTER-CARPETA: APLICAR REGLA DE CONSERVACIÓN Y MOVER RESTO
+                # (C) DUPLICADOS INTER-CARPETA SIN COPIAS PROTEGIDAS: APLICAR REGLA DE CONSERVACIÓN Y MOVER RESTO
                 duplicados_inter_count += 1
                 
                 # Seleccionar copia a conservar según prioridad
@@ -521,6 +574,8 @@ class GeneradorPlanLimpieza:
             "total_acciones": len(self.acciones),
             "duplicados_inter_a_mover": sum(1 for a in self.acciones if a.tipo == "mover_duplicado"),
             "duplicados_intra_a_mano": duplicados_intra_count,
+            "duplicados_protegidos_a_mano": duplicados_protegidos_count,
+            "duplicados_a_decidir_a_mano": duplicados_intra_count + duplicados_protegidos_count,
             "espacio_recuperable_duplicados_bytes": espacio_recuperable_duplicados,
             "espacio_recuperable_duplicados_legible": formatear_bytes(espacio_recuperable_duplicados),
             "pares_carpetas_sospechosas": len(pares_sospechosos),
@@ -572,13 +627,16 @@ class GeneradorPlanLimpieza:
         lineas.append(f"- **Almacenamiento Origen:** `{plan['raiz']}`")
         lineas.append(f"- **Archivos Verificados en Huella:** {plan['huella']['total_archivos']}")
         lineas.append(f"- **Tolerancia mtime FAT/exFAT:** {cfg.get('tolerancia_mtime_segundos', 2.0)}s")
-        lineas.append(f"- **Carpetas Ignoradas:** `{', '.join(cfg.get('carpetas_ignoradas', []))}`\n")
+        lineas.append(f"- **Carpetas Ignoradas:** `{', '.join(cfg.get('carpetas_ignoradas', []))}`")
+        if cfg.get("carpetas_protegidas"):
+            lineas.append(f"- **Carpetas Protegidas:** `{', '.join(cfg.get('carpetas_protegidas', []))}`")
+        lineas.append("")
 
         lineas.append("## Resumen General de Acciones Propuestas")
         lineas.append("| Categoría | Cantidad | Espacio Estimado / Estado |")
         lineas.append("| :--- | :---: | :--- |")
         lineas.append(f"| Duplicados inter-carpeta propuestos a mover | {res['duplicados_inter_a_mover']} | {res['espacio_recuperable_duplicados_legible']} |")
-        lineas.append(f"| Duplicados intra-carpeta a decidir a mano | {res['duplicados_intra_a_mano']} | Sin movimiento automático |")
+        lineas.append(f"| Duplicados a decidir a mano | {res.get('duplicados_a_decidir_a_mano', res['duplicados_intra_a_mano'])} | Sin movimiento automático |")
         lineas.append(f"| Diferencias en carpetas sospechosas (>=75%) | {res['archivos_diferencias_sospechosas']} | En {res['pares_carpetas_sospechosas']} pares |")
         lineas.append(f"| Archivos sueltos clasificados por alias | {res['sueltos_clasificados']} | Propuesta según alias |")
         lineas.append(f"| Archivos sueltos sin clasificar | {res['sueltos_sin_clasificar']} | Sin acción propuesta |")
@@ -600,20 +658,23 @@ class GeneradorPlanLimpieza:
             lineas.append("*No se detectaron duplicados inter-carpeta para mover.*")
         lineas.append("")
 
-        # 2. Duplicados intra-carpeta (a decidir a mano)
-        acciones_dupl_intra = [a for a in plan["acciones"] if a["tipo"] == "duplicado_intra_carpeta_manual"]
-        lineas.append("## 2. Duplicados Intra-Carpeta (A Decidir a Mano)")
-        lineas.append("> [!NOTE]\n> Estas copias residen dentro de la misma carpeta de primer nivel. "
-                      "Por seguridad, el sistema NO propone moverlas automáticamente para preservar organizaciones deliberadas.\n")
-        if acciones_dupl_intra:
-            lineas.append("| ID | Carpeta | Copias Idénticas Detectadas | Tamaño | Fecha |")
+        # 2. Duplicados a decidir a mano (intra-carpeta y en carpetas protegidas)
+        acciones_dupl_manual = [
+            a for a in plan["acciones"]
+            if a["tipo"] in ("duplicado_intra_carpeta_manual", "duplicado_protegido_manual")
+        ]
+        lineas.append("## 2. Duplicados a Decidir a Mano")
+        lineas.append("> [!NOTE]\n> Estas copias residen dentro de la misma carpeta de primer nivel o involucran carpetas protegidas (ej. 'laroli', 'videos1/laroli'). "
+                      "Por seguridad, el sistema NO propone mover ninguna de ellas automáticamente; deben decidirse a mano.\n")
+        if acciones_dupl_manual:
+            lineas.append("| ID | Carpeta / Contexto | Copias Idénticas Detectadas | Tamaño | Fecha |")
             lineas.append("| :---: | :--- | :--- | :---: | :---: |")
-            for a in acciones_dupl_intra:
+            for a in acciones_dupl_manual:
                 det = a["detalles"]
-                rutas_str = "<br>".join([f"`{c['ruta_relativa']}` ({c['fecha']})" for c in det["copias"]])
+                rutas_str = "<br>".join([f"`{c['ruta_relativa']}` ({c['tamanio_legible']}, {c['fecha']})" for c in det["copias"]])
                 lineas.append(f"| {a['id']} | `{det['carpeta']}` | {rutas_str} | {formatear_bytes(det['tamanio_bytes'])} | - |")
         else:
-            lineas.append("*No se detectaron duplicados intra-carpeta.*")
+            lineas.append("*No se detectaron duplicados a decidir a mano.*")
         lineas.append("")
 
         # 3. Diferencias en carpetas sospechosas

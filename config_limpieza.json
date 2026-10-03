@@ -6,6 +6,10 @@
     "$RECYCLE.BIN",
     ".Trash-*"
   ],
+  "carpetas_protegidas": [
+    "laroli",
+    "videos1/laroli"
+  ],
   "umbral_similitud_carpetas": 0.75,
   "prefijo_destino_duplicados": "_a_revisar/duplicados",
   "reglas_duplicados": {

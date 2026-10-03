@@ -17,9 +17,11 @@ Para la motivación general, ver `proposal.md`. Para los requerimientos normativ
 - Estructurar acciones con esquema unificado: `{ "id": int|str, "tipo": str, "origen": str, "destino": str|null, "motivo": str, "detalles": dict }`.
 - Validación de no preexistencia en destinos propuestos: el generador verifica contra el inventario y disco que la ruta `destino` sugerida no exista previamente.
 - Manejo diferenciado de duplicados exactos:
-  - **Duplicados inter-carpeta**: regla de conservación (`videos completos` > resto; mtime más reciente) y propuesta de traslado hacia `_a_revisar/duplicados/` preservando rutas relativas.
+  - **Duplicados con copia en carpetas protegidas** (`carpetas_protegidas` como `laroli`, `videos1/laroli`): catalogados en "duplicados a decidir a mano" sin propuesta de movimiento (`destino: null`), reportando todas las rutas, tamaños y fechas del grupo.
+  - **Duplicados inter-carpeta sin copias protegidas**: regla de conservación (`videos completos` > resto; mtime más reciente) y propuesta de traslado hacia `_a_revisar/duplicados/` preservando rutas relativas.
   - **Duplicados intra-carpeta**: catalogados en "duplicados a decidir a mano" sin propuesta de movimiento (`destino: null`).
 - Exclusión obligatoria por defecto de `_a_revisar` (cuarentena) y `code`.
+- Configuración de carpetas protegidas (`carpetas_protegidas`) para salvaguardar carpetas sensibles contra movimientos de duplicados.
 - Análisis diferencial exhaustivo de carpetas sospechosas (>= 75% similitud) con ruta, tamaño y fecha de archivos disjuntos (sin fusiones masivas).
 - Clasificación de sueltos por `alias-personajes.json`, dejando los no emparejados en "sin clasificar" (`destino: null`).
 - Registro informativo de carpetas vacías (`destino: null`).
@@ -43,6 +45,7 @@ Para la motivación general, ver `proposal.md`. Para los requerimientos normativ
     ```json
     {
       "carpetas_ignoradas": ["_a_revisar", "code", "System Volume Information", "$RECYCLE.BIN", ".Trash-*"],
+      "carpetas_protegidas": ["laroli", "videos1/laroli"],
       "umbral_similitud_carpetas": 0.75,
       "prefijo_destino_duplicados": "_a_revisar/duplicados",
       "reglas_duplicados": {

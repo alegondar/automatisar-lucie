@@ -98,6 +98,7 @@ class TestPlanLimpiezaSimulacion(unittest.TestCase):
         # Configuración simulada
         self.config = ConfiguracionLimpieza(
             carpetas_ignoradas=["_a_revisar", "code", "System Volume Information", "$RECYCLE.BIN"],
+            carpetas_protegidas=["laroli", "videos1/laroli"],
             umbral_similitud_carpetas=0.75,
             prefijo_destino_duplicados="_a_revisar/duplicados",
             prioridad_carpetas_duplicados=["videos completos"],
@@ -231,15 +232,17 @@ class TestPlanLimpiezaSimulacion(unittest.TestCase):
 
         # 2. Verificar duplicados inter-carpeta: videos completos/clip_promo.mp4 se conserva,
         #    videos1/clip_promo_copia.mp4 se propone mover a _a_revisar/duplicados/videos1/...
+        #    Las copias en laroli y videos1/laroli NO se mueven por estar protegidas.
         mov_duplicados = [a for a in plan["acciones"] if a["tipo"] == "mover_duplicado"]
-        self.assertEqual(len(mov_duplicados), 5)
+        self.assertEqual(len(mov_duplicados), 1)
         origenes_mov = [m["origen"] for m in mov_duplicados]
         self.assertIn("videos1/clip_promo_copia.mp4", origenes_mov)
         promo_action = [m for m in mov_duplicados if m["origen"] == "videos1/clip_promo_copia.mp4"][0]
         self.assertEqual(promo_action["destino"], "_a_revisar/duplicados/videos1/clip_promo_copia.mp4")
         self.assertIn("videos completos/clip_promo.mp4", promo_action["detalles"]["copia_conservada"])
 
-        # 3. Verificar duplicados intra-carpeta a decidir a mano: intro.mp4
+        # 3. Verificar duplicados a decidir a mano:
+        #    (a) Intra-carpeta: intro.mp4
         intra_duplicados = [a for a in plan["acciones"] if a["tipo"] == "duplicado_intra_carpeta_manual"]
         self.assertEqual(len(intra_duplicados), 1)
         intra = intra_duplicados[0]
@@ -248,6 +251,18 @@ class TestPlanLimpiezaSimulacion(unittest.TestCase):
         rutas_intra = [c["ruta_relativa"] for c in intra["detalles"]["copias"]]
         self.assertIn("videos completos/intro.mp4", rutas_intra)
         self.assertIn("videos completos/sub_sin_publicar/intro.mp4", rutas_intra)
+
+        #    (b) Protegidos: comun_0..3 entre laroli y videos1/laroli
+        prot_duplicados = [a for a in plan["acciones"] if a["tipo"] == "duplicado_protegido_manual"]
+        self.assertEqual(len(prot_duplicados), 4)
+        for p in prot_duplicados:
+            self.assertIsNone(p["destino"])
+            self.assertIn("carpeta protegida", p["motivo"])
+            self.assertEqual(len(p["detalles"]["copias"]), 2)
+            for c in p["detalles"]["copias"]:
+                self.assertIn("ruta_relativa", c)
+                self.assertIn("tamanio_bytes", c)
+                self.assertIn("fecha", c)
 
         # 4. Verificar carpetas sospechosas (laroli vs videos1/laroli)
         diferencias = [a for a in plan["acciones"] if a["tipo"] == "diferencia_carpeta_sospechosa"]
@@ -275,7 +290,7 @@ class TestPlanLimpiezaSimulacion(unittest.TestCase):
         sueltos_sin = [a for a in plan["acciones"] if a["tipo"] == "suelto_sin_clasificar"]
         origenes_sin = [a["origen"] for a in sueltos_sin]
         self.assertIn("desconocido_suelto.txt", origenes_sin)
-        self.assertEqual(len(sueltos_sin), 4)
+        self.assertEqual(len(sueltos_sin), 8)
         for s in sueltos_sin:
             self.assertIsNone(s["destino"])
 
@@ -293,7 +308,7 @@ class TestPlanLimpiezaSimulacion(unittest.TestCase):
         self.assertTrue(os.path.exists(json_path))
         self.assertTrue(os.path.exists(md_path))
         self.assertIn("Plan de Limpieza del Pendrive (Modo Simulación)", md_text)
-        self.assertIn("Duplicados Intra-Carpeta (A Decidir a Mano)", md_text)
+        self.assertIn("Duplicados a Decidir a Mano", md_text)
 
         # 8. Validación de huella pre-ejecución exitosa
         valido, errores = validar_huella_pre_ejecucion(self.tmp_pendrive, plan)
@@ -343,6 +358,64 @@ class TestPlanLimpiezaSimulacion(unittest.TestCase):
             any("Discrepancia de hash SHA-256" in err for err in errores),
             f"Se esperaba error de discrepancia de hash SHA-256, se obtuvo: {errores}"
         )
+
+    def test_duplicados_con_copia_en_carpeta_protegida_no_generan_movimiento(self):
+        """
+        Verifica la Regla: Si ALGUNA copia de un grupo de duplicados está dentro de una carpeta protegida,
+        el grupo NO genera ningún movimiento (ni de la copia protegida ni de las otras) y se lista
+        en 'duplicados a decidir a mano' con todas sus rutas, tamaños y fechas.
+        """
+        # Crear un archivo duplicado entre una carpeta protegida ('laroli') y otra no protegida ('otra_carpeta')
+        dir_otra = os.path.join(self.tmp_pendrive, "otra_carpeta")
+        os.makedirs(dir_otra, exist_ok=True)
+        dir_laroli = os.path.join(self.tmp_pendrive, "laroli")
+        os.makedirs(dir_laroli, exist_ok=True)
+
+        contenido_especial = b"CONTENIDO_DUP_PROTEGIDO_TEST_XYZ_999"
+        with open(os.path.join(dir_laroli, "especial_protegido.mp4"), "wb") as f:
+            f.write(contenido_especial)
+        with open(os.path.join(dir_otra, "especial_copia.mp4"), "wb") as f:
+            f.write(contenido_especial)
+
+        generador = GeneradorPlanLimpieza(
+            ruta_raiz=self.tmp_pendrive,
+            ruta_cache=self.cache_sqlite,
+            config=self.config
+        )
+        plan = generador.generar_plan()
+
+        # Verificar que NINGUNA copia de este grupo genere movimiento (ni laroli ni otra_carpeta)
+        movimientos = [a for a in plan["acciones"] if a["tipo"] == "mover_duplicado"]
+        rutas_en_movimiento = [m["origen"] for m in movimientos]
+        self.assertNotIn("laroli/especial_protegido.mp4", rutas_en_movimiento)
+        self.assertNotIn("otra_carpeta/especial_copia.mp4", rutas_en_movimiento)
+
+        # Verificar que el grupo aparezca en los duplicados a decidir a mano
+        manuales = [
+            a for a in plan["acciones"]
+            if a["tipo"] in ("duplicado_intra_carpeta_manual", "duplicado_protegido_manual")
+        ]
+        grupo_encontrado = None
+        for a in manuales:
+            rutas_grupo = [c["ruta_relativa"] for c in a["detalles"].get("copias", [])]
+            if "laroli/especial_protegido.mp4" in rutas_grupo and "otra_carpeta/especial_copia.mp4" in rutas_grupo:
+                grupo_encontrado = a
+                break
+
+        self.assertIsNotNone(grupo_encontrado, "El grupo de duplicado con copia en carpeta protegida debe listarse en a decidir a mano")
+        self.assertIsNone(grupo_encontrado["destino"])
+        self.assertEqual(grupo_encontrado["tipo"], "duplicado_protegido_manual")
+        self.assertIn("carpeta protegida", grupo_encontrado["motivo"])
+
+        # Verificar que cada copia registre su ruta, tamaño y fecha
+        rutas_registradas = [c["ruta_relativa"] for c in grupo_encontrado["detalles"]["copias"]]
+        self.assertIn("laroli/especial_protegido.mp4", rutas_registradas)
+        self.assertIn("otra_carpeta/especial_copia.mp4", rutas_registradas)
+        for c in grupo_encontrado["detalles"]["copias"]:
+            self.assertIn("ruta_relativa", c)
+            self.assertIn("tamanio_bytes", c)
+            self.assertIn("fecha", c)
+            self.assertEqual(c["tamanio_bytes"], len(contenido_especial))
 
 
 if __name__ == "__main__":
