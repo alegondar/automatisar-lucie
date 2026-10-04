@@ -17,9 +17,16 @@
   ],
   "patrones_candidatos": {
     "grok": "grok-video-*",
+    "grok_video": "grok-video-*",
+    "grok_image": "grok-image-*",
+    "gemini": "Gemini_Generated_Image_*",
     "nano_banana_regex": "^.+_\\d{14}\\.(jpg|jpeg|png|webp)$",
     "flow": ""
   },
+  "patrones_ignorar": [
+    "Screenshot_*",
+    "Captura*"
+  ],
   "extensiones_temporales": [
     ".crdownload",
     ".part",

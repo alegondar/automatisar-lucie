@@ -252,7 +252,7 @@ class TestGestorMovimientosYDeshacer(unittest.TestCase):
             f.write(b"contenido 1")
 
         # Crear previamente un archivo en el destino para forzar colisión
-        destino_colision = os.path.join(self.destino_base, "lucie", "videos sin editar", "escena1", "grok-video-1.mp4")
+        destino_colision = os.path.join(self.destino_base, "lucie", "escena1", "grok-video-1.mp4")
         os.makedirs(os.path.dirname(destino_colision), exist_ok=True)
         with open(destino_colision, "wb") as f:
             f.write(b"archivo previo existente")
@@ -407,11 +407,11 @@ class TestGestorMovimientosYDeshacer(unittest.TestCase):
 
         self.assertEqual(
             dest_vid,
-            os.path.join(self.destino_base, "lucie", "videos sin editar", "parque_primavera", "grok-video-mixto.mp4")
+            os.path.join(self.destino_base, "lucie", "parque_primavera", "grok-video-mixto.mp4")
         )
         self.assertEqual(
             dest_img,
-            os.path.join(self.destino_base, "lucie", "imagenes", "parque_primavera", "lucie_20261003120000.png")
+            os.path.join(self.destino_base, "lucie", "parque_primavera", "lucie_20261003120000.png")
         )
 
         # Ejecutar movimiento
@@ -429,7 +429,7 @@ class TestGestorMovimientosYDeshacer(unittest.TestCase):
         self.assertTrue(os.path.exists(foto_arch))
 
     def test_carpeta_imagenes_personalizada(self):
-        """Permite configurar un nombre alternativo para la subcarpeta de imágenes."""
+        """Verifica compatibilidad de inicialización y sala de espera unificada."""
         gestor_custom = GestorMovimientosBandeja(
             ruta_descargas=self.descargas,
             ruta_destino_base=self.destino_base,
@@ -451,7 +451,7 @@ class TestGestorMovimientosYDeshacer(unittest.TestCase):
         dest_img = sim["movimientos"][0]["destino"]
         self.assertEqual(
             dest_img,
-            os.path.join(self.destino_base, "mailen", "fotos_sesion", "estudio", "toma_20261003140000.webp")
+            os.path.join(self.destino_base, "mailen", "estudio", "toma_20261003140000.webp")
         )
 
         res = gestor_custom.ejecutar_movimiento_lote(sim, lote_id="lote_custom")
@@ -935,6 +935,362 @@ class TestServidorHTTPYSeguridad(unittest.TestCase):
         self.assertIn(".tag-tipo", page_html)
         self.assertIn(".tag-video", page_html)
         self.assertIn(".tag-imagen", page_html)
+
+
+
+class TestCapituloActivoYReconocimientoNombres(unittest.TestCase):
+    """Pruebas para capítulo activo, alias inicial, raíces de escena y multi-lote."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp(prefix="test_capitulos_")
+        self.descargas = os.path.join(self.tmp_dir, "Descargas")
+        self.destino = os.path.join(self.descargas, "_lucie")
+        os.makedirs(self.descargas, exist_ok=True)
+        os.makedirs(self.destino, exist_ok=True)
+
+        self.cfg_file = os.path.join(self.tmp_dir, "config.json")
+        self.alias_file = os.path.join(self.tmp_dir, "alias.json")
+        self.db_file = os.path.join(self.tmp_dir, "bandeja.db")
+
+        with open(self.alias_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "lucie": ["lucie", "luci"],
+                "roli": ["roli", "laroli", "magui"],
+                "mailen": ["mailen"]
+            }, f)
+
+        cfg_data = {
+            "ruta_descargas": self.descargas,
+            "ruta_destino_base": self.destino,
+            "archivo_alias_personajes": self.alias_file,
+            "ventana_lote_minutos": 10,
+            "intervalo_sondeo_segundos": 1,
+            "patrones_ignorar": ["Screenshot_*", "Captura*"],
+            "patrones_candidatos": {
+                "grok_video": "grok-video-*",
+                "grok_image": "grok-image-*",
+                "gemini": "Gemini_Generated_Image_*"
+            }
+        }
+        with open(self.cfg_file, "w", encoding="utf-8") as f:
+            json.dump(cfg_data, f)
+
+        self.config = ConfiguracionBandeja(ruta_config=self.cfg_file)
+        self.db = GestorBaseDatosBandeja(ruta_db=self.db_file)
+        self.filtro = FiltroListaBlanca(self.config)
+        self.detector = DetectorDescargasActivas(ventana_estabilidad_segundos=0.05)
+        self.agrupador = AgrupadorLotes(ventana_minutos=10)
+        self.movimientos = GestorMovimientosBandeja(self.descargas, self.destino, self.db)
+        self.miniaturas = GeneradorMiniaturas(self.db)
+
+    def tearDown(self):
+        for root, dirs, files in os.walk(self.tmp_dir, topdown=False):
+            for file in files:
+                try:
+                    os.unlink(os.path.join(root, file))
+                except OSError:
+                    pass
+            for dir_name in dirs:
+                try:
+                    os.rmdir(os.path.join(root, dir_name))
+                except OSError:
+                    pass
+        try:
+            os.rmdir(self.tmp_dir)
+        except OSError:
+            pass
+
+    def test_asignacion_inmediata_capitulo_activo(self):
+        """Con capítulo activo, cualquier candidato nuevo se asigna a personaje/capitulo sin importar nombre ni hora."""
+        self.db.guardar_capitulo_activo("lucie", "capitulo_01", habilitado=True)
+
+        arch_extrano = os.path.join(self.descargas, "video_random_sin_alias.mp4")
+        with open(arch_extrano, "wb") as f:
+            f.write(b"video contenido 123")
+
+        vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+        vigilante.escanear()
+        time.sleep(0.06)
+        vigilante.escanear()
+
+        estado = vigilante.obtener_estado()
+        self.assertEqual(len(estado["lotes"]), 1)
+        lote = estado["lotes"][0]
+        self.assertEqual(lote["personaje_sugerido"], "lucie")
+        self.assertEqual(lote["escena_sugerida"], "capitulo_01")
+        self.assertEqual(len(lote["archivos"]), 1)
+
+        hash_val = calcular_sha256(arch_extrano)
+        info_db = self.db.obtener_por_hash(hash_val)
+        self.assertIsNotNone(info_db)
+        self.assertEqual(info_db["personaje"], "lucie")
+        self.assertEqual(info_db["escena"], "capitulo_01")
+
+    def test_modificar_o_desactivar_capitulo_no_reasigna_existentes(self):
+        """Modificar o desactivar el capítulo activo no altera archivos ya detectados."""
+        self.db.guardar_capitulo_activo("lucie", "cap_inicial", habilitado=True)
+        arch1 = os.path.join(self.descargas, "video_a.mp4")
+        with open(arch1, "wb") as f:
+            f.write(b"data a")
+
+        vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+        vigilante.escanear()
+        time.sleep(0.06)
+        vigilante.escanear()
+
+        estado1 = vigilante.obtener_estado()
+        self.assertEqual(len(estado1["lotes"]), 1)
+        self.assertEqual(estado1["lotes"][0]["personaje_sugerido"], "lucie")
+        self.assertEqual(estado1["lotes"][0]["escena_sugerida"], "cap_inicial")
+
+        # Desactivamos el capítulo
+        self.db.guardar_capitulo_activo("roli", "cap_nuevo", habilitado=False)
+        vigilante.escanear()
+
+        estado2 = vigilante.obtener_estado()
+        self.assertEqual(len(estado2["lotes"]), 1)
+        # Los archivos ya detectados conservan su asignación original
+        self.assertEqual(estado2["lotes"][0]["personaje_sugerido"], "lucie")
+        self.assertEqual(estado2["lotes"][0]["escena_sugerida"], "cap_inicial")
+
+    def test_persistencia_capitulo_activo_sqlite(self):
+        """El capítulo activo persiste en SQLite tras reinicio (simulado con nueva instancia DB)."""
+        self.db.guardar_capitulo_activo("mailen", "sesion_otono", habilitado=True)
+
+        # Nueva instancia de base de datos apuntando al mismo archivo SQLite
+        db_reinicio = GestorBaseDatosBandeja(ruta_db=self.db_file)
+        cap = db_reinicio.obtener_capitulo_activo()
+        self.assertIsNotNone(cap)
+        self.assertTrue(cap["habilitado"])
+        self.assertEqual(cap["personaje"], "mailen")
+        self.assertEqual(cap["nombre"], "sesion_otono")
+
+    def test_raices_distintas_misma_ventana_generan_dos_lotes_independientes(self):
+        """Sin capítulo activo: dos archivos con distinta raíz en la misma ventana forman dos lotes separados."""
+        self.db.guardar_capitulo_activo("lucie", "", habilitado=False)
+
+        ahora = time.time()
+        candidato1 = {
+            "id_db": 1,
+            "ruta": os.path.join(self.descargas, "lucie asado.mp4"),
+            "nombre": "lucie asado.mp4",
+            "tamanio": 100,
+            "mtime": ahora,
+            "personaje": "lucie",
+            "escena_sugerida": "lucie asado",
+            "raiz_escena": "lucie asado"
+        }
+        candidato2 = {
+            "id_db": 2,
+            "ruta": os.path.join(self.descargas, "roli pileta.mp4"),
+            "nombre": "roli pileta.mp4",
+            "tamanio": 200,
+            "mtime": ahora + 30,  # 30 segundos después (misma ventana de 10 min)
+            "personaje": "roli",
+            "escena_sugerida": "roli pileta",
+            "raiz_escena": "roli pileta"
+        }
+
+        lotes = self.agrupador.agrupar([candidato1, candidato2])
+        self.assertEqual(len(lotes), 2, "Deben formarse 2 lotes independientes por tener raíces distintas")
+        raices = {l["raiz_escena"] for l in lotes}
+        self.assertEqual(raices, {"lucie asado", "roli pileta"})
+
+    def test_extraccion_escena_sugerida(self):
+        """Verifica remoción de sufijos (n), números finales y extensión conservando prefijo."""
+        self.assertEqual(
+            self.filtro.extraer_escena_sugerida("lucie atendiendo (1).mp4"),
+            "lucie atendiendo"
+        )
+        self.assertEqual(
+            self.filtro.extraer_escena_sugerida("roliyacussi (2).jpg"),
+            "roliyacussi"
+        )
+        self.assertEqual(
+            self.filtro.extraer_escena_sugerida("lucieasado3.mp4"),
+            "lucieasado"
+        )
+
+    def test_prevalencia_alias_inicial_en_nombre_compuesto(self):
+        """El personaje asignado sale del alias al INICIO; menciones posteriores no cambian la asignación."""
+        pers = self.filtro.obtener_personaje_de_alias_inicial("rolitirandoaguaalucie.jpg")
+        self.assertEqual(pers, "roli")
+
+        self.db.guardar_capitulo_activo("lucie", "", habilitado=False)
+        ruta_compuesta = os.path.join(self.descargas, "rolitirandoaguaalucie.jpg")
+        with open(ruta_compuesta, "wb") as f:
+            f.write(b"imagen roli")
+
+        tipo = self.filtro.clasificar_archivo(ruta_compuesta)
+        self.assertEqual(tipo, "candidato")
+
+    def test_patrones_ignorar_no_aparecen(self):
+        """Archivos que coincidan con 'patrones_ignorar' son descartados de inmediato."""
+        arch_ign1 = os.path.join(self.descargas, "Screenshot_20261004.png")
+        arch_ign2 = os.path.join(self.descargas, "Captura de pantalla.jpg")
+        with open(arch_ign1, "wb") as f:
+            f.write(b"screenshot data")
+        with open(arch_ign2, "wb") as f:
+            f.write(b"captura data")
+
+        self.assertEqual(self.filtro.clasificar_archivo(arch_ign1), "ignorar")
+        self.assertEqual(self.filtro.clasificar_archivo(arch_ign2), "ignorar")
+
+        vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+        time.sleep(0.1)
+        vigilante.escanear()
+        estado = vigilante.obtener_estado()
+        self.assertEqual(len(estado["lotes"]), 0)
+        self.assertEqual(len(estado["sin_identificar"]), 0)
+
+    def test_simulacion_y_movimiento_multilote_y_deshacer_por_lote(self):
+        """Mover múltiples lotes con confirmación única y permitir reversión independiente por lote."""
+        puerto = 8792
+        self.config.puerto_servidor = puerto
+        token_csrf = "token_test_multilote_123"
+
+        arch_a = os.path.join(self.descargas, "lucie_a.mp4")
+        arch_b = os.path.join(self.descargas, "roli_b.jpg")
+        with open(arch_a, "wb") as f:
+            f.write(b"video lote a")
+        with open(arch_b, "wb") as f:
+            f.write(b"foto lote b")
+
+        vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+        servidor = crear_servidor(self.config, self.db, vigilante, self.movimientos, self.miniaturas, token_csrf=token_csrf)
+        hilo = threading.Thread(target=servidor.serve_forever, daemon=True)
+        hilo.start()
+
+        def request(method, path, body=None):
+            conn = http.client.HTTPConnection("127.0.0.1", puerto, timeout=5)
+            headers = {
+                "Host": f"127.0.0.1:{puerto}",
+                "Content-Type": "application/json",
+                "X-CSRF-Token": token_csrf
+            }
+            body_bytes = json.dumps(body).encode("utf-8") if body is not None else None
+            conn.request(method, path, body=body_bytes, headers=headers)
+            res = conn.getresponse()
+            data = json.loads(res.read().decode("utf-8"))
+            conn.close()
+            return res.status, data
+
+        try:
+            # 1. Simulación multi-lote
+            body_sim = {
+                "lotes": [
+                    {
+                        "lote_id": "lote_A",
+                        "archivos": [{"ruta": arch_a, "tamanio": 12, "hash": "ha"}],
+                        "personaje": "lucie",
+                        "escena": "escena_lucie",
+                        "es_existente_descargas": False
+                    },
+                    {
+                        "lote_id": "lote_B",
+                        "archivos": [{"ruta": arch_b, "tamanio": 11, "hash": "hb"}],
+                        "personaje": "roli",
+                        "escena": "escena_roli",
+                        "es_existente_descargas": False
+                    }
+                ]
+            }
+            st, data_sim = request("POST", "/api/simular-mover", body_sim)
+            self.assertEqual(st, 200, f"Error en simular: {data_sim}")
+            self.assertTrue(data_sim.get("es_multilote"))
+            self.assertEqual(data_sim.get("total_lotes"), 2)
+            self.assertEqual(data_sim.get("total_archivos"), 2)
+            self.assertIn("Simulación previa consolidada", data_sim.get("html", ""))
+
+            # 2. Confirmación y ejecución multi-lote única
+            st_mov, data_mov = request("POST", "/api/mover-lote", {"simulacion": data_sim})
+            self.assertEqual(st_mov, 200, f"Error en mover lote: {data_mov}")
+            self.assertTrue(data_mov.get("exito"))
+            self.assertEqual(data_mov.get("total_movidos"), 2)
+            self.assertEqual(len(data_mov.get("resultados", [])), 2)
+
+            id_op_a = data_mov["resultados"][0]["id_operacion"]
+            id_op_b = data_mov["resultados"][1]["id_operacion"]
+            self.assertNotEqual(id_op_a, id_op_b, "Cada lote debe conservar su propio id_operacion")
+
+            dest_a = os.path.join(self.destino, "lucie", "escena_lucie", "lucie_a.mp4")
+            dest_b = os.path.join(self.destino, "roli", "escena_roli", "roli_b.jpg")
+            self.assertTrue(os.path.exists(dest_a))
+            self.assertTrue(os.path.exists(dest_b))
+            self.assertFalse(os.path.exists(arch_a))
+            self.assertFalse(os.path.exists(arch_b))
+
+            # 3. Deshacer lote A de forma independiente
+            st_des_a, data_des_a = request("POST", "/api/deshacer", {"id_operacion": id_op_a})
+            self.assertEqual(st_des_a, 200)
+            self.assertTrue(data_des_a.get("exito"))
+            self.assertTrue(os.path.exists(arch_a), "El archivo de lote A debe regresar a Descargas")
+            self.assertFalse(os.path.exists(dest_a))
+            self.assertTrue(os.path.exists(dest_b), "El archivo de lote B debe permanecer en destino")
+
+            # 4. Deshacer lote B de forma independiente
+            st_des_b, data_des_b = request("POST", "/api/deshacer", {"id_operacion": id_op_b})
+            self.assertEqual(st_des_b, 200)
+            self.assertTrue(data_des_b.get("exito"))
+            self.assertTrue(os.path.exists(arch_b), "El archivo de lote B debe regresar a Descargas")
+            self.assertFalse(os.path.exists(dest_b))
+
+        finally:
+            servidor.shutdown()
+            servidor.server_close()
+
+    def test_api_capitulo_activo_endpoint(self):
+        """Verifica lectura y modificación del capítulo activo por API."""
+        puerto = 8793
+        self.config.puerto_servidor = puerto
+        token_csrf = "token_test_cap_api"
+
+        vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+        servidor = crear_servidor(self.config, self.db, vigilante, self.movimientos, self.miniaturas, token_csrf=token_csrf)
+        hilo = threading.Thread(target=servidor.serve_forever, daemon=True)
+        hilo.start()
+
+        def request(method, path, body=None):
+            conn = http.client.HTTPConnection("127.0.0.1", puerto, timeout=5)
+            headers = {
+                "Host": f"127.0.0.1:{puerto}",
+                "Content-Type": "application/json",
+                "X-CSRF-Token": token_csrf
+            }
+            body_bytes = json.dumps(body).encode("utf-8") if body is not None else None
+            conn.request(method, path, body=body_bytes, headers=headers)
+            res = conn.getresponse()
+            data = json.loads(res.read().decode("utf-8"))
+            conn.close()
+            return res.status, data
+
+        try:
+            # Inicialmente inactivo
+            st, d = request("GET", "/api/capitulo-activo")
+            self.assertEqual(st, 200)
+            self.assertFalse(d["capitulo_activo"]["habilitado"])
+
+            # Activar capítulo válido
+            st_post, d_post = request("POST", "/api/capitulo-activo", {
+                "personaje": "lucie",
+                "nombre": "historia_piscina",
+                "habilitado": True
+            })
+            self.assertEqual(st_post, 200)
+            self.assertTrue(d_post["capitulo_activo"]["habilitado"])
+            self.assertEqual(d_post["capitulo_activo"]["nombre"], "historia_piscina")
+
+            # Intentar activar con nombre inválido (ej: contiene barra '/')
+            st_inv, d_inv = request("POST", "/api/capitulo-activo", {
+                "personaje": "lucie",
+                "nombre": "invalido/cap",
+                "habilitado": True
+            })
+            self.assertEqual(st_inv, 400)
+            self.assertIn("error", d_inv)
+        finally:
+            servidor.shutdown()
+            servidor.server_close()
 
 
 class TestAuditoriaASTAntiBorrado(unittest.TestCase):

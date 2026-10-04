@@ -90,9 +90,13 @@ class ConfiguracionBandeja:
         self.extensiones_temporales = list(EXTENSIONES_TEMP_DEFECTO)
         self.patrones_candidatos = {
             "grok": "grok-video-*",
+            "grok_video": "grok-video-*",
+            "grok_image": "grok-image-*",
+            "gemini": "Gemini_Generated_Image_*",
             "nano_banana_regex": r"^.+_\d{14}\.(jpg|jpeg|png|webp)$",
             "flow": ""
         }
+        self.patrones_ignorar = ["Screenshot_*", "Captura*"]
         self.cargar()
 
     def cargar(self):
@@ -118,7 +122,13 @@ class ConfiguracionBandeja:
             if "extensiones_temporales" in datos:
                 self.extensiones_temporales = [ext.lower() for ext in datos["extensiones_temporales"]]
             if "patrones_candidatos" in datos:
-                self.patrones_candidatos.update(datos["patrones_candidatos"])
+                if isinstance(datos["patrones_candidatos"], dict):
+                    self.patrones_candidatos.update(datos["patrones_candidatos"])
+                elif isinstance(datos["patrones_candidatos"], list):
+                    for idx, pat in enumerate(datos["patrones_candidatos"]):
+                        self.patrones_candidatos[f"patron_{idx}"] = pat
+            if "patrones_ignorar" in datos:
+                self.patrones_ignorar = [str(p) for p in datos["patrones_ignorar"]]
 
 
 class GestorBaseDatosBandeja:
@@ -218,6 +228,44 @@ class GestorBaseDatosBandeja:
             """, (personaje,))
             con.commit()
 
+    def obtener_capitulo_activo(self) -> Dict[str, Any]:
+        """
+        Consulta en bandeja_estado las claves 'capitulo_activo_habilitado',
+        'capitulo_activo_personaje' y 'capitulo_activo_nombre'.
+        """
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            cur.execute("SELECT clave, valor FROM bandeja_estado WHERE clave IN ('capitulo_activo_habilitado', 'capitulo_activo_personaje', 'capitulo_activo_nombre')")
+            filas = {row["clave"]: row["valor"] for row in cur.fetchall()}
+            habilitado = (filas.get("capitulo_activo_habilitado") == "1")
+            personaje = filas.get("capitulo_activo_personaje", "lucie")
+            nombre = filas.get("capitulo_activo_nombre", "")
+            return {
+                "habilitado": habilitado,
+                "personaje": personaje,
+                "nombre": nombre
+            }
+
+    def guardar_capitulo_activo(self, personaje: str, nombre: str, habilitado: bool):
+        """
+        Persiste el capítulo activo en la tabla bandeja_estado de SQLite.
+        """
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            cur.execute("""
+            INSERT INTO bandeja_estado (clave, valor) VALUES ('capitulo_activo_habilitado', ?)
+            ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor;
+            """, ("1" if habilitado else "0",))
+            cur.execute("""
+            INSERT INTO bandeja_estado (clave, valor) VALUES ('capitulo_activo_personaje', ?)
+            ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor;
+            """, (personaje.strip() if personaje else "lucie",))
+            cur.execute("""
+            INSERT INTO bandeja_estado (clave, valor) VALUES ('capitulo_activo_nombre', ?)
+            ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor;
+            """, (nombre.strip() if nombre else "",))
+            con.commit()
+
 
 class FiltroListaBlanca:
     """Aplica la lista blanca estricta para determinar candidatos, escenas y no reconocidos."""
@@ -263,40 +311,113 @@ class FiltroListaBlanca:
             return "mailen"
         return "lucie"
 
+    def obtener_personaje_de_alias_inicial(self, nombre_archivo: str) -> Optional[str]:
+        """
+        Deduce el personaje estrictamente a partir del alias que se encuentre
+        al INICIO (prefijo) del nombre del archivo.
+        Si el nombre contiene menciones a otros personajes en posiciones posteriores
+        (ej: 'rolitirandoaguaalucie.jpg'), el personaje inicial ('roli') prevalece sin cambios.
+        """
+        nombre_lower = os.path.basename(nombre_archivo).lower()
+        for al in self.alias_personajes:
+            if nombre_lower.startswith(al):
+                if al in ("roli", "laroli", "magui"):
+                    return "roli"
+                if al in ("lucie", "luci"):
+                    return "lucie"
+                if al in ("mailen",):
+                    return "mailen"
+                if "roli" in al or "magui" in al:
+                    return "roli"
+                if "lucie" in al or "luci" in al:
+                    return "lucie"
+                if "mailen" in al:
+                    return "mailen"
+                return "lucie"
+        return None
+
+    def extraer_escena_sugerida(self, nombre_archivo: str) -> str:
+        """
+        Extrae el nombre de escena sugerido a partir del nombre del archivo:
+        - Remueve la extensión.
+        - Remueve el sufijo de duplicados de Chrome ' (n)'.
+        - Remueve números finales.
+        - Conserva intacto el prefijo del personaje.
+        Ejemplos:
+          'lucie atendiendo (1).mp4' -> 'lucie atendiendo'
+          'roliyacussi 02.mp4' -> 'roliyacussi'
+          'lucieasado.mp4' -> 'lucieasado'
+        """
+        nombre_base, _ = os.path.splitext(os.path.basename(nombre_archivo))
+        sug = re.sub(r"\s*\(\d+\)$", "", nombre_base)
+        sug = re.sub(r"[\s_\-]*\d+$", "", sug).strip()
+        sug = sug.rstrip(" _-").strip()
+        return sug if sug else nombre_base
+
+    def obtener_raiz_escena(self, nombre_archivo: str) -> Optional[str]:
+        """
+        Retorna la raíz de la escena para agrupación si el archivo comienza con un alias conocido,
+        o None si es un archivo sin raíz reconocible (agrupable por ventana de tiempo).
+        """
+        pers = self.obtener_personaje_de_alias_inicial(nombre_archivo)
+        if pers:
+            sug = self.extraer_escena_sugerida(nombre_archivo)
+            return sug.lower()
+        return None
+
     def clasificar_archivo(self, nombre_archivo: str) -> str:
         """
         Retorna:
-        - 'candidato': coincide con lista blanca y patrones (Grok, Nano Banana, Flow).
+        - 'candidato': coincide con lista blanca y patrones (Grok, Nano Banana, Flow, Gemini, o alias al inicio).
         - 'sin_identificar': es archivo de media pero sin patrón conocido.
-        - 'ignorar': fuera de la lista blanca o archivo temporal.
+        - 'ignorar': fuera de la lista blanca, archivo temporal o coincidente con patrones_ignorar.
         """
-        nombre_lower = nombre_archivo.lower()
+        nombre_lower = os.path.basename(nombre_archivo).lower()
         _, ext = os.path.splitext(nombre_lower)
 
-        # 1. Ignorar temporales inmediatamente
+        # 1. Descartar patrones ignorados explícitamente (ej: Screenshot_*, Captura*)
+        for pat in self.config.patrones_ignorar:
+            if fnmatch.fnmatch(nombre_archivo, pat) or fnmatch.fnmatch(nombre_lower, pat.lower()):
+                return "ignorar"
+
+        # 2. Ignorar temporales inmediatamente
         if ext in self.config.extensiones_temporales:
             return "ignorar"
 
-        # 2. Si no es extensión de media permitida, NUNCA se procesa
+        # 3. Si no es extensión de media permitida, NUNCA se procesa
         if ext not in self.config.extensiones_media:
             return "ignorar"
 
-        # 3. Evaluar patrones de proyecto conocidos
-        # 3a. Grok
-        pat_grok = self.config.patrones_candidatos.get("grok", "grok-video-*")
-        if fnmatch.fnmatch(nombre_lower, pat_grok.lower()):
+        # 4. Si el nombre comienza con un alias de personaje, es candidato directo
+        if self.obtener_personaje_de_alias_inicial(nombre_archivo) is not None:
             return "candidato"
 
-        # 3b. Nano Banana
+        # 5. Evaluar patrones de proyecto conocidos
+        # 5a. Grok video
+        pat_grok_vid = self.config.patrones_candidatos.get("grok_video") or self.config.patrones_candidatos.get("grok", "grok-video-*")
+        if fnmatch.fnmatch(nombre_lower, pat_grok_vid.lower()):
+            return "candidato"
+
+        # 5b. Grok image
+        pat_grok_img = self.config.patrones_candidatos.get("grok_image", "grok-image-*")
+        if fnmatch.fnmatch(nombre_lower, pat_grok_img.lower()):
+            return "candidato"
+
+        # 5c. Gemini
+        pat_gemini = self.config.patrones_candidatos.get("gemini", "Gemini_Generated_Image_*")
+        if fnmatch.fnmatch(nombre_archivo, pat_gemini) or fnmatch.fnmatch(nombre_lower, pat_gemini.lower()):
+            return "candidato"
+
+        # 5d. Nano Banana (14 dígitos)
         if self._regex_nano_banana.match(nombre_archivo):
             return "candidato"
 
-        # 3c. Flow
+        # 5e. Flow
         pat_flow = self.config.patrones_candidatos.get("flow", "").strip()
         if pat_flow and fnmatch.fnmatch(nombre_lower, pat_flow.lower()):
             return "candidato"
 
-        # 4. Es archivo de media válido pero sin patrón conocido
+        # 6. Es archivo de media válido pero sin patrón conocido
         return "sin_identificar"
 
 
@@ -346,14 +467,10 @@ class ValidadorEscenas:
                     return False, "La ruta de la escena escapa de los límites permitidos del directorio de destino."
             else:
                 base_confinada = os.path.realpath(ruta_destino_base)
-                subcarpetas = ["videos sin editar"]
-                if carpeta_imagenes and carpeta_imagenes not in subcarpetas:
-                    subcarpetas.append(carpeta_imagenes)
-                for sub in subcarpetas:
-                    ruta_final = os.path.join(ruta_destino_base, personaje, sub, nombre)
-                    ruta_final_real = os.path.realpath(ruta_final)
-                    if not (ruta_final_real == base_confinada or ruta_final_real.startswith(base_confinada + os.sep)):
-                        return False, "La ruta de la escena escapa de los límites permitidos del directorio de destino."
+                ruta_final = os.path.join(ruta_destino_base, personaje, nombre)
+                ruta_final_real = os.path.realpath(ruta_final)
+                if not (ruta_final_real == base_confinada or ruta_final_real.startswith(base_confinada + os.sep)):
+                    return False, "La ruta de la escena escapa de los límites permitidos del directorio de destino."
         except Exception as e:
             return False, f"Error al validar confinamiento de la escena: {str(e)}"
 
@@ -398,45 +515,72 @@ class DetectorDescargasActivas:
 
 
 class AgrupadorLotes:
-    """Agrupa archivos multimedia candidatos por proximidad temporal de mtime."""
+    """Agrupa archivos multimedia candidatos por raíz compartida y proximidad temporal."""
 
     def __init__(self, ventana_minutos: int = 10):
         self.ventana_segundos = ventana_minutos * 60
 
     def agrupar(self, candidatos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Toma una lista de dicts con {'ruta', 'nombre', 'tamanio', 'mtime', 'id_db'}
-        y los agrupa en lotes ordenados temporalmente.
+        Agrupa los candidatos:
+        1. Archivos con raíz de escena reconocible (o capítulo asignado) se agrupan estrictamente
+           por dicha raíz compartida, independientemente de la hora. Raíces distintas NUNCA se mezclan.
+        2. Archivos sin raíz reconocible se agrupan por proximidad temporal (ventana_minutos).
+        3. Los lotes resultantes se ordenan cronológicamente.
         """
         if not candidatos:
             return []
 
-        candidatos_ordenados = sorted(candidatos, key=lambda x: x["mtime"])
-        lotes: List[List[Dict[str, Any]]] = []
-        lote_actual: List[Dict[str, Any]] = []
+        # Separar candidatos con raíz reconocible de aquellos sin raíz
+        con_raiz: Dict[str, List[Dict[str, Any]]] = {}
+        sin_raiz: List[Dict[str, Any]] = []
 
-        for item in candidatos_ordenados:
-            if not lote_actual:
-                lote_actual.append(item)
+        for item in candidatos:
+            raiz = item.get("raiz_escena")
+            if raiz:
+                con_raiz.setdefault(raiz, []).append(item)
             else:
-                mtime_anterior = lote_actual[-1]["mtime"]
-                if (item["mtime"] - mtime_anterior) <= self.ventana_segundos:
+                sin_raiz.append(item)
+
+        grupos_totales: List[List[Dict[str, Any]]] = []
+
+        # 1. Agregar cada grupo de raíz compartida como un lote independiente
+        for raiz_val, grupo in con_raiz.items():
+            grupos_totales.append(sorted(grupo, key=lambda x: x["mtime"]))
+
+        # 2. Agrupar los archivos sin raíz por proximidad temporal (ventana de 10 min)
+        if sin_raiz:
+            sin_raiz_ordenados = sorted(sin_raiz, key=lambda x: x["mtime"])
+            lote_actual: List[Dict[str, Any]] = []
+            for item in sin_raiz_ordenados:
+                if not lote_actual:
                     lote_actual.append(item)
                 else:
-                    lotes.append(lote_actual)
-                    lote_actual = [item]
+                    mtime_anterior = lote_actual[-1]["mtime"]
+                    if (item["mtime"] - mtime_anterior) <= self.ventana_segundos:
+                        lote_actual.append(item)
+                    else:
+                        grupos_totales.append(lote_actual)
+                        lote_actual = [item]
+            if lote_actual:
+                grupos_totales.append(lote_actual)
 
-        if lote_actual:
-            lotes.append(lote_actual)
+        # 3. Ordenar todos los grupos cronológicamente por su mtime mínimo
+        grupos_totales.sort(key=lambda g: min(x["mtime"] for x in g))
 
-        # Convertir a estructura de salida amigable
+        # 4. Formatear la estructura de salida de cada lote
         resultado = []
-        for idx, grupo in enumerate(lotes, 1):
+        for idx, grupo in enumerate(grupos_totales, 1):
             mtime_min = min(g["mtime"] for g in grupo)
             mtime_max = max(g["mtime"] for g in grupo)
             fecha_legible = datetime.datetime.fromtimestamp(mtime_min).strftime("%Y-%m-%d %H:%M:%S")
             bytes_totales = sum(g["tamanio"] for g in grupo)
             lote_id = f"lote_{int(mtime_min)}_{idx}"
+
+            # Extraer personaje y escena sugeridos para el lote si están disponibles
+            personaje_sug = next((g.get("personaje") for g in grupo if g.get("personaje")), None)
+            escena_sug = next((g.get("escena") for g in grupo if g.get("escena")), None)
+            raiz_sug = next((g.get("raiz_escena") for g in grupo if g.get("raiz_escena")), None)
 
             for arch in grupo:
                 if "fecha" not in arch and "mtime" in arch:
@@ -450,6 +594,9 @@ class AgrupadorLotes:
                 "mtime_max": mtime_max,
                 "total_archivos": len(grupo),
                 "total_bytes": bytes_totales,
+                "personaje_sugerido": personaje_sug,
+                "escena_sugerida": escena_sug,
+                "raiz_escena": raiz_sug,
                 "archivos": grupo
             })
 
@@ -479,16 +626,25 @@ def generar_html_simulacion(simulacion: Dict[str, Any]) -> str:
         # Formatear segmentos del destino relativo
         partes = [p for p in destino_relativo.replace("\\", "/").split("/") if p]
         partes_formateadas = []
+        tipo_segmento_encontrado = False
         for p in partes:
             p_lower = p.lower()
             if p_lower == "videos sin editar":
                 partes_formateadas.append(f'<span class="tag-tipo tag-video">{html.escape(p)}</span>')
+                tipo_segmento_encontrado = True
             elif p_lower == "imagenes" or (subcarpeta_tipo and p_lower == subcarpeta_tipo.lower()):
                 partes_formateadas.append(f'<span class="tag-tipo tag-imagen">{html.escape(p)}</span>')
+                tipo_segmento_encontrado = True
             else:
                 partes_formateadas.append(html.escape(p))
 
         destino_resaltado = " / ".join(partes_formateadas)
+        if not tipo_segmento_encontrado:
+            _, ext_arch = os.path.splitext(nombre_archivo.lower())
+            es_img = ext_arch in EXTENSIONES_IMAGENES_DEFECTO
+            tag_cls = "tag-imagen" if es_img else "tag-video"
+            tag_txt = "imagenes" if es_img else "videos sin editar"
+            destino_resaltado += f' <span class="tag-tipo {tag_cls}">{tag_txt}</span>'
 
         origen_esc = html.escape(origen)
         destino_esc = html.escape(destino_completo)
@@ -590,12 +746,9 @@ class GestorMovimientosBandeja:
                 subcarpeta_tipo = ""
                 base_rel = self.ruta_descargas
             else:
-                _, ext = os.path.splitext(nombre_archivo.lower())
-                if ext in EXTENSIONES_IMAGENES_DEFECTO:
-                    subcarpeta_tipo = self.carpeta_imagenes
-                else:
-                    subcarpeta_tipo = "videos sin editar"
-                carpeta_destino = os.path.join(self.ruta_destino_base, personaje, subcarpeta_tipo, nombre_escena)
+                # Sala de espera unificada: directamente a <destino>/<personaje>/<capítulo>/ sin subcarpetas de tipo
+                carpeta_destino = os.path.join(self.ruta_destino_base, personaje, nombre_escena)
+                subcarpeta_tipo = ""
                 base_rel = self.ruta_destino_base
 
             self._validar_confinamiento(carpeta_destino)
@@ -970,6 +1123,8 @@ class VigilanteBandeja:
         except OSError:
             return
 
+        cap_activo = self.db.obtener_capitulo_activo()
+
         for entrada in entradas:
             ruta_completa = os.path.join(self.config.ruta_descargas, entrada)
             rutas_existentes.add(ruta_completa)
@@ -1014,11 +1169,45 @@ class VigilanteBandeja:
                     reg = reg_hash
 
             if reg:
+                # Archivo ya detectado previamente: NO reasignar personaje ni escena
                 id_db = reg["id"]
                 estado_actual = reg["estado"]
+                personaje_actual = reg.get("personaje")
+                escena_actual = reg.get("escena")
+                if escena_actual:
+                    raiz_escena = f"{personaje_actual}::{escena_actual}" if personaje_actual else escena_actual.lower()
+                else:
+                    raiz_escena = self.filtro.obtener_raiz_escena(entrada)
             else:
-                id_db = self.db.registrar_o_actualizar(hash_val, ruta_completa, "detectado")
-                estado_actual = "detectado"
+                # Archivo detectado por primera vez
+                if cap_activo.get("habilitado") and cap_activo.get("nombre"):
+                    # Asignación automática por capítulo activo
+                    personaje_actual = cap_activo["personaje"]
+                    escena_actual = cap_activo["nombre"]
+                    estado_actual = "clasificado"
+                    id_db = self.db.registrar_o_actualizar(
+                        hash_val, ruta_completa, "clasificado",
+                        personaje=personaje_actual, escena=escena_actual
+                    )
+                    raiz_escena = f"{personaje_actual}::{escena_actual}"
+                else:
+                    # Modo de respaldo por alias al inicio
+                    pers_alias = self.filtro.obtener_personaje_de_alias_inicial(entrada)
+                    if pers_alias:
+                        personaje_actual = pers_alias
+                        escena_actual = self.filtro.extraer_escena_sugerida(entrada)
+                        raiz_escena = self.filtro.obtener_raiz_escena(entrada)
+                        id_db = self.db.registrar_o_actualizar(
+                            hash_val, ruta_completa, "detectado",
+                            personaje=personaje_actual, escena=escena_actual
+                        )
+                        estado_actual = "detectado"
+                    else:
+                        personaje_actual = None
+                        escena_actual = None
+                        raiz_escena = None
+                        id_db = self.db.registrar_o_actualizar(hash_val, ruta_completa, "detectado")
+                        estado_actual = "detectado"
 
             item_info = {
                 "id_db": id_db,
@@ -1027,10 +1216,13 @@ class VigilanteBandeja:
                 "tamanio": tamanio,
                 "mtime": mtime,
                 "hash": hash_val,
-                "estado": estado_actual
+                "estado": estado_actual,
+                "personaje": personaje_actual,
+                "escena": escena_actual,
+                "raiz_escena": raiz_escena
             }
 
-            if tipo_clasificacion == "candidato" or estado_actual == "clasificado":
+            if tipo_clasificacion == "candidato" or estado_actual == "clasificado" or (cap_activo.get("habilitado") and cap_activo.get("nombre")):
                 candidatos_estables.append(item_info)
             elif tipo_clasificacion == "sin_identificar" and estado_actual != "ignorado":
                 sin_identificar.append(item_info)
@@ -1039,6 +1231,20 @@ class VigilanteBandeja:
         if os.path.exists(self.config.ruta_destino_base):
             try:
                 for pers in ("lucie", "roli", "mailen"):
+                    # Sala de espera plana: <destino>/<personaje>/<escena>
+                    carpeta_pers = os.path.join(self.config.ruta_destino_base, pers)
+                    if os.path.isdir(carpeta_pers):
+                        for sub in os.listdir(carpeta_pers):
+                            ruta_sub = os.path.join(carpeta_pers, sub)
+                            if os.path.isdir(ruta_sub) and sub not in ("videos sin editar", "imagenes"):
+                                if not any(e["nombre"] == sub and e["personaje"] == pers for e in escenas_existentes):
+                                    escenas_existentes.append({
+                                        "nombre": sub,
+                                        "personaje": pers,
+                                        "tipo": "destino_existente",
+                                        "ruta": ruta_sub
+                                    })
+                    # Escenas legadas en subcarpetas de tipo
                     subcarpetas_tipo = ["videos sin editar"]
                     if self.config.carpeta_imagenes and self.config.carpeta_imagenes not in subcarpetas_tipo:
                         subcarpetas_tipo.append(self.config.carpeta_imagenes)
@@ -1187,6 +1393,9 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         elif ruta == "/api/historial":
             historial = self.movimientos.obtener_historial(50)
             self._enviar_json({"historial": historial})
+        elif ruta == "/api/capitulo-activo":
+            cap_activo = self.db.obtener_capitulo_activo()
+            self._enviar_json({"capitulo_activo": cap_activo})
         else:
             self._enviar_error(HTTPStatus.NOT_FOUND, "Ruta no encontrada.")
 
@@ -1224,6 +1433,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
         if ruta == "/api/clasificar-sin-identificar":
             self._handle_clasificar_sin_identificar(body)
+        elif ruta == "/api/capitulo-activo":
+            self._handle_guardar_capitulo_activo(body)
         elif ruta == "/api/simular-mover":
             self._handle_simular_mover(body)
         elif ruta == "/api/mover-lote":
@@ -1232,6 +1443,35 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._handle_deshacer(body)
         else:
             self._enviar_error(HTTPStatus.NOT_FOUND, "Endpoint POST no encontrado.")
+
+    def _handle_guardar_capitulo_activo(self, body: Dict[str, Any]):
+        habilitado = bool(body.get("habilitado", False))
+        personaje = str(body.get("personaje", "lucie")).strip().lower()
+        nombre = str(body.get("nombre", "")).strip()
+
+        if habilitado:
+            if not nombre:
+                self._enviar_error(HTTPStatus.BAD_REQUEST, "El nombre del capítulo actual no puede estar vacío.")
+                return
+            valido, motivo = ValidadorEscenas.validar_nombre_escena(
+                nombre, self.config.ruta_destino_base, self.config.ruta_descargas,
+                es_existente_descargas=False, personaje=personaje,
+                carpeta_imagenes=self.config.carpeta_imagenes
+            )
+            if not valido:
+                self._enviar_error(HTTPStatus.BAD_REQUEST, f"Nombre de capítulo inválido: {motivo}")
+                return
+
+        self.db.guardar_capitulo_activo(personaje, nombre, habilitado)
+        self.vigilante.escanear()
+        self._enviar_json({
+            "exito": True,
+            "capitulo_activo": {
+                "habilitado": habilitado,
+                "personaje": personaje,
+                "nombre": nombre
+            }
+        })
 
     def _handle_clasificar_sin_identificar(self, body: Dict[str, Any]):
         hash_val = body.get("hash")
@@ -1247,14 +1487,93 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         self.vigilante.escanear()
         self._enviar_json({"exito": True, "hash": hash_val, "es_proyecto": es_proyecto})
 
+    def _generar_html_simulacion_multilote(self, simulaciones_lotes: List[Dict[str, Any]]) -> str:
+        total_archivos = sum(len(item["simulacion"].get("movimientos", [])) for item in simulaciones_lotes)
+        bloques = [
+            f'<div style="margin-bottom:16px; padding:12px; background:rgba(187,134,252,0.1); border:1px solid var(--accent); border-radius:6px;">'
+            f'<strong>Simulación previa consolidada:</strong> Se moverán <strong>{total_archivos}</strong> archivos en <strong>{len(simulaciones_lotes)}</strong> lote(s).'
+            f'</div>'
+        ]
+        for item in simulaciones_lotes:
+            lote_id = html.escape(str(item.get("lote_id", "")))
+            sim = item.get("simulacion", {})
+            personaje = html.escape(str(item.get("personaje", "")))
+            escena = html.escape(str(item.get("escena", "")))
+            es_descargas = item.get("es_existente_descargas", False)
+            desc_tag = " (En Descargas)" if es_descargas else ""
+            bloques.append(
+                f'<div style="margin-top:20px; margin-bottom:10px; padding:8px 12px; background:var(--card-alt); border-radius:6px;">'
+                f'<strong>Lote {lote_id}</strong> &mdash; Destino: <code>{personaje} / {escena}{desc_tag}</code>'
+                f'</div>'
+            )
+            bloques.append(sim.get("html") or generar_html_simulacion(sim))
+        return "\n".join(bloques)
+
     def _handle_simular_mover(self, body: Dict[str, Any]):
+        # Modo multi-lote
+        if "lotes" in body and isinstance(body["lotes"], list):
+            lotes_req = body["lotes"]
+            if not lotes_req:
+                self._enviar_error(HTTPStatus.BAD_REQUEST, "Lista de lotes vacía para simulación.")
+                return
+
+            simulaciones_lotes = []
+            todos_movimientos = []
+
+            try:
+                for item in lotes_req:
+                    lote_id = item.get("lote_id", "lote_desconocido")
+                    archivos = item.get("archivos", [])
+                    personaje = item.get("personaje", "lucie")
+                    nombre_escena = str(item.get("escena", "")).strip()
+                    es_descargas = bool(item.get("es_existente_descargas", False))
+
+                    if not archivos or not nombre_escena:
+                        self._enviar_error(HTTPStatus.BAD_REQUEST, f"El lote '{lote_id}' debe contener archivos y escena.")
+                        return
+
+                    sim_individual = self.movimientos.simular_movimiento_lote(
+                        archivos=archivos,
+                        personaje=personaje,
+                        nombre_escena=nombre_escena,
+                        es_existente_descargas=es_descargas
+                    )
+                    simulaciones_lotes.append({
+                        "lote_id": lote_id,
+                        "personaje": personaje,
+                        "escena": nombre_escena,
+                        "es_existente_descargas": es_descargas,
+                        "simulacion": sim_individual
+                    })
+                    todos_movimientos.extend(sim_individual.get("movimientos", []))
+
+                html_consolidado = self._generar_html_simulacion_multilote(simulaciones_lotes)
+
+                self._enviar_json({
+                    "valido": True,
+                    "es_multilote": True,
+                    "total_lotes": len(simulaciones_lotes),
+                    "total_archivos": len(todos_movimientos),
+                    "movimientos": todos_movimientos,
+                    "simulaciones_lotes": simulaciones_lotes,
+                    "html": html_consolidado
+                })
+            except ErrorValidacionEscena as e:
+                self._enviar_error(HTTPStatus.BAD_REQUEST, str(e))
+            except ErrorSeguridadBandeja as e:
+                self._enviar_error(HTTPStatus.FORBIDDEN, str(e))
+            except Exception as e:
+                self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error en simulación multi-lote: {str(e)}")
+            return
+
+        # Modo individual (un solo lote)
         archivos = body.get("archivos", [])
         personaje = body.get("personaje", "lucie")
-        nombre_escena = body.get("escena", "").strip()
+        nombre_escena = str(body.get("escena", "")).strip()
         es_existente_descargas = bool(body.get("es_existente_descargas", False))
 
         if not archivos or not nombre_escena:
-            self._enviar_error(HTTPStatus.BAD_REQUEST, "Se requiere lista de 'archivos' y 'escena'.")
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "Faltan campos obligatorios 'archivos' y 'escena'.")
             return
 
         try:
@@ -1276,8 +1595,53 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         simulacion = body.get("simulacion")
         lote_id = body.get("lote_id", "lote_desconocido")
 
-        if not simulacion or "movimientos" not in simulacion:
+        if not simulacion:
             self._enviar_error(HTTPStatus.BAD_REQUEST, "Se requiere el objeto 'simulacion' previamente validado.")
+            return
+
+        # Si es simulación multi-lote
+        if simulacion.get("es_multilote"):
+            simulaciones_lotes = simulacion.get("simulaciones_lotes", [])
+            if not simulaciones_lotes:
+                self._enviar_error(HTTPStatus.BAD_REQUEST, "No hay lotes en la simulación multi-lote.")
+                return
+
+            resultados = []
+            total_movidos = 0
+            ultimo_id_operacion = ""
+            try:
+                for item in simulaciones_lotes:
+                    sub_sim = item.get("simulacion")
+                    sub_lote_id = item.get("lote_id", "lote_desconocido")
+                    if sub_sim and "movimientos" in sub_sim:
+                        res = self.movimientos.ejecutar_movimiento_lote(sub_sim, sub_lote_id)
+                        total_movidos += res.get("total_movidos", 0)
+                        ultimo_id_operacion = res.get("id_operacion", "")
+                        resultados.append({
+                            "lote_id": sub_lote_id,
+                            "id_operacion": ultimo_id_operacion,
+                            "total_movidos": res.get("total_movidos", 0),
+                            "personaje": item.get("personaje"),
+                            "escena": item.get("escena")
+                        })
+                self.vigilante.escanear()
+                self._enviar_json({
+                    "exito": True,
+                    "es_multilote": True,
+                    "total_movidos": total_movidos,
+                    "resultados": resultados,
+                    "id_operacion": ultimo_id_operacion,
+                    "ultimo_id_operacion": ultimo_id_operacion
+                })
+            except ErrorSeguridadBandeja as e:
+                self._enviar_error(HTTPStatus.FORBIDDEN, str(e))
+            except Exception as e:
+                self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al mover lotes listos: {str(e)}")
+            return
+
+        # Si es un lote individual
+        if "movimientos" not in simulacion:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "Se requiere el objeto 'simulacion' previamente validado con 'movimientos'.")
             return
 
         try:
@@ -1288,6 +1652,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._enviar_error(HTTPStatus.FORBIDDEN, str(e))
         except Exception as e:
             self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al mover lote: {str(e)}")
+
 
     def _handle_deshacer(self, body: Dict[str, Any]):
         id_operacion = body.get("id_operacion")
@@ -1656,6 +2021,33 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       color: #38bdf8;
       border: 1px solid rgba(14, 165, 233, 0.4);
     }}
+    .card-capitulo {{
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 20px;
+      margin-bottom: 20px;
+    }}
+    .badge-capitulo-activo {{
+      background: rgba(3, 218, 198, 0.2);
+      color: var(--teal);
+      border: 1px solid var(--teal);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: bold;
+      text-transform: uppercase;
+    }}
+    .badge-capitulo-inactivo {{
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: bold;
+      text-transform: uppercase;
+    }}
     .banner-aviso {{
       background: #14352b;
       border-bottom: 2px solid var(--teal);
@@ -1738,9 +2130,40 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
   </nav>
 
   <main>
+    <div id="card-capitulo-activo" class="card-capitulo">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="font-weight:600; font-size:0.95rem;">Capítulo Actual:</span>
+          <span id="badge-capitulo-estado" class="badge-capitulo-inactivo">Inactivo</span>
+        </div>
+        <div id="banner-capitulo-desc" style="font-size:0.8rem; color:var(--text-muted);">
+          Sin capítulo activo (Modo respaldo: se asignará por alias al inicio del nombre).
+        </div>
+      </div>
+      <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
+        <label style="font-size:0.85rem;">Personaje:
+          <select id="sel-capitulo-personaje">
+            <option value="lucie">Lucie</option>
+            <option value="roli">Roli</option>
+            <option value="mailen">Mailen</option>
+          </select>
+        </label>
+        <input type="text" id="txt-capitulo-nombre" placeholder="Nombre del capítulo actual" style="min-width:240px;">
+        <button class="btn-sm" id="btn-activar-capitulo" onclick="guardarCapituloActivo(true)" style="background:var(--accent); color:#000; font-weight:600;">Activar</button>
+        <button class="btn-sm" id="btn-desactivar-capitulo" onclick="guardarCapituloActivo(false)">Desactivar</button>
+        <span id="error-capitulo-activo" class="error-inline" style="display:none;"></span>
+      </div>
+    </div>
+
     <div id="alert-box" style="display:none;" class="alert-error"></div>
 
     <section id="sec-lotes">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+        <h2 style="font-size:1.15rem;">Lotes Detectados</h2>
+        <button id="btn-mover-lotes-listos" class="btn-accion" onclick="simularMoverLotesListos()" style="margin-left:0;">
+          Mover lotes listos
+        </button>
+      </div>
       <div id="contenedor-lotes">Cargando lotes...</div>
     </section>
 
@@ -1784,7 +2207,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
   <script>
     const CSRF_TOKEN = "{self.token_csrf}";
-    let datosEstado = {{ lotes: [], sin_identificar: [], escenas: [], personajes: [], ultimo_personaje: "lucie" }};
+    let datosEstado = {{ lotes: [], sin_identificar: [], escenas: [], personajes: [], ultimo_personaje: "lucie", capitulo_activo: null }};
     let simulacionActiva = null;
     let loteActivoId = null;
     let pestanaActual = 'lotes';
@@ -1805,7 +2228,11 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       operacionAvisoActual = idOperacion;
       const banner = document.getElementById('banner-aviso');
       const msg = document.getElementById('banner-aviso-msg');
-      msg.innerText = `Se movieron ${{totalMovidos}} archivos a ${{personaje}}/${{escena}}`;
+      if (personaje === 'varios') {{
+        msg.innerText = `Se movieron ${{totalMovidos}} archivos en ${{escena}}`;
+      }} else {{
+        msg.innerText = `Se movieron ${{totalMovidos}} archivos a ${{personaje}}/${{escena}}`;
+      }}
       banner.style.display = 'flex';
     }}
 
@@ -1886,21 +2313,91 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
     async function cargarDatos() {{
       try {{
-        const [lotesRes, sinIdRes, escenasRes, persRes] = await Promise.all([
+        const [lotesRes, sinIdRes, escenasRes, persRes, capRes] = await Promise.all([
           apiFetch('/api/lotes'),
           apiFetch('/api/sin-identificar'),
           apiFetch('/api/escenas'),
-          apiFetch('/api/personajes')
+          apiFetch('/api/personajes'),
+          apiFetch('/api/capitulo-activo')
         ]);
         datosEstado.lotes = lotesRes.lotes;
         datosEstado.sin_identificar = sinIdRes.sin_identificar;
         datosEstado.escenas = escenasRes.escenas;
         datosEstado.personajes = persRes.personajes;
         datosEstado.ultimo_personaje = persRes.ultimo_personaje;
+        datosEstado.capitulo_activo = capRes.capitulo_activo;
+        renderCapituloActivo();
         renderLotes();
         renderSinIdentificar();
       }} catch (e) {{
         mostrarError(e.message);
+      }}
+    }}
+
+    function renderCapituloActivo() {{
+      const badge = document.getElementById('badge-capitulo-estado');
+      const desc = document.getElementById('banner-capitulo-desc');
+      const selPers = document.getElementById('sel-capitulo-personaje');
+      const txtNombre = document.getElementById('txt-capitulo-nombre');
+      const errSpan = document.getElementById('error-capitulo-activo');
+
+      if (errSpan) {{
+        errSpan.style.display = 'none';
+        errSpan.innerText = '';
+      }}
+
+      const cap = datosEstado.capitulo_activo;
+      if (cap && cap.habilitado && cap.nombre) {{
+        badge.className = 'badge-capitulo-activo';
+        badge.innerText = `Activo: ${{cap.personaje}}/${{cap.nombre}}`;
+        desc.innerText = `Todos los archivos detectados se asignan automáticamente a ${{cap.personaje}}/${{cap.nombre}}.`;
+        if (selPers) selPers.value = cap.personaje || 'lucie';
+        if (txtNombre) txtNombre.value = cap.nombre || '';
+      }} else {{
+        badge.className = 'badge-capitulo-inactivo';
+        badge.innerText = 'Inactivo';
+        desc.innerText = 'Sin capítulo activo (Modo respaldo: se asignará por alias al inicio del nombre).';
+        if (cap && cap.personaje && selPers) selPers.value = cap.personaje;
+        if (cap && cap.nombre && txtNombre) txtNombre.value = cap.nombre;
+      }}
+    }}
+
+    async function guardarCapituloActivo(habilitar) {{
+      const selPers = document.getElementById('sel-capitulo-personaje');
+      const txtNombre = document.getElementById('txt-capitulo-nombre');
+      const errSpan = document.getElementById('error-capitulo-activo');
+
+      const personaje = (selPers ? selPers.value : 'lucie').trim();
+      const nombre = (txtNombre ? txtNombre.value : '').trim();
+
+      if (habilitar) {{
+        const err = validarNombreEscena(nombre);
+        if (err) {{
+          if (errSpan) {{
+            errSpan.innerText = err;
+            errSpan.style.display = 'inline-block';
+          }}
+          return;
+        }}
+      }}
+      if (errSpan) {{
+        errSpan.style.display = 'none';
+        errSpan.innerText = '';
+      }}
+
+      try {{
+        await apiFetch('/api/capitulo-activo', {{
+          method: 'POST',
+          body: JSON.stringify({{ personaje, nombre, habilitado }})
+        }});
+        await cargarDatos();
+      }} catch (e) {{
+        if (errSpan) {{
+          errSpan.innerText = e.message;
+          errSpan.style.display = 'inline-block';
+        }} else {{
+          mostrarError(e.message);
+        }}
       }}
     }}
 
@@ -1910,19 +2407,31 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         cont.innerHTML = '<div class="card"><p style="color:var(--text-muted)">No hay nuevos lotes de candidatos en ~/Descargas.</p></div>';
         return;
       }}
+
+      const capActivo = datosEstado.capitulo_activo && datosEstado.capitulo_activo.habilitado ? datosEstado.capitulo_activo : null;
+
       cont.innerHTML = datosEstado.lotes.map(lote => {{
+        const persPre = capActivo ? capActivo.personaje : (lote.personaje_sugerido || datosEstado.ultimo_personaje || 'lucie');
+        const escenaPre = capActivo ? capActivo.nombre : (lote.escena_sugerida || '');
+
         const persOptions = datosEstado.personajes.map(p => 
-          `<option value="${{p.id}}" ${{p.id === datosEstado.ultimo_personaje ? 'selected' : ''}}>${{p.nombre}}</option>`
+          `<option value="${{p.id}}" ${{p.id === persPre ? 'selected' : ''}}>${{p.nombre}}</option>`
         ).join('');
 
+        const escenaExiste = datosEstado.escenas.some(e => e.nombre === escenaPre);
         const escenasOptions = datosEstado.escenas.map(e => 
-          `<option value="${{e.nombre}}" data-tipo="${{e.tipo}}">[${{e.tipo === 'descargas_alias' ? 'En Descargas' : 'Destino'}}] ${{e.nombre}}</option>`
+          `<option value="${{e.nombre}}" data-tipo="${{e.tipo}}" ${{ (e.nombre === escenaPre) ? 'selected' : '' }}>[${{e.tipo === 'descargas_alias' ? 'En Descargas' : 'Destino'}}] ${{e.nombre}}</option>`
         ).join('');
+
+        const esNueva = !escenaExiste;
 
         return `
           <div class="card" id="card-${{lote.lote_id}}">
             <div class="card-header">
-              <h3>Lote #${{lote.numero}} (${{lote.total_archivos}} archivos &bull; ${{formatearBytes(lote.total_bytes)}})</h3>
+              <div style="display:flex; align-items:center; gap:10px;">
+                <input type="checkbox" class="cb-lote-listo" data-lote-id="${{lote.lote_id}}" checked title="Tildar para mover con 'Mover lotes listos'">
+                <h3>Lote #${{lote.numero}} (${{lote.total_archivos}} archivos &bull; ${{formatearBytes(lote.total_bytes)}})</h3>
+              </div>
               <span style="color:var(--text-muted);font-size:0.85rem">${{lote.fecha}}</span>
             </div>
             <div class="lote-toolbar">
@@ -1952,12 +2461,12 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
               <label>Personaje: <select id="sel-pers-${{lote.lote_id}}">${{persOptions}}</select></label>
               <label>Escena:
                 <select id="sel-escena-${{lote.lote_id}}" onchange="toggleNuevaEscena('${{lote.lote_id}}', this.value)">
-                  <option value="__nueva__">+ Crear nueva escena...</option>
+                  <option value="__nueva__" ${{esNueva ? 'selected' : ''}}>+ Crear nueva escena...</option>
                   ${{escenasOptions}}
                 </select>
               </label>
               <div class="campo-escena-wrap">
-                <input type="text" id="txt-nueva-escena-${{lote.lote_id}}" placeholder="Nombre de escena nueva" style="max-width:200px;" oninput="validarInputEscena('${{lote.lote_id}}')">
+                <input type="text" id="txt-nueva-escena-${{lote.lote_id}}" value="${{esNueva ? escapeHTML(escenaPre) : ''}}" placeholder="Nombre de escena nueva" style="max-width:200px; display:${{esNueva ? 'inline-block' : 'none'}};" oninput="validarInputEscena('${{lote.lote_id}}')">
                 <span id="error-escena-${{lote.lote_id}}" class="error-inline" style="display:none;"></span>
               </div>
               <button class="btn-accion" id="btn-mover-${{lote.lote_id}}" onclick="iniciarMover('${{lote.lote_id}}')">Mover seleccionados (${{lote.archivos.length}})</button>
@@ -2243,6 +2752,72 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       }}
     }}
 
+    async function simularMoverLotesListos() {{
+      const cbs = document.querySelectorAll('.cb-lote-listo:checked');
+      if (!cbs.length) {{
+        mostrarError("No hay ningún lote seleccionado para mover.");
+        return;
+      }}
+
+      const lotesPayload = [];
+      for (const cb of cbs) {{
+        const loteId = cb.getAttribute('data-lote-id');
+        const lote = datosEstado.lotes.find(l => l.lote_id === loteId);
+        if (!lote) continue;
+
+        const chkArchivos = document.querySelectorAll(`.chk-lote-${{loteId}}:checked`);
+        const idsSel = new Set(Array.from(chkArchivos).map(c => c.getAttribute('data-id')));
+        const archivosSel = lote.archivos.filter(a => idsSel.has(String(a.id_db)));
+        if (!archivosSel.length) {{
+          continue;
+        }}
+
+        const selPers = document.getElementById(`sel-pers-${{loteId}}`).value;
+        const selEscena = document.getElementById(`sel-escena-${{loteId}}`).value;
+        let nombreEscena = selEscena;
+        let esExistenteDescargas = false;
+
+        if (selEscena === '__nueva__') {{
+          if (!validarInputEscena(loteId)) {{
+            const txt = document.getElementById(`txt-nueva-escena-${{loteId}}`);
+            if (txt) txt.focus();
+            return;
+          }}
+          nombreEscena = document.getElementById(`txt-nueva-escena-${{loteId}}`).value.trim();
+        }} else {{
+          const opt = document.querySelector(`#sel-escena-${{loteId}} option[value="${{selEscena}}"]`);
+          if (opt && opt.getAttribute('data-tipo') === 'descargas_alias') {{
+            esExistenteDescargas = true;
+          }}
+        }}
+
+        lotesPayload.push({{
+          lote_id: loteId,
+          archivos: archivosSel,
+          personaje: selPers,
+          escena: nombreEscena,
+          es_existente_descargas: esExistenteDescargas
+        }});
+      }}
+
+      if (!lotesPayload.length) {{
+        mostrarError("No hay archivos seleccionados en los lotes tildados.");
+        return;
+      }}
+
+      try {{
+        const sim = await apiFetch('/api/simular-mover', {{
+          method: 'POST',
+          body: JSON.stringify({{ lotes: lotesPayload }})
+        }});
+        simulacionActiva = sim;
+        loteActivoId = null;
+        mostrarModalSimulacion(sim);
+      }} catch (e) {{
+        mostrarError(e.message);
+      }}
+    }}
+
     function formatearDestinoCliente(m) {{
       const rel = (m.destino_relativo || m.destino || '').replace(/\\\\/g, '/');
       const partes = rel.split('/').filter(Boolean);
@@ -2296,19 +2871,39 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     }}
 
     async function ejecutarMoverLote() {{
-      if (!simulacionActiva || !loteActivoId) return;
+      if (!simulacionActiva) return;
       try {{
+        let bodyReq;
+        if (simulacionActiva.es_multilote) {{
+          bodyReq = {{ simulacion: simulacionActiva }};
+        }} else {{
+          if (!loteActivoId) return;
+          bodyReq = {{ simulacion: simulacionActiva, lote_id: loteActivoId }};
+        }}
+
         const res = await apiFetch('/api/mover-lote', {{
           method: 'POST',
-          body: JSON.stringify({{ simulacion: simulacionActiva, lote_id: loteActivoId }})
+          body: JSON.stringify(bodyReq)
         }});
         cerrarModal();
-        mostrarAvisoMover(
-          res.total_movidos,
-          res.personaje || simulacionActiva.personaje,
-          res.escena || simulacionActiva.escena,
-          res.id_operacion
-        );
+
+        if (res.es_multilote) {{
+          const primerRes = (res.resultados && res.resultados.length > 0) ? res.resultados[0] : null;
+          mostrarAvisoMover(
+            res.total_movidos,
+            primerRes ? primerRes.personaje : 'varios',
+            primerRes ? (res.resultados.length > 1 ? `${{primerRes.escena}} y otros` : primerRes.escena) : 'lotes',
+            res.id_operacion || res.ultimo_id_operacion
+          );
+        }} else {{
+          mostrarAvisoMover(
+            res.total_movidos,
+            res.personaje || simulacionActiva.personaje,
+            res.escena || simulacionActiva.escena,
+            res.id_operacion
+          );
+        }}
+
         await cargarDatos();
         if (pestanaActual === 'historial') {{
           await cargarHistorial();
