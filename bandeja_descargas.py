@@ -97,6 +97,7 @@ class ConfiguracionBandeja:
         }
         self.patrones_ignorar = ["Screenshot_*", "Captura*"]
         self.horas_alerta_capitulo_olvidado = 12
+        self.minutos_antes_inicio_capitulo = 0
         self.cargar()
 
     def cargar(self):
@@ -113,6 +114,8 @@ class ConfiguracionBandeja:
                 self.host_servidor = str(datos["host_servidor"])
             if "horas_alerta_capitulo_olvidado" in datos:
                 self.horas_alerta_capitulo_olvidado = max(1, int(datos["horas_alerta_capitulo_olvidado"]))
+            if "minutos_antes_inicio_capitulo" in datos:
+                self.minutos_antes_inicio_capitulo = max(0, int(datos["minutos_antes_inicio_capitulo"]))
             if "intervalo_sondeo_segundos" in datos:
                 self.intervalo_sondeo_segundos = max(1, int(datos["intervalo_sondeo_segundos"]))
             if "ventana_lote_minutos" in datos:
@@ -318,10 +321,13 @@ class GestorBaseDatosBandeja:
                     "archivos_movidos": 0
                 }
 
-    def guardar_capitulo_activo(self, personaje: str, nombre: str, habilitado: bool):
+    def guardar_capitulo_activo(self, personaje: str, nombre: str, habilitado: bool, fecha_inicio: Optional[str] = None):
         """
-        Mantiene sincronizado el estado básico en bandeja_estado.
+        Mantiene sincronizado el estado básico en bandeja_estado y bandeja_capitulos.
         """
+        now_iso = fecha_inicio or datetime.datetime.now().isoformat()
+        pers = (personaje or "").strip() if personaje else "lucie"
+        nom = (nombre or "").strip()
         with self._lock, self._conectar() as con:
             cur = con.cursor()
             cur.execute("""
@@ -331,11 +337,28 @@ class GestorBaseDatosBandeja:
             cur.execute("""
             INSERT INTO bandeja_estado (clave, valor) VALUES ('capitulo_activo_personaje', ?)
             ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor;
-            """, (personaje.strip() if personaje else "lucie",))
+            """, (pers,))
             cur.execute("""
             INSERT INTO bandeja_estado (clave, valor) VALUES ('capitulo_activo_nombre', ?)
             ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor;
-            """, (nombre.strip() if nombre else "",))
+            """, (nom,))
+
+            if habilitado and nom:
+                cur.execute("SELECT id, estado FROM bandeja_capitulos WHERE estado = 'activo' LIMIT 1")
+                act = cur.fetchone()
+                if not act:
+                    cur.execute("""
+                    INSERT INTO bandeja_capitulos (personaje, nombre, estado, fecha_inicio, fecha_ultimo_aviso, archivos_movidos)
+                    VALUES (?, ?, 'activo', ?, ?, 0)
+                    """, (pers, nom, now_iso, now_iso))
+                else:
+                    cur.execute("""
+                    UPDATE bandeja_capitulos SET personaje = ?, nombre = ? WHERE id = ?
+                    """, (pers, nom, act["id"]))
+            elif not habilitado:
+                cur.execute("""
+                UPDATE bandeja_capitulos SET estado = 'cerrado', fecha_fin = ? WHERE estado = 'activo'
+                """, (now_iso,))
             con.commit()
 
     def terminar_capitulo(self, id_capitulo: Optional[int] = None, fecha_fin: Optional[str] = None) -> bool:
@@ -950,14 +973,17 @@ class GestorMovimientosBandeja:
     def calcular_base_escena(self, personaje: str, nombre_escena: str) -> str:
         """
         Calcula la base del nombre para los archivos a mover:
-        - Omitir el prefijo SOLO si la escena (en minúscula) empieza con el nombre del
+        - Omitir el prefijo SOLO si la escena (en minúscula y compacta) empieza con el nombre del
           personaje elegido o con un alias de ESE personaje.
-        - Si empieza con un alias de OTRO personaje, o con ninguno, la base es <personaje><escena>.
-        - Siempre en minúsculas y sin espacios extra.
+        - Si empieza con un alias de OTRO personaje, o con ninguno, la base es <personaje><escena_compacta>.
+        - Elimina todos los espacios internos y caracteres de separación visual para dejar
+          un estilo compacto (ej. 'lucie trapitos' -> 'lucietrapitos').
         - Garantiza que obtener_personaje_de_alias_inicial deduzca exactamente el personaje elegido.
         """
         pers = (personaje or "lucie").strip().lower()
-        escena = (nombre_escena or "").strip().lower()
+        escena_raw = (nombre_escena or "").strip().lower()
+        # Eliminar todos los espacios internos y caracteres de separación visual
+        escena_compacta = re.sub(r'[\s]+', '', escena_raw)
 
         # Determinar el personaje canónico si se ingresó un alias
         pers_canonico = pers
@@ -971,10 +997,10 @@ class GestorMovimientosBandeja:
         alias_ordenados = sorted(sus_alias, key=len, reverse=True)
 
         for al in alias_ordenados:
-            if escena.startswith(al):
-                return escena
+            if escena_compacta.startswith(al):
+                return escena_compacta
 
-        return f"{pers_canonico}{escena}"
+        return f"{pers_canonico}{escena_compacta}"
 
     @classmethod
     def clasificar_familia_medio(cls, extension: str) -> str:
@@ -1462,6 +1488,7 @@ class VigilanteBandeja:
         self._detener = threading.Event()
         self._hilo: Optional[threading.Thread] = None
         self._lotes_actuales: List[Dict[str, Any]] = []
+        self._lotes_anteriores_actuales: List[Dict[str, Any]] = []
         self._sin_identificar_actuales: List[Dict[str, Any]] = []
         self._escenas_existentes_actuales: List[Dict[str, Any]] = []
         self._ultimo_conteo_lotes = 0
@@ -1496,6 +1523,7 @@ class VigilanteBandeja:
             return
 
         candidatos_estables = []
+        candidatos_anteriores = []
         sin_identificar = []
         escenas_existentes = []
         rutas_existentes = set()
@@ -1506,6 +1534,18 @@ class VigilanteBandeja:
             return
 
         cap_activo = self.db.obtener_capitulo_activo()
+        es_cap_activo = bool(cap_activo and cap_activo.get("habilitado") and cap_activo.get("nombre"))
+        ts_corte_capitulo = 0.0
+        if es_cap_activo:
+            fecha_ini_str = cap_activo.get("fecha_inicio")
+            if fecha_ini_str:
+                try:
+                    dt_ini = datetime.datetime.fromisoformat(fecha_ini_str)
+                    ts_ini = dt_ini.timestamp()
+                except Exception:
+                    ts_ini = 0.0
+                margen_segundos = getattr(self.config, "minutos_antes_inicio_capitulo", 0) * 60
+                ts_corte_capitulo = ts_ini - margen_segundos
 
         for entrada in entradas:
             ruta_completa = os.path.join(self.config.ruta_descargas, entrada)
@@ -1542,6 +1582,11 @@ class VigilanteBandeja:
             except OSError:
                 continue
 
+            # Comprobar si el archivo es anterior al capítulo activo
+            es_anterior = False
+            if es_cap_activo and mtime < ts_corte_capitulo:
+                es_anterior = True
+
             # Comprobar en base de datos SQLite si ya tiene decisión tomada
             reg = self.db.obtener_por_ruta(ruta_completa)
             hash_val = reg["hash"] if reg else calcular_sha256(ruta_completa)
@@ -1550,46 +1595,66 @@ class VigilanteBandeja:
                 if reg_hash:
                     reg = reg_hash
 
-            if reg:
-                # Archivo ya detectado previamente: NO reasignar personaje ni escena
-                id_db = reg["id"]
-                estado_actual = reg["estado"]
-                personaje_actual = reg.get("personaje")
-                escena_actual = reg.get("escena")
-                if escena_actual:
-                    raiz_escena = f"{personaje_actual}::{escena_actual}" if personaje_actual else escena_actual.lower()
-                else:
-                    raiz_escena = self.filtro.obtener_raiz_escena(entrada)
-            else:
-                # Archivo detectado por primera vez
-                if cap_activo.get("habilitado") and cap_activo.get("nombre"):
-                    # Asignación automática por capítulo activo
-                    personaje_actual = cap_activo["personaje"]
-                    escena_actual = cap_activo["nombre"]
-                    estado_actual = "clasificado"
-                    id_db = self.db.registrar_o_actualizar(
-                        hash_val, ruta_completa, "clasificado",
-                        personaje=personaje_actual, escena=escena_actual
-                    )
-                    raiz_escena = f"{personaje_actual}::{escena_actual}"
-                else:
-                    # Modo de respaldo por alias al inicio
+            if es_anterior:
+                # Regla 2: Archivo anterior al inicio del capítulo activo:
+                # NO se asigna al capítulo ni se preselecciona.
+                if tipo_clasificacion == "candidato":
                     pers_alias = self.filtro.obtener_personaje_de_alias_inicial(entrada)
-                    if pers_alias:
-                        personaje_actual = pers_alias
-                        escena_actual = self.filtro.extraer_escena_sugerida(entrada)
+                    personaje_actual = pers_alias
+                    escena_actual = None
+                    raiz_escena = None
+                    estado_actual = "detectado"
+                    id_db = self.db.registrar_o_actualizar(
+                        hash_val, ruta_completa, "detectado",
+                        personaje=personaje_actual, escena=None
+                    )
+                else:
+                    personaje_actual = None
+                    escena_actual = None
+                    raiz_escena = None
+                    estado_actual = "detectado"
+                    id_db = self.db.registrar_o_actualizar(hash_val, ruta_completa, "detectado")
+            else:
+                if reg and reg["estado"] != "detectado":
+                    # Archivo ya detectado previamente con decisión tomada: respetar
+                    id_db = reg["id"]
+                    estado_actual = reg["estado"]
+                    personaje_actual = reg.get("personaje")
+                    escena_actual = reg.get("escena")
+                    if escena_actual:
+                        raiz_escena = f"{personaje_actual}::{escena_actual}" if personaje_actual else escena_actual.lower()
+                    else:
                         raiz_escena = self.filtro.obtener_raiz_escena(entrada)
+                else:
+                    # Material nuevo o primer escaneo
+                    if es_cap_activo:
+                        # Asignación automática por capítulo activo
+                        personaje_actual = cap_activo["personaje"]
+                        escena_actual = cap_activo["nombre"]
+                        estado_actual = "clasificado"
                         id_db = self.db.registrar_o_actualizar(
-                            hash_val, ruta_completa, "detectado",
+                            hash_val, ruta_completa, "clasificado",
                             personaje=personaje_actual, escena=escena_actual
                         )
-                        estado_actual = "detectado"
+                        raiz_escena = f"{personaje_actual}::{escena_actual}"
                     else:
-                        personaje_actual = None
-                        escena_actual = None
-                        raiz_escena = None
-                        id_db = self.db.registrar_o_actualizar(hash_val, ruta_completa, "detectado")
-                        estado_actual = "detectado"
+                        # Modo de respaldo por alias al inicio sin capítulo
+                        pers_alias = self.filtro.obtener_personaje_de_alias_inicial(entrada)
+                        if pers_alias:
+                            personaje_actual = pers_alias
+                            escena_actual = self.filtro.extraer_escena_sugerida(entrada)
+                            raiz_escena = self.filtro.obtener_raiz_escena(entrada)
+                            id_db = self.db.registrar_o_actualizar(
+                                hash_val, ruta_completa, "detectado",
+                                personaje=personaje_actual, escena=escena_actual
+                            )
+                            estado_actual = "detectado"
+                        else:
+                            personaje_actual = None
+                            escena_actual = None
+                            raiz_escena = None
+                            id_db = self.db.registrar_o_actualizar(hash_val, ruta_completa, "detectado")
+                            estado_actual = "detectado"
 
             item_info = {
                 "id_db": id_db,
@@ -1601,13 +1666,20 @@ class VigilanteBandeja:
                 "estado": estado_actual,
                 "personaje": personaje_actual,
                 "escena": escena_actual,
-                "raiz_escena": raiz_escena
+                "raiz_escena": raiz_escena,
+                "es_anterior": es_anterior
             }
 
-            if tipo_clasificacion == "candidato" or estado_actual == "clasificado" or (cap_activo.get("habilitado") and cap_activo.get("nombre")):
-                candidatos_estables.append(item_info)
-            elif tipo_clasificacion == "sin_identificar" and estado_actual != "ignorado":
-                sin_identificar.append(item_info)
+            if es_anterior:
+                if tipo_clasificacion == "candidato":
+                    candidatos_anteriores.append(item_info)
+                elif tipo_clasificacion == "sin_identificar" and estado_actual != "ignorado":
+                    sin_identificar.append(item_info)
+            else:
+                if tipo_clasificacion == "candidato" or estado_actual == "clasificado" or es_cap_activo:
+                    candidatos_estables.append(item_info)
+                elif tipo_clasificacion == "sin_identificar" and estado_actual != "ignorado":
+                    sin_identificar.append(item_info)
 
         # También descubrir escenas ya creadas en el destino base
         if os.path.exists(self.config.ruta_destino_base):
@@ -1646,9 +1718,22 @@ class VigilanteBandeja:
 
         self.detector.limpiar_rutas_inexistentes(rutas_existentes)
         lotes_generados = self.agrupador.agrupar(candidatos_estables)
+        for l in lotes_generados:
+            l["es_anterior"] = False
+
+        lotes_anteriores = []
+        if candidatos_anteriores:
+            lotes_anteriores = self.agrupador.agrupar(candidatos_anteriores)
+            for idx, l in enumerate(lotes_anteriores, 1):
+                l["es_anterior"] = True
+                l["escena_sugerida"] = ""
+                l["lote_id"] = f"ant_{l['lote_id']}"
+                for a in l.get("archivos", []):
+                    a["es_anterior"] = True
 
         with self._lock:
             self._lotes_actuales = lotes_generados
+            self._lotes_anteriores_actuales = lotes_anteriores
             self._sin_identificar_actuales = sin_identificar
             self._escenas_existentes_actuales = escenas_existentes
 
@@ -1670,6 +1755,7 @@ class VigilanteBandeja:
         with self._lock:
             return {
                 "lotes": list(self._lotes_actuales),
+                "lotes_anteriores": list(self._lotes_anteriores_actuales),
                 "sin_identificar": list(self._sin_identificar_actuales),
                 "escenas": list(self._escenas_existentes_actuales)
             }
@@ -1751,7 +1837,10 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._servir_html_spa()
         elif ruta == "/api/lotes":
             estado = self.vigilante.obtener_estado()
-            self._enviar_json({"lotes": estado["lotes"]})
+            self._enviar_json({
+                "lotes": estado["lotes"],
+                "lotes_anteriores": estado.get("lotes_anteriores", [])
+            })
         elif ruta == "/api/sin-identificar":
             estado = self.vigilante.obtener_estado()
             self._enviar_json({"sin_identificar": estado["sin_identificar"]})
@@ -2716,6 +2805,18 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         </button>
       </div>
       <div id="contenedor-lotes">Cargando lotes...</div>
+
+      <div id="sec-lotes-anteriores" style="display:none; margin-top:24px;">
+        <details id="details-anteriores" style="background:var(--card-bg, #1a1a1a); border:1px solid #333; border-radius:8px; padding:12px 16px;">
+          <summary style="font-size:1.05rem; font-weight:600; cursor:pointer; color:var(--text-muted, #aaa);">
+            Anteriores al capítulo (<span id="conteo-lotes-anteriores">0</span>)
+          </summary>
+          <p style="font-size:0.85rem; color:var(--text-muted, #888); margin:8px 0 16px 0;">
+            Material descargado antes del inicio del capítulo activo. No está preasignado ni seleccionado.
+          </p>
+          <div id="contenedor-lotes-anteriores"></div>
+        </details>
+      </div>
     </section>
 
     <section id="sec-sin-identificar" style="display:none;">
@@ -2905,10 +3006,11 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
           apiFetch('/api/personajes'),
           apiFetch('/api/capitulos/estado')
         ]);
-        datosEstado.lotes = lotesRes.lotes;
-        datosEstado.sin_identificar = sinIdRes.sin_identificar;
-        datosEstado.escenas = escenasRes.escenas;
-        datosEstado.personajes = persRes.personajes;
+        datosEstado.lotes = lotesRes.lotes || [];
+        datosEstado.lotes_anteriores = lotesRes.lotes_anteriores || [];
+        datosEstado.sin_identificar = sinIdRes.sin_identificar || [];
+        datosEstado.escenas = escenasRes.escenas || [];
+        datosEstado.personajes = persRes.personajes || [];
         datosEstado.ultimo_personaje = persRes.ultimo_personaje;
         datosEstado.capitulo_activo = capRes.capitulo;
         datosEstado.alerta_olvidado = capRes.alerta_olvidado;
@@ -2916,6 +3018,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         datosEstado.balance_capitulo = capRes.balance;
         renderCapituloActivo();
         renderLotes();
+        renderLotesAnteriores();
         renderSinIdentificar();
       }} catch (e) {{
         mostrarError(e.message);
@@ -3250,6 +3353,88 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       }}).join('');
     }}
 
+    function renderLotesAnteriores() {{
+      const sec = document.getElementById('sec-lotes-anteriores');
+      const cont = document.getElementById('contenedor-lotes-anteriores');
+      const conteo = document.getElementById('conteo-lotes-anteriores');
+      if (!sec || !cont) return;
+
+      const capActivo = datosEstado.capitulo_activo && datosEstado.capitulo_activo.habilitado ? datosEstado.capitulo_activo : null;
+      const lotesAnt = datosEstado.lotes_anteriores || [];
+
+      if (!capActivo || !lotesAnt.length) {{
+        sec.style.display = 'none';
+        cont.innerHTML = '';
+        if (conteo) conteo.innerText = '0';
+        return;
+      }}
+
+      sec.style.display = 'block';
+      if (conteo) conteo.innerText = String(lotesAnt.length);
+
+      cont.innerHTML = lotesAnt.map(lote => {{
+        const persPre = lote.personaje_sugerido || datosEstado.ultimo_personaje || 'lucie';
+        const escenaPre = '';
+
+        const persOptions = datosEstado.personajes.map(p => 
+          `<option value="${{p.id}}" ${{p.id === persPre ? 'selected' : ''}}>${{p.nombre}}</option>`
+        ).join('');
+
+        const escenasOptions = datosEstado.escenas.map(e => 
+          `<option value="${{e.nombre}}" data-tipo="${{e.tipo}}">[${{e.tipo === 'descargas_alias' ? 'En Descargas' : 'Destino'}}] ${{e.nombre}}</option>`
+        ).join('');
+
+        return `
+          <div class="card" id="card-${{lote.lote_id}}" style="border:1px solid #333; margin-bottom:12px;">
+            <div class="card-header">
+              <div style="display:flex; align-items:center; gap:10px;">
+                <input type="checkbox" class="cb-lote-anterior" data-lote-id="${{lote.lote_id}}" title="Lote anterior al capítulo" onchange="seleccionarTodosLote('${{lote.lote_id}}', this.checked)">
+                <h3>Lote #${{lote.numero}} (${{lote.total_archivos}} archivos &bull; ${{formatearBytes(lote.total_bytes)}})</h3>
+              </div>
+              <span style="color:var(--text-muted);font-size:0.85rem">${{lote.fecha}}</span>
+            </div>
+            <div class="lote-toolbar">
+              <span id="lbl-sel-${{lote.lote_id}}" style="font-size:0.85rem; color:var(--text-muted);">0 seleccionados</span>
+              <div style="display:flex; gap:8px;">
+                <button type="button" class="btn-sm" onclick="seleccionarTodosLote('${{lote.lote_id}}', true)">Seleccionar todos</button>
+                <button type="button" class="btn-sm" onclick="seleccionarTodosLote('${{lote.lote_id}}', false)">Ninguno</button>
+              </div>
+            </div>
+            <div class="archivos-grid">
+              ${{lote.archivos.map(a => `
+                <div class="archivo-item" title="Archivo: ${{a.nombre}}&#10;Fecha: ${{a.fecha || lote.fecha || ''}}&#10;Tamaño: ${{formatearBytes(a.tamanio)}}">
+                  <div class="chk-container">
+                    <input type="checkbox" class="chk-archivo chk-lote-${{lote.lote_id}}" data-id="${{a.id_db}}" onchange="actualizarSeleccionLote('${{lote.lote_id}}')">
+                  </div>
+                  <div class="miniatura-wrap">
+                    <img src="/api/miniatura?id=${{a.id_db}}" alt="${{a.nombre}}" onerror="this.onerror=null;this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22><rect width=%22100%%22 height=%22100%%22 fill=%22%23222%22/><text x=%2250%%22 y=%2250%%22 fill=%22%23888%22 text-anchor=%22middle%22 dy=%22.3em%22>Media</text></svg>';">
+                  </div>
+                  <div class="archivo-meta">
+                    <div class="archivo-nombre" title="${{a.nombre}}">${{a.nombre}}</div>
+                    <div class="archivo-peso">${{formatearBytes(a.tamanio)}}</div>
+                  </div>
+                </div>
+              `).join('')}}
+            </div>
+            <div class="form-row">
+              <label>Personaje: <select id="sel-pers-${{lote.lote_id}}">${{persOptions}}</select></label>
+              <label>Escena:
+                <select id="sel-escena-${{lote.lote_id}}" onchange="toggleNuevaEscena('${{lote.lote_id}}', this.value)">
+                  <option value="__nueva__" selected>+ Crear nueva escena...</option>
+                  ${{escenasOptions}}
+                </select>
+              </label>
+              <div class="campo-escena-wrap">
+                <input type="text" id="txt-nueva-escena-${{lote.lote_id}}" value="" placeholder="Nombre de escena nueva" style="max-width:200px; display:inline-block;" oninput="validarInputEscena('${{lote.lote_id}}')">
+                <span id="error-escena-${{lote.lote_id}}" class="error-inline" style="display:none;"></span>
+              </div>
+              <button class="btn-accion" id="btn-mover-${{lote.lote_id}}" onclick="iniciarMover('${{lote.lote_id}}')" disabled>Mover seleccionados (0)</button>
+            </div>
+          </div>
+        `;
+      }}).join('');
+    }}
+
     function seleccionarTodosLote(loteId, marcar) {{
       const checkboxes = document.querySelectorAll(`.chk-lote-${{loteId}}`);
       checkboxes.forEach(cb => {{ cb.checked = marcar; }});
@@ -3476,7 +3661,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     }}
 
     async function iniciarMover(loteId) {{
-      const lote = datosEstado.lotes.find(l => l.lote_id === loteId);
+      const lote = datosEstado.lotes.find(l => l.lote_id === loteId) ||
+                   (datosEstado.lotes_anteriores && datosEstado.lotes_anteriores.find(l => l.lote_id === loteId));
       if (!lote) return;
 
       const checkboxes = document.querySelectorAll(`.chk-lote-${{loteId}}:checked`);
@@ -3527,7 +3713,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     }}
 
     async function simularMoverLotesListos() {{
-      const cbs = document.querySelectorAll('.cb-lote-listo:checked');
+      const cbs = document.querySelectorAll('#contenedor-lotes .cb-lote-listo:checked');
       if (!cbs.length) {{
         mostrarError("No hay ningún lote seleccionado para mover.");
         return;
@@ -3537,7 +3723,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       for (const cb of cbs) {{
         const loteId = cb.getAttribute('data-lote-id');
         const lote = datosEstado.lotes.find(l => l.lote_id === loteId);
-        if (!lote) continue;
+        if (!lote || lote.es_anterior) continue;
 
         const chkArchivos = document.querySelectorAll(`.chk-lote-${{loteId}}:checked`);
         const idsSel = new Set(Array.from(chkArchivos).map(c => c.getAttribute('data-id')));

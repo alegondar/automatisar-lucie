@@ -291,11 +291,11 @@ class TestGestorMovimientosYDeshacer(unittest.TestCase):
         )
 
         destino_calculado = sim["movimientos"][0]["destino"]
-        self.assertEqual(destino_calculado, os.path.join(carpeta_existente, "roli parque1.mp4"))
+        self.assertEqual(destino_calculado, os.path.join(carpeta_existente, "roliparque1.mp4"))
 
         res = self.gestor.ejecutar_movimiento_lote(sim, "lote_2")
         self.assertTrue(res["exito"])
-        self.assertTrue(os.path.exists(os.path.join(carpeta_existente, "roli parque1.mp4")))
+        self.assertTrue(os.path.exists(os.path.join(carpeta_existente, "roliparque1.mp4")))
         self.assertTrue(os.path.isdir(carpeta_existente))
 
     def test_deshacer_exitoso(self):
@@ -1853,6 +1853,292 @@ class TestRenombradoAlMover(unittest.TestCase):
         self.assertEqual(item["nombre_original"], "grok-video-viejo.mp4")
         self.assertEqual(item["nombre_nuevo"], "grok-video-viejo.mp4")
         self.assertEqual(item["estado"], "movido")
+
+
+class TestCapituloSoloMaterialNuevo(unittest.TestCase):
+    """
+    Pruebas para el cambio capitulo-solo-material-nuevo:
+    - Adopción exclusiva de archivos posteriores al inicio del capítulo (mtime >= fecha_inicio).
+    - Margen configurable (0 y 10 minutos).
+    - Candidato por patrón anterior queda sin tildar, sin escena y en lotes_anteriores.
+    - Mover lotes listos excluye la sección de anteriores.
+    - Reabrir capítulo cerrado respeta la fecha_inicio original.
+    - Base de nombre compacta ('lucie trapitos' -> 'lucietrapitos1.jpg') y consistencia con alias inicial.
+    """
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp(prefix="test_cap_nuevo_")
+        self.descargas = os.path.join(self.tmp_dir, "Descargas")
+        self.destino = os.path.join(self.descargas, "_lucie")
+        os.makedirs(self.descargas, exist_ok=True)
+        os.makedirs(self.destino, exist_ok=True)
+
+        self.db_file = os.path.join(self.tmp_dir, "bandeja.db")
+        self.bitacora_file = os.path.join(self.tmp_dir, "bitacora.jsonl")
+        self.cfg_file = os.path.join(self.tmp_dir, "config.json")
+        self.alias_file = os.path.join(self.tmp_dir, "alias.json")
+
+        with open(self.alias_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "lucie": ["lucie", "luci"],
+                "roli": ["roli", "laroli", "magui"],
+                "mailen": ["mailen"]
+            }, f)
+
+        cfg_data = {
+            "ruta_descargas": self.descargas,
+            "ruta_destino_base": self.destino,
+            "archivo_alias_personajes": self.alias_file,
+            "ventana_lote_minutos": 10,
+            "minutos_antes_inicio_capitulo": 0,
+            "intervalo_sondeo_segundos": 1,
+            "patrones_ignorar": ["Screenshot_*", "Captura*"],
+            "patrones_candidatos": {
+                "grok_video": "grok-video-*",
+                "grok_image": "grok-image-*",
+                "gemini": "Gemini_Generated_Image_*"
+            }
+        }
+        with open(self.cfg_file, "w", encoding="utf-8") as f:
+            json.dump(cfg_data, f)
+
+        self.config = ConfiguracionBandeja(ruta_config=self.cfg_file)
+        self.db = GestorBaseDatosBandeja(ruta_db=self.db_file)
+        self.filtro = FiltroListaBlanca(self.config)
+        self.detector = DetectorDescargasActivas(ventana_estabilidad_segundos=0.01)
+        self.agrupador = AgrupadorLotes(ventana_minutos=10)
+        self.gestor = GestorMovimientosBandeja(
+            self.descargas, self.destino, self.db,
+            ruta_bitacora=self.bitacora_file, ruta_alias=self.alias_file
+        )
+
+    def tearDown(self):
+        for root, dirs, files in os.walk(self.tmp_dir, topdown=False):
+            for file in files:
+                try:
+                    os.unlink(os.path.join(root, file))
+                except OSError:
+                    pass
+            for dir_name in dirs:
+                try:
+                    os.rmdir(os.path.join(root, dir_name))
+                except OSError:
+                    pass
+        try:
+            os.rmdir(self.tmp_dir)
+        except OSError:
+            pass
+
+    def test_archivo_anterior_no_se_asigna_posterior_si(self):
+        """Archivo con mtime anterior al inicio del capítulo no se asigna al capítulo ni se preselecciona; posterior sí."""
+        ahora = datetime.datetime.now()
+        fecha_ini = ahora.isoformat()
+        ts_ini = ahora.timestamp()
+
+        self.db.empezar_capitulo("lucie", "capitulo_playa", fecha_inicio=fecha_ini)
+
+        # Archivo anterior (1 hora antes)
+        f_anterior = os.path.join(self.descargas, "grok-video-anterior.mp4")
+        with open(f_anterior, "wb") as f:
+            f.write(b"video viejo")
+        os.utime(f_anterior, (ts_ini - 3600, ts_ini - 3600))
+
+        # Archivo posterior (1 minuto después)
+        f_posterior = os.path.join(self.descargas, "grok-video-nuevo.mp4")
+        with open(f_posterior, "wb") as f:
+            f.write(b"video nuevo")
+        os.utime(f_posterior, (ts_ini + 60, ts_ini + 60))
+
+        vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+        vigilante.escanear()
+        time.sleep(0.02)
+        vigilante.escanear()
+
+        estado = vigilante.obtener_estado()
+
+        # En lotes normales (material nuevo del capítulo) solo debe estar f_posterior
+        self.assertEqual(len(estado["lotes"]), 1)
+        lote_nuevo = estado["lotes"][0]
+        self.assertEqual(lote_nuevo["personaje_sugerido"], "lucie")
+        self.assertEqual(lote_nuevo["escena_sugerida"], "capitulo_playa")
+        self.assertFalse(lote_nuevo.get("es_anterior", False))
+        self.assertEqual(len(lote_nuevo["archivos"]), 1)
+        self.assertEqual(lote_nuevo["archivos"][0]["nombre"], "grok-video-nuevo.mp4")
+
+        # En lotes anteriores debe estar f_anterior, sin escena sugerida precargada y es_anterior=True
+        self.assertEqual(len(estado["lotes_anteriores"]), 1)
+        lote_ant = estado["lotes_anteriores"][0]
+        self.assertTrue(lote_ant.get("es_anterior", False))
+        self.assertEqual(lote_ant.get("escena_sugerida", ""), "")
+        self.assertEqual(len(lote_ant["archivos"]), 1)
+        self.assertEqual(lote_ant["archivos"][0]["nombre"], "grok-video-anterior.mp4")
+
+    def test_margen_configuracion_0_y_10_minutos(self):
+        """Margen configurable: 0 min (corte exacto) vs 10 min (adopta archivos hasta 10 min antes)."""
+        ahora = datetime.datetime.now()
+        fecha_ini = ahora.isoformat()
+        ts_ini = ahora.timestamp()
+
+        self.db.empezar_capitulo("roli", "cap_margen", fecha_inicio=fecha_ini)
+
+        # Archivo creado 5 minutos antes
+        f_5min_antes = os.path.join(self.descargas, "grok-video-5min.mp4")
+        with open(f_5min_antes, "wb") as f:
+            f.write(b"data 5min")
+        os.utime(f_5min_antes, (ts_ini - 300, ts_ini - 300))
+
+        # Archivo creado 15 minutos antes
+        f_15min_antes = os.path.join(self.descargas, "grok-video-15min.mp4")
+        with open(f_15min_antes, "wb") as f:
+            f.write(b"data 15min")
+        os.utime(f_15min_antes, (ts_ini - 900, ts_ini - 900))
+
+        # 1. Caso margen = 0: ambos archivos son anteriores al capítulo
+        self.config.minutos_antes_inicio_capitulo = 0
+        vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+        vigilante.escanear()
+        time.sleep(0.02)
+        vigilante.escanear()
+        est0 = vigilante.obtener_estado()
+        self.assertEqual(len(est0["lotes"]), 0)
+        self.assertGreater(len(est0["lotes_anteriores"]), 0)
+
+        # Limpiar registros para volver a evaluar con margen = 10
+        with self.db._lock, self.db._conectar() as con:
+            con.execute("DELETE FROM bandeja_archivos")
+            con.commit()
+
+        # 2. Caso margen = 10 minutos: f_5min_antes (-300s >= -600s) debe ser adoptado; f_15min_antes (-900s) sigue siendo anterior
+        self.config.minutos_antes_inicio_capitulo = 10
+        vigilante10 = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+        vigilante10.escanear()
+        time.sleep(0.02)
+        vigilante10.escanear()
+        est10 = vigilante10.obtener_estado()
+
+        nombres_nuevos = [a["nombre"] for l in est10["lotes"] for a in l["archivos"]]
+        self.assertIn("grok-video-5min.mp4", nombres_nuevos)
+        self.assertNotIn("grok-video-15min.mp4", nombres_nuevos)
+
+        nombres_ant = [a["nombre"] for l in est10["lotes_anteriores"] for a in l["archivos"]]
+        self.assertIn("grok-video-15min.mp4", nombres_ant)
+
+    def test_candidato_patron_grok_anterior_queda_sin_tildar_y_sin_escena(self):
+        """Candidato por patrón IA (grok-image-*) anterior al capítulo queda sin escena precargada y marcado como anterior."""
+        ahora = datetime.datetime.now()
+        self.db.empezar_capitulo("lucie", "sesion_fotos", fecha_inicio=ahora.isoformat())
+        ts_ini = ahora.timestamp()
+
+        f_grok = os.path.join(self.descargas, "grok-image-3545ac09.jpg")
+        with open(f_grok, "wb") as f:
+            f.write(b"imagen grok")
+        os.utime(f_grok, (ts_ini - 600, ts_ini - 600))
+
+        # Archivo sin identificar anterior (no patrón ni alias)
+        f_random = os.path.join(self.descargas, "random_viejo.jpg")
+        with open(f_random, "wb") as f:
+            f.write(b"random")
+        os.utime(f_random, (ts_ini - 600, ts_ini - 600))
+
+        vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+        vigilante.escanear()
+        time.sleep(0.02)
+        vigilante.escanear()
+
+        estado = vigilante.obtener_estado()
+        # f_grok va a lotes_anteriores con escena vacía y es_anterior=True
+        self.assertEqual(len(estado["lotes"]), 0)
+        self.assertEqual(len(estado["lotes_anteriores"]), 1)
+        lote_ant = estado["lotes_anteriores"][0]
+        self.assertEqual(lote_ant["escena_sugerida"], "")
+        self.assertTrue(lote_ant["es_anterior"])
+        self.assertEqual(lote_ant["archivos"][0]["nombre"], "grok-image-3545ac09.jpg")
+
+        # f_random va a sin_identificar
+        nombres_sin_id = [item["nombre"] for item in estado["sin_identificar"]]
+        self.assertIn("random_viejo.jpg", nombres_sin_id)
+
+    def test_mover_lotes_listos_excluye_anteriores(self):
+        """Los lotes de la sección 'Anteriores al capítulo' están excluidos de los lotes del capítulo activo."""
+        ahora = datetime.datetime.now()
+        self.db.empezar_capitulo("lucie", "cap_exclusivo", fecha_inicio=ahora.isoformat())
+        ts_ini = ahora.timestamp()
+
+        # Uno anterior y uno nuevo
+        f_ant = os.path.join(self.descargas, "grok-video-old.mp4")
+        with open(f_ant, "wb") as f:
+            f.write(b"old")
+        os.utime(f_ant, (ts_ini - 120, ts_ini - 120))
+
+        f_new = os.path.join(self.descargas, "grok-video-new.mp4")
+        with open(f_new, "wb") as f:
+            f.write(b"new")
+        os.utime(f_new, (ts_ini + 10, ts_ini + 10))
+
+        vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+        vigilante.escanear()
+        time.sleep(0.02)
+        vigilante.escanear()
+
+        estado = vigilante.obtener_estado()
+        # Solo los lotes activos (es_anterior == False) son retornados en estado['lotes']
+        for l in estado["lotes"]:
+            self.assertFalse(l.get("es_anterior", False))
+            for a in l["archivos"]:
+                self.assertFalse(a.get("es_anterior", False))
+
+        # Y los anteriores en estado['lotes_anteriores'] tienen es_anterior == True
+        for l in estado["lotes_anteriores"]:
+            self.assertTrue(l.get("es_anterior", False))
+            for a in l["archivos"]:
+                self.assertTrue(a.get("es_anterior", False))
+
+    def test_reabrir_capitulo_respeta_fecha_inicio_original(self):
+        """Reabrir un capítulo cerrado mantiene intacta la fecha_inicio original del capítulo."""
+        fecha_original = (datetime.datetime.now() - datetime.timedelta(days=2)).isoformat()
+        cap = self.db.empezar_capitulo("mailen", "sesion_viaje", fecha_inicio=fecha_original)
+        cap_id = cap["id"]
+
+        # Terminar capítulo
+        self.db.terminar_capitulo(id_capitulo=cap_id)
+        cap_cerrado = self.db.obtener_capitulo_activo()
+        self.assertFalse(cap_cerrado["habilitado"])
+
+        # Reabrir capítulo
+        cap_reabierto = self.db.reabrir_capitulo(cap_id)
+        self.assertTrue(cap_reabierto["habilitado"])
+        self.assertEqual(cap_reabierto["nombre"], "sesion_viaje")
+        self.assertEqual(cap_reabierto["fecha_inicio"], fecha_original)
+
+        # En base de datos SQLite se preserva fecha_original
+        cap_db = self.db.obtener_capitulo_activo()
+        self.assertEqual(cap_db["fecha_inicio"], fecha_original)
+
+    def test_base_nombre_compacta_y_consistencia_alias_inicial(self):
+        """Base de nombre compacta ('lucie trapitos' -> 'lucietrapitos1.jpg') y consistencia con obtener_personaje_de_alias_inicial."""
+        casos = [
+            ("lucie", "lucie trapitos", "lucietrapitos"),
+            ("lucie", "luci-fiesta", "luci-fiesta"),
+            ("lucie", "  lucie   trapitos  ", "lucietrapitos"),
+            ("lucie", "trapitos", "lucietrapitos"),
+            ("roli", "roli parque", "roliparque"),
+            ("roli", "magui fiesta", "maguifiesta"),
+            ("roli", "laroli baile", "larolibaile"),
+            ("roli", "lucie trapitos", "rolilucietrapitos"),
+            ("mailen", "bici", "mailenbici"),
+            ("mailen", "mailen paseo playa", "mailenpaseoplaya"),
+        ]
+
+        for personaje, escena_input, base_esperada in casos:
+            base_calc = self.gestor.calcular_base_escena(personaje, escena_input)
+            self.assertEqual(base_calc, base_esperada, f"Error calculando base para {personaje} + {escena_input}")
+
+            # Verificar que el nombre con número y extensión sea reconocido con el personaje correcto
+            nombre_archivo = f"{base_calc}1.jpg"
+            personaje_deducido = self.filtro.obtener_personaje_de_alias_inicial(nombre_archivo)
+            self.assertEqual(
+                personaje_deducido, personaje,
+                f"obtener_personaje_de_alias_inicial({nombre_archivo}) retornó '{personaje_deducido}', esperado '{personaje}'"
+            )
 
 
 class TestAuditoriaASTAntiBorrado(unittest.TestCase):
