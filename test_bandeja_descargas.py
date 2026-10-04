@@ -2897,6 +2897,404 @@ class TestAjustesEscenaCapituloYAnteriores(unittest.TestCase):
         self.assertEqual(lote_anteriores["escena_sugerida"], "")
 
 
+class TestCapitulosAbiertosMultiples(unittest.TestCase):
+    """Pruebas del cambio capitulos-abiertos-multiples:
+    - Coexistencia de varios capítulos abiertos con exactamente uno en foco.
+    - Migración no destructiva de base de datos e índice parcial en_foco.
+    - Ingesta y corte de fecha gobernados exclusivamente por el capítulo en foco.
+    - Cambio de foco atómico vía poner_capitulo_en_foco y API.
+    - Conteo de archivos movidos hacia capítulos abiertos secundarios.
+    - Cierre y descarte de capítulos en foco y secundarios.
+    - Endpoints HTTP y seguridad CSRF/Host.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp(prefix="test_caps_abiertos_")
+        self.descargas = os.path.join(self.tmp_dir, "Descargas")
+        self.destino = os.path.join(self.descargas, "_lucie")
+        self.db_path = os.path.join(self.tmp_dir, "bandeja.db")
+        self.bitacora = os.path.join(self.tmp_dir, "bitacora.jsonl")
+        self.alias_file = os.path.join(self.tmp_dir, "alias.json")
+
+        os.makedirs(self.descargas, exist_ok=True)
+        os.makedirs(self.destino, exist_ok=True)
+
+        with open(self.alias_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "lucie": ["lucie", "luci"],
+                "roli": ["roli", "laroli"],
+                "mailen": ["mailen"]
+            }, f)
+
+        self.config = ConfiguracionBandeja()
+        self.config.ruta_descargas = self.descargas
+        self.config.ruta_destino_base = self.destino
+        self.config.archivo_alias_personajes = self.alias_file
+        self.config.puerto_servidor = 8807
+        self.config.host_servidor = "127.0.0.1"
+
+        self.db = GestorBaseDatosBandeja(self.db_path)
+        self.movimientos = GestorMovimientosBandeja(self.descargas, self.destino, self.db, self.bitacora)
+        self.filtro = FiltroListaBlanca(self.config)
+        self.detector = DetectorDescargasActivas(0.0)
+        self.agrupador = AgrupadorLotes(10)
+        self.vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+
+        self.servidor = None
+        self.hilo_servidor = None
+
+    def tearDown(self):
+        if self.servidor:
+            self.servidor.shutdown()
+            self.servidor.server_close()
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _crear_archivo(self, ruta: str, contenido: bytes = b"datos de prueba", mtime: float = None) -> str:
+        os.makedirs(os.path.dirname(ruta), exist_ok=True)
+        with open(ruta, "wb") as f:
+            f.write(contenido)
+        if mtime is not None:
+            os.utime(ruta, (mtime, mtime))
+        return ruta
+
+    def _iniciar_servidor_prueba(self, token_csrf: str = "csrf_test_token_abiertos"):
+        miniaturas = GeneradorMiniaturas(self.db, os.path.join(self.tmp_dir, "thumbs"))
+        self.servidor = crear_servidor(
+            self.config, self.db, self.vigilante, self.movimientos, miniaturas, token_csrf=token_csrf
+        )
+        self.token_csrf = token_csrf
+        self.hilo_servidor = threading.Thread(target=self.servidor.serve_forever, daemon=True)
+        self.hilo_servidor.start()
+        time.sleep(0.2)
+
+    def _request(self, method: str, path: str, headers: dict = None, body: str = None) -> Tuple[int, dict, bytes]:
+        conn = http.client.HTTPConnection("127.0.0.1", self.config.puerto_servidor, timeout=5)
+        headers = headers or {}
+        conn.request(method, path, body=body, headers=headers)
+        res = conn.getresponse()
+        raw = res.read()
+        conn.close()
+        try:
+            parsed_json = json.loads(raw.decode("utf-8"))
+        except Exception:
+            parsed_json = {}
+        return res.status, parsed_json, raw
+
+    def test_migracion_sqlite_en_foco_e_indice_parcial(self):
+        """Verifica que una base de datos legada sin columna en_foco y con idx_capitulo_unico_activo se migre correctamente."""
+        db_legada_path = os.path.join(self.tmp_dir, "legada_caps.sqlite")
+        conn = sqlite3.connect(db_legada_path)
+        with conn:
+            conn.execute("""
+                CREATE TABLE bandeja_capitulos (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    personaje TEXT NOT NULL,
+                    nombre TEXT NOT NULL,
+                    fecha_inicio TEXT NOT NULL,
+                    fecha_fin TEXT,
+                    archivos_movidos INTEGER DEFAULT 0,
+                    estado TEXT NOT NULL DEFAULT 'activo' CHECK(estado IN ('activo', 'cerrado'))
+                )
+            """)
+            conn.execute("CREATE UNIQUE INDEX idx_capitulo_unico_activo ON bandeja_capitulos(estado) WHERE estado = 'activo'")
+            conn.execute("""
+                INSERT INTO bandeja_capitulos (personaje, nombre, fecha_inicio, estado)
+                VALUES ('lucie', 'cap_legado_activo', '2026-03-01T10:00:00', 'activo')
+            """)
+        conn.close()
+
+        # Instanciar el gestor migra la base
+        db_migrada = GestorBaseDatosBandeja(db_legada_path)
+
+        # Consultar PRAGMA index_list
+        conn2 = sqlite3.connect(db_legada_path)
+        cursor = conn2.cursor()
+        cursor.execute("PRAGMA index_list('bandeja_capitulos')")
+        indices = [row[1] for row in cursor.fetchall()]
+        conn2.close()
+
+        self.assertNotIn("idx_capitulo_unico_activo", indices)
+        self.assertIn("idx_capitulo_en_foco", indices)
+
+        # El capítulo activo existente debe tener en_foco = 1
+        cap_foco = db_migrada.obtener_capitulo_en_foco()
+        self.assertTrue(cap_foco["habilitado"])
+        self.assertEqual(cap_foco["nombre"], "cap_legado_activo")
+        self.assertEqual(cap_foco["en_foco"], 1)
+
+    def test_concurrencia_capitulos_abiertos(self):
+        """Permite múltiples capítulos abiertos simultáneamente, con el más nuevo en foco."""
+        cap1 = self.db.empezar_capitulo("lucie", "historia_uno")
+        self.assertTrue(cap1["habilitado"])
+        self.assertEqual(cap1["en_foco"], 1)
+
+        cap2 = self.db.empezar_capitulo("roli", "historia_dos")
+        self.assertTrue(cap2["habilitado"])
+        self.assertEqual(cap2["en_foco"], 1)
+
+        abiertos = self.db.listar_capitulos_abiertos()
+        self.assertEqual(len(abiertos), 2)
+
+        # cap2 debe estar en foco, cap1 debe ser secundario
+        c2 = next(c for c in abiertos if c["id"] == cap2["id"])
+        c1 = next(c for c in abiertos if c["id"] == cap1["id"])
+        self.assertEqual(c2["en_foco"], 1)
+        self.assertEqual(c1["en_foco"], 0)
+
+        foco_actual = self.db.obtener_capitulo_en_foco()
+        self.assertEqual(foco_actual["id"], cap2["id"])
+
+    def test_unicidad_de_foco_indice_sqlite(self):
+        """El índice único parcial impide tener dos registros con en_foco = 1 a la vez."""
+        cap1 = self.db.empezar_capitulo("lucie", "h1")
+        cap2 = self.db.empezar_capitulo("roli", "h2")
+
+        conn = sqlite3.connect(self.db_path)
+        with self.assertRaises(sqlite3.IntegrityError):
+            with conn:
+                conn.execute("UPDATE bandeja_capitulos SET en_foco = 1 WHERE id = ?", (cap1["id"],))
+        conn.close()
+
+    def test_cambio_de_foco_atomico(self):
+        """poner_capitulo_en_foco apaga el foco anterior y asigna el nuevo atómicamente."""
+        cap1 = self.db.empezar_capitulo("lucie", "primero")
+        cap2 = self.db.empezar_capitulo("mailen", "segundo")
+
+        # Inicialmente foco en cap2
+        self.assertEqual(self.db.obtener_capitulo_en_foco()["id"], cap2["id"])
+
+        # Pasar foco a cap1
+        res = self.db.poner_capitulo_en_foco(cap1["id"])
+        self.assertTrue(res["habilitado"])
+        self.assertEqual(res["id"], cap1["id"])
+
+        self.assertEqual(self.db.obtener_capitulo_en_foco()["id"], cap1["id"])
+        c2 = self.db.obtener_capitulo_por_id(cap2["id"])
+        self.assertEqual(c2["en_foco"], 0)
+        self.assertEqual(c2["estado"], "activo")
+
+    def test_ingesta_restringida_a_capitulo_en_foco(self):
+        """La ingesta automática y corte de fecha se aplican exclusivamente al capítulo en foco."""
+        ahora = time.time()
+        # cap1 abierto en el pasado
+        cap1 = self.db.empezar_capitulo("lucie", "antiguo")
+        conn = sqlite3.connect(self.db_path)
+        with conn:
+            conn.execute("UPDATE bandeja_capitulos SET fecha_inicio = '2026-01-01T00:00:00' WHERE id = ?", (cap1["id"],))
+        conn.close()
+
+        # cap2 en foco iniciado 'ahora'
+        cap2 = self.db.empezar_capitulo("roli", "foco_actual")
+
+        # Archivo anterior a cap2
+        arch_ant = os.path.join(self.descargas, "grok-image-1.jpg")
+        self._crear_archivo(arch_ant, b"foto anterior", mtime=ahora - 500)
+
+        # Archivo posterior a cap2
+        arch_post = os.path.join(self.descargas, "grok-image-2.jpg")
+        self._crear_archivo(arch_post, b"foto nueva", mtime=ahora + 10)
+
+        self.vigilante.escanear()
+        self.vigilante.escanear()
+
+        estado = self.vigilante.obtener_estado()
+        lotes = estado["lotes"]
+        lotes_ant = estado["lotes_anteriores"]
+
+        # El posterior debe estar asignado a cap2 (foco_actual)
+        lote_nuevo = next((l for l in lotes if any(a["nombre"] == "grok-image-2.jpg" for a in l["archivos"])), None)
+        self.assertIsNotNone(lote_nuevo)
+        self.assertEqual(lote_nuevo["escena_sugerida"], "foco_actual")
+        self.assertEqual(lote_nuevo["personaje_sugerido"], "roli")
+
+        # El anterior no se asigna al capítulo en foco
+        lote_ant = next((l for l in lotes_ant if any(a["nombre"] == "grok-image-1.jpg" for a in l["archivos"])), None)
+        self.assertIsNotNone(lote_ant)
+        self.assertEqual(lote_ant.get("escena_sugerida", ""), "")
+
+    def test_envio_manual_a_capitulo_secundario_incrementa_movidos(self):
+        """Mover archivos manualmente a un capítulo abierto secundario incrementa sus archivos_movidos."""
+        cap1 = self.db.empezar_capitulo("lucie", "secundario")
+        cap2 = self.db.empezar_capitulo("roli", "foco")
+
+        archivo = os.path.join(self.descargas, "foto_manual.jpg")
+        self._crear_archivo(archivo, b"contenido foto")
+        self.vigilante.escanear()
+        self.vigilante.escanear()
+
+        arch_db = self.db.obtener_por_hash(calcular_sha256(archivo))
+        archivos_lote = [{
+            "id_db": arch_db["id"],
+            "hash": arch_db["hash"],
+            "ruta": archivo,
+            "nombre": "foto_manual.jpg",
+            "tamanio": len(b"contenido foto")
+        }]
+
+        sim = self.movimientos.simular_movimiento_lote(archivos_lote, "lucie", "secundario")
+        self.movimientos.ejecutar_movimiento_lote(sim, "lote_manual")
+
+        # Verificar que archivos_movidos de cap1 se incrementó en 1
+        cap1_db = self.db.obtener_capitulo_por_id(cap1["id"])
+        self.assertEqual(cap1_db["archivos_movidos"], 1)
+
+        # cap2 sigue en 0
+        cap2_db = self.db.obtener_capitulo_por_id(cap2["id"])
+        self.assertEqual(cap2_db["archivos_movidos"], 0)
+
+    def test_terminar_o_descartar_capitulo_en_foco_deja_foco_vacio_sin_afectar_otros(self):
+        """Terminar el capítulo en foco deja el foco vacío sin cerrar los otros capítulos abiertos."""
+        cap1 = self.db.empezar_capitulo("lucie", "abierto_secundario")
+        cap2 = self.db.empezar_capitulo("roli", "abierto_en_foco")
+
+        self.db.terminar_capitulo(cap2["id"])
+
+        # Foco debe estar vacío (habilitado=False)
+        foco = self.db.obtener_capitulo_en_foco()
+        self.assertFalse(foco["habilitado"])
+
+        # cap1 sigue abierto con en_foco = 0
+        abiertos = self.db.listar_capitulos_abiertos()
+        self.assertEqual(len(abiertos), 1)
+        self.assertEqual(abiertos[0]["id"], cap1["id"])
+        self.assertEqual(abiertos[0]["en_foco"], 0)
+
+    def test_terminar_capitulo_secundario_no_afecta_foco(self):
+        """Cerrar un capítulo abierto secundario no modifica el capítulo en foco."""
+        cap1 = self.db.empezar_capitulo("lucie", "secundario_a_cerrar")
+        cap2 = self.db.empezar_capitulo("roli", "permanece_en_foco")
+
+        self.db.terminar_capitulo(cap1["id"])
+
+        foco = self.db.obtener_capitulo_en_foco()
+        self.assertTrue(foco["habilitado"])
+        self.assertEqual(foco["id"], cap2["id"])
+        self.assertEqual(foco["en_foco"], 1)
+
+        abiertos = self.db.listar_capitulos_abiertos()
+        self.assertEqual(len(abiertos), 1)
+        self.assertEqual(abiertos[0]["id"], cap2["id"])
+
+    def test_descartar_capitulo_en_foco_deja_foco_vacio_y_otros_abiertos(self):
+        """Descartar el capítulo en foco deja el foco vacío y no afecta a los demás abiertos."""
+        cap1 = self.db.empezar_capitulo("lucie", "abierto_restante")
+        cap2 = self.db.empezar_capitulo("roli", "a_descartar")
+
+        carpeta = os.path.join(self.destino, "roli", "a_descartar")
+        self._crear_archivo(os.path.join(carpeta, "f1.jpg"), b"test descarte")
+
+        sim = self.movimientos.simular_descartar_capitulo(cap2["id"])
+        self.movimientos.ejecutar_descartar_capitulo(sim, "a_descartar")
+
+        # Foco debe haber quedado vacío
+        foco = self.db.obtener_capitulo_en_foco()
+        self.assertFalse(foco["habilitado"])
+
+        # cap2 descartado
+        c2 = self.db.obtener_capitulo_por_id(cap2["id"])
+        self.assertEqual(c2["descartado"], 1)
+        self.assertEqual(c2["en_foco"], 0)
+
+        # cap1 sigue abierto
+        abiertos = self.db.listar_capitulos_abiertos()
+        self.assertEqual(len(abiertos), 1)
+        self.assertEqual(abiertos[0]["id"], cap1["id"])
+
+    def test_reabrir_capitulo_toma_foco_solo_si_no_hay_foco(self):
+        """Al reabrir un capítulo cerrado, solo toma el foco si ningún otro está en foco."""
+        cap1 = self.db.empezar_capitulo("lucie", "h1")
+        self.db.terminar_capitulo(cap1["id"])
+
+        # 1. Sin capítulos abiertos: al reabrir, toma foco
+        reabierto1 = self.db.reabrir_capitulo(cap1["id"])
+        self.assertEqual(reabierto1["en_foco"], 1)
+        self.assertEqual(self.db.obtener_capitulo_en_foco()["id"], cap1["id"])
+
+        # Abrir cap2 (toma foco)
+        cap2 = self.db.empezar_capitulo("roli", "h2")
+        self.assertEqual(self.db.obtener_capitulo_en_foco()["id"], cap2["id"])
+
+        # Cerrar cap1 y reabrirlo: cap2 ya tiene foco, por lo que cap1 no debe tomarlo
+        self.db.terminar_capitulo(cap1["id"])
+        reabierto2 = self.db.reabrir_capitulo(cap1["id"])
+        self.assertEqual(reabierto2["en_foco"], 0)
+        self.assertEqual(self.db.obtener_capitulo_en_foco()["id"], cap2["id"])
+
+    def test_endpoints_capitulos_abiertos_y_en_foco(self):
+        """Endpoints /api/capitulos/abiertos y /api/capitulos/en-foco con validación CSRF y Host."""
+        self._iniciar_servidor_prueba()
+
+        cap1 = self.db.empezar_capitulo("lucie", "api_uno")
+        cap2 = self.db.empezar_capitulo("roli", "api_dos")
+
+        headers_ok = {
+            "Host": f"127.0.0.1:{self.config.puerto_servidor}",
+            "X-CSRF-Token": self.token_csrf,
+            "Content-Type": "application/json"
+        }
+
+        # 1. GET /api/capitulos/abiertos
+        status, data, _ = self._request("GET", "/api/capitulos/abiertos", headers={"Host": f"127.0.0.1:{self.config.puerto_servidor}"})
+        self.assertEqual(status, 200)
+        self.assertIn("abiertos", data)
+        self.assertEqual(len(data["abiertos"]), 2)
+
+        # 2. GET /api/capitulos/estado
+        status, data, _ = self._request("GET", "/api/capitulos/estado", headers={"Host": f"127.0.0.1:{self.config.puerto_servidor}"})
+        self.assertEqual(status, 200)
+        self.assertIn("capitulo_foco", data)
+        self.assertIn("capitulos_abiertos", data)
+        self.assertEqual(data["cantidad_abiertos"], 2)
+        self.assertEqual(data["capitulo_foco"]["id"], cap2["id"])
+
+        # 3. POST /api/capitulos/en-foco sin CSRF -> 403
+        status, _, _ = self._request(
+            "POST",
+            "/api/capitulos/en-foco",
+            headers={"Host": f"127.0.0.1:{self.config.puerto_servidor}", "Content-Type": "application/json"},
+            body=json.dumps({"id": cap1["id"]})
+        )
+        self.assertEqual(status, 403)
+
+        # 4. POST /api/capitulos/en-foco con Host inválido -> 403
+        status, _, _ = self._request(
+            "POST",
+            "/api/capitulos/en-foco",
+            headers={"Host": "malicious.com", "X-CSRF-Token": self.token_csrf, "Content-Type": "application/json"},
+            body=json.dumps({"id": cap1["id"]})
+        )
+        self.assertEqual(status, 403)
+
+        # 5. POST /api/capitulos/en-foco exitoso -> pasa foco a cap1
+        status, res_foco, _ = self._request(
+            "POST",
+            "/api/capitulos/en-foco",
+            headers=headers_ok,
+            body=json.dumps({"id": cap1["id"]})
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(res_foco["exito"])
+        self.assertEqual(res_foco["capitulo"]["id"], cap1["id"])
+
+        # Verificar foco cambiado
+        foco_actual = self.db.obtener_capitulo_en_foco()
+        self.assertEqual(foco_actual["id"], cap1["id"])
+
+        # 6. POST /api/capitulos/terminar con id explícito
+        status, res_term, _ = self._request(
+            "POST",
+            "/api/capitulos/terminar",
+            headers=headers_ok,
+            body=json.dumps({"id": cap1["id"], "accion": "sin_mover"})
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(res_term["exito"])
+        # cap1 cerrado
+        c1 = self.db.obtener_capitulo_por_id(cap1["id"])
+        self.assertEqual(c1["estado"], "cerrado")
+        self.assertEqual(c1["en_foco"], 0)
+
+
 class TestAuditoriaASTAntiBorrado(unittest.TestCase):
     """Verifica que bandeja_descargas.py no contenga ninguna de las 11 primitivas prohibidas."""
 

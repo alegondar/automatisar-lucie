@@ -193,13 +193,11 @@ class GestorBaseDatosBandeja:
                 fecha_ultimo_aviso TEXT,
                 archivos_movidos INTEGER DEFAULT 0,
                 descartado INTEGER DEFAULT 0,
-                fecha_descartado TEXT
+                fecha_descartado TEXT,
+                en_foco INTEGER DEFAULT 0
             );
             """)
-            cur.execute("""
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_capitulo_unico_activo
-            ON bandeja_capitulos(estado) WHERE estado = 'activo';
-            """)
+            cur.execute("DROP INDEX IF EXISTS idx_capitulo_unico_activo;")
             # Migración segura para bases de datos existentes
             cur.execute("PRAGMA table_info(bandeja_capitulos);")
             cols_cap = [r["name"] for r in cur.fetchall()]
@@ -207,6 +205,26 @@ class GestorBaseDatosBandeja:
                 cur.execute("ALTER TABLE bandeja_capitulos ADD COLUMN descartado INTEGER DEFAULT 0;")
             if "fecha_descartado" not in cols_cap:
                 cur.execute("ALTER TABLE bandeja_capitulos ADD COLUMN fecha_descartado TEXT;")
+            if "en_foco" not in cols_cap:
+                cur.execute("ALTER TABLE bandeja_capitulos ADD COLUMN en_foco INTEGER DEFAULT 0;")
+
+            cur.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_capitulo_en_foco
+            ON bandeja_capitulos(en_foco) WHERE en_foco = 1;
+            """)
+
+            # Migración: si hay capítulo activo sin foco y ninguno en foco, poner en foco el más reciente
+            cur.execute("SELECT id FROM bandeja_capitulos WHERE en_foco = 1 LIMIT 1")
+            if not cur.fetchone():
+                cur.execute("""
+                SELECT id FROM bandeja_capitulos
+                WHERE estado = 'activo' AND (descartado IS NULL OR descartado = 0)
+                ORDER BY id DESC LIMIT 1
+                """)
+                row_act = cur.fetchone()
+                if row_act:
+                    cur.execute("UPDATE bandeja_capitulos SET en_foco = 1 WHERE id = ?", (row_act["id"],))
+
             con.commit()
 
     def registrar_o_actualizar(self, hash_val: str, ruta_actual: str, estado: str,
@@ -300,14 +318,12 @@ class GestorBaseDatosBandeja:
         fecha_ini = fecha_inicio or datetime.datetime.now().isoformat()
         with self._lock, self._conectar() as con:
             cur = con.cursor()
-            cur.execute("SELECT id, personaje, nombre FROM bandeja_capitulos WHERE estado = 'activo' LIMIT 1")
-            act = cur.fetchone()
-            if act:
-                raise ValueError(f"Ya existe un capítulo activo ('{act['personaje']}/{act['nombre']}'). Debe terminarlo antes de empezar uno nuevo.")
+            # Apagar foco anterior en una sola transacción atómica
+            cur.execute("UPDATE bandeja_capitulos SET en_foco = 0 WHERE en_foco = 1")
 
             cur.execute("""
-            INSERT INTO bandeja_capitulos (personaje, nombre, estado, fecha_inicio, fecha_ultimo_aviso, archivos_movidos)
-            VALUES (?, ?, 'activo', ?, ?, 0)
+            INSERT INTO bandeja_capitulos (personaje, nombre, estado, fecha_inicio, fecha_ultimo_aviso, archivos_movidos, en_foco)
+            VALUES (?, ?, 'activo', ?, ?, 0, 1)
             """, (personaje_limpio, nombre_limpio, fecha_ini, fecha_ini))
             con.commit()
             cap_id = cur.lastrowid
@@ -321,48 +337,81 @@ class GestorBaseDatosBandeja:
             d["carpeta_info"] = info_carpeta
         return d
 
-    def obtener_capitulo_activo(self) -> Dict[str, Any]:
+    def obtener_capitulo_en_foco(self) -> Dict[str, Any]:
         """
-        Retorna el capítulo activo actual desde bandeja_capitulos.
-        Si no existe, retorna diccionario con habilitado=False.
+        Retorna el capítulo abierto en foco (en_foco = 1) desde bandeja_capitulos.
+        Si no hay ninguno en foco, retorna diccionario con habilitado=False.
         """
         with self._lock, self._conectar() as con:
             cur = con.cursor()
-            cur.execute("SELECT * FROM bandeja_capitulos WHERE estado = 'activo' LIMIT 1")
+            cur.execute("""
+            SELECT * FROM bandeja_capitulos
+            WHERE estado = 'activo' AND en_foco = 1 AND (descartado IS NULL OR descartado = 0)
+            LIMIT 1
+            """)
             row = cur.fetchone()
             if row:
                 d = dict(row)
                 d["habilitado"] = True
                 return d
-            else:
-                # Comprobar estado previo legado en bandeja_estado para compatibilidad
-                cur.execute("SELECT clave, valor FROM bandeja_estado WHERE clave IN ('capitulo_activo_habilitado', 'capitulo_activo_personaje', 'capitulo_activo_nombre')")
-                filas = {r["clave"]: r["valor"] for r in cur.fetchall()}
-                if filas.get("capitulo_activo_habilitado") == "1" and filas.get("capitulo_activo_nombre"):
-                    pers = filas.get("capitulo_activo_personaje", "lucie")
-                    nom = filas.get("capitulo_activo_nombre", "")
-                    now_iso = datetime.datetime.now().isoformat()
-                    cur.execute("""
-                    INSERT INTO bandeja_capitulos (personaje, nombre, estado, fecha_inicio, fecha_ultimo_aviso, archivos_movidos)
-                    VALUES (?, ?, 'activo', ?, ?, 0)
-                    """, (pers, nom, now_iso, now_iso))
-                    con.commit()
-                    cap_id = cur.lastrowid
-                    cur.execute("SELECT * FROM bandeja_capitulos WHERE id = ?", (cap_id,))
-                    d = dict(cur.fetchone())
-                    d["habilitado"] = True
-                    return d
+            return {
+                "habilitado": False,
+                "id": None,
+                "personaje": None,
+                "nombre": "",
+                "estado": "cerrado",
+                "fecha_inicio": None,
+                "fecha_ultimo_aviso": None,
+                "archivos_movidos": 0,
+                "en_foco": 0
+            }
 
-                return {
-                    "habilitado": False,
-                    "id": None,
-                    "personaje": None,
-                    "nombre": "",
-                    "estado": "cerrado",
-                    "fecha_inicio": None,
-                    "fecha_ultimo_aviso": None,
-                    "archivos_movidos": 0
-                }
+    def obtener_capitulo_activo(self) -> Dict[str, Any]:
+        """
+        Retorna el capítulo en foco actual desde bandeja_capitulos.
+        Si no existe o ninguno está en foco, retorna diccionario con habilitado=False.
+        """
+        return self.obtener_capitulo_en_foco()
+
+    def poner_capitulo_en_foco(self, id_capitulo: int) -> Dict[str, Any]:
+        """
+        Pone en foco el capítulo abierto especificado por id_capitulo de manera atómica,
+        apagando el foco previo. Lanza ValueError si el capítulo no existe, está cerrado o descartado.
+        """
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            cur.execute("""
+            SELECT * FROM bandeja_capitulos
+            WHERE id = ? AND estado = 'activo' AND (descartado IS NULL OR descartado = 0)
+            """, (id_capitulo,))
+            row = cur.fetchone()
+            if not row:
+                raise ValueError(f"Capítulo con ID {id_capitulo} no encontrado o no está abierto.")
+
+            cur.execute("UPDATE bandeja_capitulos SET en_foco = 0 WHERE en_foco = 1")
+            cur.execute("UPDATE bandeja_capitulos SET en_foco = 1 WHERE id = ?", (id_capitulo,))
+            con.commit()
+
+            cur.execute("SELECT * FROM bandeja_capitulos WHERE id = ?", (id_capitulo,))
+            updated = dict(cur.fetchone())
+
+        self.guardar_capitulo_activo(updated["personaje"], updated["nombre"], True)
+        updated["habilitado"] = True
+        return updated
+
+    def listar_capitulos_abiertos(self) -> List[Dict[str, Any]]:
+        """
+        Retorna la lista de capítulos con estado 'activo' y descartado = 0,
+        ordenados con el capítulo en foco primero, y luego cronológicamente inverso por id.
+        """
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            cur.execute("""
+            SELECT * FROM bandeja_capitulos
+            WHERE estado = 'activo' AND (descartado IS NULL OR descartado = 0)
+            ORDER BY en_foco DESC, id DESC
+            """)
+            return [dict(r) for r in cur.fetchall()]
 
     def guardar_capitulo_activo(self, personaje: str, nombre: str, habilitado: bool, fecha_inicio: Optional[str] = None):
         """
@@ -387,63 +436,72 @@ class GestorBaseDatosBandeja:
             """, (nom,))
 
             if habilitado and nom:
-                cur.execute("SELECT id, estado FROM bandeja_capitulos WHERE estado = 'activo' LIMIT 1")
+                cur.execute("SELECT id, estado FROM bandeja_capitulos WHERE estado = 'activo' AND en_foco = 1 LIMIT 1")
                 act = cur.fetchone()
                 if not act:
+                    cur.execute("UPDATE bandeja_capitulos SET en_foco = 0 WHERE en_foco = 1")
                     cur.execute("""
-                    INSERT INTO bandeja_capitulos (personaje, nombre, estado, fecha_inicio, fecha_ultimo_aviso, archivos_movidos)
-                    VALUES (?, ?, 'activo', ?, ?, 0)
+                    INSERT INTO bandeja_capitulos (personaje, nombre, estado, fecha_inicio, fecha_ultimo_aviso, archivos_movidos, en_foco)
+                    VALUES (?, ?, 'activo', ?, ?, 0, 1)
                     """, (pers, nom, now_iso, now_iso))
                 else:
                     cur.execute("""
                     UPDATE bandeja_capitulos SET personaje = ?, nombre = ? WHERE id = ?
                     """, (pers, nom, act["id"]))
             elif not habilitado:
-                cur.execute("""
-                UPDATE bandeja_capitulos SET estado = 'cerrado', fecha_fin = ? WHERE estado = 'activo'
-                """, (now_iso,))
+                cur.execute("UPDATE bandeja_capitulos SET en_foco = 0 WHERE en_foco = 1")
             con.commit()
 
     def terminar_capitulo(self, id_capitulo: Optional[int] = None, fecha_fin: Optional[str] = None) -> bool:
         """
-        Cierra el capítulo activo (o el especificado por id). Retorna True si se cerró.
+        Cierra el capítulo activo (o el especificado por id).
+        Si el capítulo cerrado estaba en foco, deja el foco vacío (en_foco = 0).
+        Retorna True si se cerró.
         """
         fin_iso = fecha_fin or datetime.datetime.now().isoformat()
         with self._lock, self._conectar() as con:
             cur = con.cursor()
-            if id_capitulo:
+            if id_capitulo is not None:
                 cur.execute("""
-                UPDATE bandeja_capitulos SET estado = 'cerrado', fecha_fin = ?
+                UPDATE bandeja_capitulos SET estado = 'cerrado', fecha_fin = ?, en_foco = 0
                 WHERE id = ? AND estado = 'activo'
                 """, (fin_iso, id_capitulo))
             else:
-                cur.execute("""
-                UPDATE bandeja_capitulos SET estado = 'cerrado', fecha_fin = ?
-                WHERE estado = 'activo'
-                """, (fin_iso,))
+                cur.execute("SELECT id FROM bandeja_capitulos WHERE estado = 'activo' AND en_foco = 1")
+                row = cur.fetchone()
+                if not row:
+                    cur.execute("SELECT id FROM bandeja_capitulos WHERE estado = 'activo' LIMIT 1")
+                    row = cur.fetchone()
+                if row:
+                    cur.execute("""
+                    UPDATE bandeja_capitulos SET estado = 'cerrado', fecha_fin = ?, en_foco = 0
+                    WHERE id = ?
+                    """, (fin_iso, row["id"]))
+                else:
+                    return False
             con.commit()
             afectados = cur.rowcount > 0
 
         if afectados:
-            self.guardar_capitulo_activo("", "", False)
+            cap_foco = self.obtener_capitulo_en_foco()
+            if not cap_foco or not cap_foco.get("habilitado"):
+                self.guardar_capitulo_activo("", "", False)
         return afectados
 
     def reabrir_capitulo(self, id_capitulo: int,
                          ruta_destino_base: Optional[str] = None,
                          ruta_descargas: Optional[str] = None) -> Dict[str, Any]:
         """
-        Reabre un capítulo cerrado como activo. Falla si ya hay otro capítulo activo.
+        Reabre un capítulo cerrado como activo.
+        No falla si ya existen otros capítulos abiertos:
+        - Si no hay ningún capítulo en foco, este toma el foco (en_foco = 1).
+        - Si ya hay un capítulo en foco, queda abierto pero sin foco (en_foco = 0).
         Asegura la creación de la carpeta física si ruta_destino_base está disponible o configurada.
         """
         dest_base = ruta_destino_base or self.ruta_destino_base
         desc = ruta_descargas or self.ruta_descargas
         with self._lock, self._conectar() as con:
             cur = con.cursor()
-            cur.execute("SELECT id, personaje, nombre FROM bandeja_capitulos WHERE estado = 'activo' LIMIT 1")
-            act = cur.fetchone()
-            if act:
-                raise ValueError(f"Ya existe un capítulo activo ('{act['personaje']}/{act['nombre']}'). Debe terminarlo antes de reabrir otro.")
-
             cur.execute("SELECT * FROM bandeja_capitulos WHERE id = ?", (id_capitulo,))
             row = cur.fetchone()
             if not row:
@@ -453,25 +511,35 @@ class GestorBaseDatosBandeja:
             if dest_base:
                 info_carpeta = self.asegurar_carpeta_capitulo(row["personaje"], row["nombre"], dest_base, desc)
 
-            if row["estado"] == "activo":
+            if row["estado"] == "activo" and (row["descartado"] is None or row["descartado"] == 0):
                 d = dict(row)
                 d["habilitado"] = True
                 if info_carpeta:
                     d["carpeta_info"] = info_carpeta
                 return d
 
+            # Determinar si toma foco
+            cur.execute("""
+            SELECT id FROM bandeja_capitulos
+            WHERE estado = 'activo' AND en_foco = 1 AND (descartado IS NULL OR descartado = 0)
+            """)
+            hay_foco = cur.fetchone() is not None
+            nuevo_foco = 0 if hay_foco else 1
+
             now_iso = datetime.datetime.now().isoformat()
             cur.execute("""
             UPDATE bandeja_capitulos
-            SET estado = 'activo', fecha_fin = NULL, fecha_ultimo_aviso = ?
+            SET estado = 'activo', descartado = 0, fecha_descartado = NULL,
+                fecha_fin = NULL, fecha_ultimo_aviso = ?, en_foco = ?
             WHERE id = ?
-            """, (now_iso, id_capitulo))
+            """, (now_iso, nuevo_foco, id_capitulo))
             con.commit()
 
             cur.execute("SELECT * FROM bandeja_capitulos WHERE id = ?", (id_capitulo,))
             updated = dict(cur.fetchone())
 
-        self.guardar_capitulo_activo(updated["personaje"], updated["nombre"], True)
+        if nuevo_foco == 1:
+            self.guardar_capitulo_activo(updated["personaje"], updated["nombre"], True)
         updated["habilitado"] = True
         if info_carpeta:
             updated["carpeta_info"] = info_carpeta
@@ -520,17 +588,18 @@ class GestorBaseDatosBandeja:
         now_iso = datetime.datetime.now().isoformat()
         with self._lock, self._conectar() as con:
             cur = con.cursor()
-            cur.execute("SELECT nombre FROM bandeja_capitulos WHERE id = ?", (id_capitulo,))
+            cur.execute("SELECT nombre, en_foco FROM bandeja_capitulos WHERE id = ?", (id_capitulo,))
             nom_row = cur.fetchone()
             nombre_cap = nom_row["nombre"] if nom_row else ""
+            era_foco = bool(nom_row["en_foco"]) if nom_row and "en_foco" in nom_row.keys() else False
 
             if descartado:
                 cur.execute("""
                 UPDATE bandeja_capitulos
-                SET descartado = 1, estado = 'cerrado', fecha_fin = COALESCE(fecha_fin, ?), fecha_descartado = ?
+                SET descartado = 1, estado = 'cerrado', en_foco = 0, fecha_fin = COALESCE(fecha_fin, ?), fecha_descartado = ?
                 WHERE id = ?
                 """, (now_iso, now_iso, id_capitulo))
-                if nombre_cap:
+                if era_foco:
                     cur.execute("SELECT valor FROM bandeja_estado WHERE clave = 'capitulo_activo_nombre'")
                     r = cur.fetchone()
                     if r and r["valor"] == nombre_cap:
@@ -538,7 +607,7 @@ class GestorBaseDatosBandeja:
             else:
                 cur.execute("""
                 UPDATE bandeja_capitulos
-                SET descartado = 0, estado = 'cerrado', fecha_descartado = NULL
+                SET descartado = 0, estado = 'cerrado', en_foco = 0, fecha_descartado = NULL
                 WHERE id = ?
                 """, (id_capitulo,))
             con.commit()
@@ -584,17 +653,31 @@ class GestorBaseDatosBandeja:
             con.commit()
             return cur.rowcount > 0
 
-    def incrementar_movidos_capitulo(self, personaje: str, escena: str, cantidad: int = 1):
+    def incrementar_movidos_capitulo(self, personaje: str, escena: str, cantidad: int = 1, id_capitulo: Optional[int] = None):
         """
         Incrementa el contador de archivos movidos para el capítulo correspondiente.
+        Prioriza el capítulo activo que coincida en personaje y nombre (o el especificado por id).
         """
         with self._lock, self._conectar() as con:
             cur = con.cursor()
-            cur.execute("""
-            UPDATE bandeja_capitulos
-            SET archivos_movidos = archivos_movidos + ?
-            WHERE personaje = ? AND nombre = ?
-            """, (cantidad, personaje, escena))
+            if id_capitulo is not None:
+                cur.execute("""
+                UPDATE bandeja_capitulos
+                SET archivos_movidos = archivos_movidos + ?
+                WHERE id = ?
+                """, (cantidad, id_capitulo))
+            else:
+                cur.execute("""
+                UPDATE bandeja_capitulos
+                SET archivos_movidos = archivos_movidos + ?
+                WHERE personaje = ? AND nombre = ? AND estado = 'activo' AND (descartado IS NULL OR descartado = 0)
+                """, (cantidad, personaje, escena))
+                if cur.rowcount == 0:
+                    cur.execute("""
+                    UPDATE bandeja_capitulos
+                    SET archivos_movidos = archivos_movidos + ?
+                    WHERE personaje = ? AND nombre = ?
+                    """, (cantidad, personaje, escena))
             con.commit()
 
     def calcular_balance_capitulo(self, personaje: str, nombre: str, verificar_disco: bool = False) -> Dict[str, int]:
@@ -2039,11 +2122,11 @@ class VigilanteBandeja:
         except OSError:
             return
 
-        cap_activo = self.db.obtener_capitulo_activo()
-        es_cap_activo = bool(cap_activo and cap_activo.get("habilitado") and cap_activo.get("nombre"))
+        cap_foco = self.db.obtener_capitulo_en_foco()
+        es_cap_foco = bool(cap_foco and cap_foco.get("habilitado") and cap_foco.get("nombre"))
         ts_corte_capitulo = 0.0
-        if es_cap_activo:
-            fecha_ini_str = cap_activo.get("fecha_inicio")
+        if es_cap_foco:
+            fecha_ini_str = cap_foco.get("fecha_inicio")
             if fecha_ini_str:
                 try:
                     dt_ini = datetime.datetime.fromisoformat(fecha_ini_str)
@@ -2088,9 +2171,9 @@ class VigilanteBandeja:
             except OSError:
                 continue
 
-            # Comprobar si el archivo es anterior al capítulo activo
+            # Comprobar si el archivo es anterior al capítulo en foco
             es_anterior = False
-            if es_cap_activo and mtime < ts_corte_capitulo:
+            if es_cap_foco and mtime < ts_corte_capitulo:
                 es_anterior = True
 
             # Comprobar en base de datos SQLite si ya tiene decisión tomada
@@ -2136,10 +2219,10 @@ class VigilanteBandeja:
                         raiz_escena = self.filtro.obtener_raiz_escena(entrada)
                 else:
                     # Material nuevo o primer escaneo
-                    if es_cap_activo:
-                        # Asignación automática por capítulo activo
-                        personaje_actual = cap_activo["personaje"]
-                        escena_actual = cap_activo["nombre"]
+                    if es_cap_foco:
+                        # Asignación automática por capítulo en foco
+                        personaje_actual = cap_foco["personaje"]
+                        escena_actual = cap_foco["nombre"]
                         estado_actual = "clasificado"
                         id_db = self.db.registrar_o_actualizar(
                             hash_val, ruta_completa, "clasificado",
@@ -2147,7 +2230,7 @@ class VigilanteBandeja:
                         )
                         raiz_escena = f"{personaje_actual}::{escena_actual}"
                     else:
-                        # Modo de respaldo por alias al inicio sin capítulo
+                        # Modo de respaldo por alias al inicio sin capítulo en foco
                         pers_alias = self.filtro.obtener_personaje_de_alias_inicial(entrada)
                         if pers_alias:
                             personaje_actual = pers_alias
@@ -2185,7 +2268,7 @@ class VigilanteBandeja:
                 elif tipo_clasificacion == "sin_identificar" and estado_actual != "ignorado":
                     sin_identificar.append(item_info)
             else:
-                if tipo_clasificacion == "candidato" or estado_actual == "clasificado" or es_cap_activo:
+                if tipo_clasificacion == "candidato" or estado_actual == "clasificado" or es_cap_foco:
                     candidatos_estables.append(item_info)
                 elif tipo_clasificacion == "sin_identificar" and estado_actual != "ignorado":
                     sin_identificar.append(item_info)
@@ -2387,6 +2470,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._enviar_json({"historial": historial})
         elif ruta == "/api/capitulos/estado":
             self._handle_capitulos_estado()
+        elif ruta == "/api/capitulos/abiertos":
+            self._handle_capitulos_abiertos()
         elif ruta == "/api/capitulos/cerrados":
             self._handle_capitulos_cerrados()
         elif ruta == "/api/capitulos/descartados":
@@ -2398,33 +2483,48 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._enviar_error(HTTPStatus.NOT_FOUND, "Ruta no encontrada.")
 
     def _handle_capitulos_estado(self):
-        cap = self.db.obtener_capitulo_activo()
-        es_activo = cap.get("habilitado", False)
+        cap_foco = self.db.obtener_capitulo_en_foco()
+        es_activo = cap_foco.get("habilitado", False)
         limite = float(self.config.horas_alerta_capitulo_olvidado)
         alerta = self.db.es_capitulo_olvidado(horas_limite=limite)
 
         balance = {"pendientes": 0, "movidos": 0}
-        if es_activo and cap.get("personaje") and cap.get("nombre"):
+        if es_activo and cap_foco.get("personaje") and cap_foco.get("nombre"):
             balance = self.db.calcular_balance_capitulo(
-                cap["personaje"], cap["nombre"], verificar_disco=True
+                cap_foco["personaje"], cap_foco["nombre"], verificar_disco=True
             )
-            carpeta_cap = os.path.join(self.config.ruta_destino_base, cap["personaje"], cap["nombre"])
+            carpeta_cap = os.path.join(self.config.ruta_destino_base, cap_foco["personaje"], cap_foco["nombre"])
             if os.path.isdir(carpeta_cap):
                 tot_arch = sum(len(f) for _, _, f in os.walk(carpeta_cap))
                 if tot_arch > 0:
-                    cap["carpeta_info"] = {
+                    cap_foco["carpeta_info"] = {
                         "ya_existia": True,
                         "total_archivos": tot_arch,
                         "mensaje": f"La carpeta ya existía y tiene {tot_arch} archivos"
                     }
 
+        abiertos = self.db.listar_capitulos_abiertos()
+        for c in abiertos:
+            c["balance"] = self.db.calcular_balance_capitulo(c["personaje"], c["nombre"], verificar_disco=True)
+            c["en_foco"] = bool(c.get("en_foco"))
+
         self._enviar_json({
             "activo": es_activo,
-            "capitulo": cap,
+            "capitulo": cap_foco,
+            "capitulo_foco": cap_foco if es_activo else None,
+            "capitulos_abiertos": abiertos,
+            "cantidad_abiertos": len(abiertos),
             "alerta_olvidado": alerta,
             "horas_limite": self.config.horas_alerta_capitulo_olvidado,
             "balance": balance
         })
+
+    def _handle_capitulos_abiertos(self):
+        abiertos = self.db.listar_capitulos_abiertos()
+        for c in abiertos:
+            c["balance"] = self.db.calcular_balance_capitulo(c["personaje"], c["nombre"], verificar_disco=True)
+            c["en_foco"] = bool(c.get("en_foco"))
+        self._enviar_json({"abiertos": abiertos, "total": len(abiertos)})
 
     def _handle_capitulos_cerrados(self):
         cerrados = self.db.listar_capitulos_cerrados()
@@ -2470,6 +2570,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._handle_clasificar_sin_identificar(body)
         elif ruta == "/api/capitulos/empezar":
             self._handle_capitulos_empezar(body)
+        elif ruta == "/api/capitulos/en-foco":
+            self._handle_capitulos_en_foco(body)
         elif ruta == "/api/capitulos/terminar":
             self._handle_capitulos_terminar(body)
         elif ruta == "/api/capitulos/reabrir":
@@ -2534,13 +2636,39 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         except Exception as e:
             self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al empezar capítulo: {str(e)}")
 
+    def _handle_capitulos_en_foco(self, body: Dict[str, Any]):
+        id_cap = body.get("id")
+        if id_cap is None:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "Campo 'id' de capítulo requerido.")
+            return
+
+        try:
+            id_cap_num = int(id_cap)
+        except (ValueError, TypeError):
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "El ID del capítulo debe ser numérico.")
+            return
+
+        try:
+            cap = self.db.poner_capitulo_en_foco(id_cap_num)
+            self.vigilante.escanear()
+            self._enviar_json({
+                "exito": True,
+                "mensaje": f"Capítulo '{cap['personaje']}/{cap['nombre']}' puesto en foco.",
+                "capitulo": cap
+            })
+        except ValueError as e:
+            self._enviar_error(HTTPStatus.NOT_FOUND, str(e))
+        except Exception as e:
+            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al poner capítulo en foco: {str(e)}")
+
     def _handle_capitulos_terminar(self, body: Dict[str, Any]):
         id_cap = body.get("id")
         accion = body.get("accion", "sin_mover")
 
-        cerrado = self.db.terminar_capitulo(id_capitulo=int(id_cap) if id_cap else None)
+        id_cap_num = int(id_cap) if id_cap is not None else None
+        cerrado = self.db.terminar_capitulo(id_capitulo=id_cap_num)
         if not cerrado:
-            self._enviar_error(HTTPStatus.NOT_FOUND, "No hay ningún capítulo activo para terminar.")
+            self._enviar_error(HTTPStatus.NOT_FOUND, "No hay ningún capítulo activo o especificado para terminar.")
             return
 
         self.vigilante.escanear()
@@ -2582,9 +2710,9 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     def _handle_capitulos_descartar_simular(self, body: Dict[str, Any]):
         capitulo_id = body.get("id")
         if capitulo_id is None:
-            cap_activo = self.db.obtener_capitulo_activo()
-            if cap_activo and cap_activo.get("habilitado") and cap_activo.get("id"):
-                capitulo_id = cap_activo["id"]
+            cap_foco = self.db.obtener_capitulo_en_foco()
+            if cap_foco and cap_foco.get("habilitado") and cap_foco.get("id"):
+                capitulo_id = cap_foco["id"]
             else:
                 self._enviar_error(HTTPStatus.BAD_REQUEST, "Se requiere el ID del capítulo a descartar.")
                 return
@@ -2608,13 +2736,13 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al simular descarte: {str(e)}")
 
     def _handle_capitulos_descartar(self, body: Dict[str, Any]):
-        capitulo_id = body.get("id")
+        capitulo_id = body.get("id") or (body.get("simulacion") or {}).get("capitulo_id")
         nombre_confirmacion = str(body.get("nombre_confirmacion", "")).strip()
 
         if capitulo_id is None:
-            cap_activo = self.db.obtener_capitulo_activo()
-            if cap_activo and cap_activo.get("habilitado") and cap_activo.get("id"):
-                capitulo_id = cap_activo["id"]
+            cap_foco = self.db.obtener_capitulo_en_foco()
+            if cap_foco and cap_foco.get("habilitado") and cap_foco.get("id"):
+                capitulo_id = cap_foco["id"]
             else:
                 self._enviar_error(HTTPStatus.BAD_REQUEST, "Se requiere el ID del capítulo a descartar.")
                 return
@@ -3374,6 +3502,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
   <nav>
     <button class="nav-btn active" id="nav-btn-lotes" onclick="mostrarPestana('lotes', event)">Lotes Detectados</button>
     <button class="nav-btn" id="nav-btn-sin-identificar" onclick="mostrarPestana('sin-identificar', event)">Sin Identificar</button>
+    <button class="nav-btn" id="nav-btn-capitulos-abiertos" onclick="mostrarPestana('capitulos-abiertos', event)">Capítulos Abiertos (<span id="conteo-nav-abiertos">0</span>)</button>
     <button class="nav-btn" id="nav-btn-capitulos-cerrados" onclick="mostrarPestana('capitulos-cerrados', event)">Capítulos Cerrados</button>
     <button class="nav-btn" id="nav-btn-descartados" onclick="mostrarPestana('descartados', event)">Descartados</button>
     <button class="nav-btn" id="nav-btn-historial" onclick="mostrarPestana('historial', event)">Historial</button>
@@ -3392,12 +3521,13 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       </div>
     </div>
 
-    <!-- Banner superior permanente cuando el capítulo está activo -->
+    <!-- Banner superior permanente cuando el capítulo está en foco -->
     <div id="banner-capitulo-activo" class="banner-capitulo-activo" style="display:none;">
       <div>
         <div style="display:flex; align-items:center; gap:10px;">
-          <span class="badge-capitulo-activo">Activo</span>
-          <span id="banner-capitulo-titulo" style="font-weight:700; font-size:1.1rem; color:#e0e7ff;">Capítulo activo:</span>
+          <span class="badge-capitulo-activo">En Foco</span>
+          <span id="banner-capitulo-titulo" style="font-weight:700; font-size:1.1rem; color:#e0e7ff;">Capítulo en foco:</span>
+          <span id="banner-otros-abiertos" style="font-size:0.85rem; color:#a5b4fc; cursor:pointer; text-decoration:underline;" onclick="mostrarPestana('capitulos-abiertos')"></span>
         </div>
         <div id="banner-capitulo-subtitulo" style="font-size:0.85rem; color:#a5b4fc; margin-top:4px;">
           Cargando detalles...
@@ -3409,6 +3539,22 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         </button>
         <button class="btn-sm" id="btn-terminar-capitulo" onclick="abrirModalTerminarCapitulo()" style="background:#ef4444; color:#fff; font-weight:600; padding:8px 16px; border:none; border-radius:4px; cursor:pointer;">
           Terminar capítulo
+        </button>
+      </div>
+    </div>
+
+    <!-- Banner aviso cuando hay capítulos abiertos pero ninguno en foco -->
+    <div id="banner-sin-foco" class="banner-capitulo-olvidado" style="display:none; background:#1e1b4b; border:1px solid #6366f1;">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <span style="font-size:1.2rem;">ℹ️</span>
+        <div>
+          <div style="font-weight:700; color:#e0e7ff;">Ningún capítulo en foco</div>
+          <div style="font-size:0.85rem; color:#a5b4fc;">El material nuevo se clasifica por alias inicial. Podés elegir cuál poner en foco en la pestaña Capítulos Abiertos.</div>
+        </div>
+      </div>
+      <div>
+        <button class="btn-sm" onclick="mostrarPestana('capitulos-abiertos')" style="background:var(--accent); color:#000; font-weight:600; padding:6px 14px; border:none; border-radius:4px; cursor:pointer;">
+          Ver capítulos abiertos
         </button>
       </div>
     </div>
@@ -3471,6 +3617,37 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
           Archivos de media sin patrón conocido. Marcá si corresponden al proyecto o ignorar. La decisión se recuerda por hash.
         </p>
         <div id="contenedor-sin-identificar">Cargando...</div>
+      </div>
+    </section>
+
+    <section id="sec-capitulos-abiertos" style="display:none;">
+      <div class="card" style="margin-bottom:20px;">
+        <div class="card-header">
+          <div>
+            <h2>Capítulos Abiertos</h2>
+            <small style="color:var(--text-muted)">Historias en paralelo. El capítulo en foco recibe las descargas nuevas automáticamente.</small>
+          </div>
+          <button class="btn-sm" onclick="cargarCapitulosAbiertos()">Actualizar</button>
+        </div>
+        <div id="contenedor-capitulos-abiertos">Cargando capítulos abiertos...</div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-bottom:12px; font-size:1rem;">Empezar nuevo capítulo en paralelo</h3>
+        <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
+          <label style="font-size:0.85rem;">Personaje:
+            <select id="sel-nuevo-capitulo-pers">
+              <option value="lucie">Lucie</option>
+              <option value="roli">Roli</option>
+              <option value="mailen">Mailen</option>
+            </select>
+          </label>
+          <input type="text" id="txt-nuevo-capitulo-nom" placeholder="Nombre del nuevo capítulo" style="min-width:240px;">
+          <button class="btn-sm" onclick="empezarCapituloSecundario()" style="background:var(--accent); color:#000; font-weight:600; padding:6px 16px;">
+            Empezar capítulo
+          </button>
+          <span id="error-nuevo-capitulo" class="error-inline" style="display:none;"></span>
+        </div>
       </div>
     </section>
 
@@ -3571,7 +3748,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
   <script>
     const CSRF_TOKEN = "{self.token_csrf}";
-    let datosEstado = {{ lotes: [], sin_identificar: [], escenas: [], personajes: [], ultimo_personaje: "lucie", capitulo_activo: null, alerta_olvidado: false, horas_limite: 12, balance_capitulo: {{ pendientes: 0, movidos: 0 }} }};
+    let datosEstado = {{ lotes: [], lotes_anteriores: [], sin_identificar: [], escenas: [], personajes: [], ultimo_personaje: "lucie", capitulo_activo: null, capitulo_foco: null, capitulos_abiertos: [], cantidad_abiertos: 0, alerta_olvidado: false, horas_limite: 12, balance_capitulo: {{ pendientes: 0, movidos: 0 }} }};
     let simulacionActiva = null;
     let descarteSimulacionActiva = null;
     let loteActivoId = null;
@@ -3643,6 +3820,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       }}
     }}
 
+    let capituloATerminarId = null;
+
     function mostrarPestana(pestana, ev) {{
       pestanaActual = pestana;
       document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
@@ -3655,12 +3834,15 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
       document.getElementById('sec-lotes').style.display = (pestana === 'lotes') ? 'block' : 'none';
       document.getElementById('sec-sin-identificar').style.display = (pestana === 'sin-identificar') ? 'block' : 'none';
+      document.getElementById('sec-capitulos-abiertos').style.display = (pestana === 'capitulos-abiertos') ? 'block' : 'none';
       document.getElementById('sec-capitulos-cerrados').style.display = (pestana === 'capitulos-cerrados') ? 'block' : 'none';
       document.getElementById('sec-descartados').style.display = (pestana === 'descartados') ? 'block' : 'none';
       document.getElementById('sec-historial').style.display = (pestana === 'historial') ? 'block' : 'none';
 
       if (pestana === 'historial') {{
         cargarHistorial();
+      }} else if (pestana === 'capitulos-abiertos') {{
+        cargarCapitulosAbiertos();
       }} else if (pestana === 'capitulos-cerrados') {{
         cargarCapitulosCerrados();
       }} else if (pestana === 'descartados') {{
@@ -3671,6 +3853,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     async function recargarVistaActual() {{
       if (pestanaActual === 'historial') {{
         await cargarHistorial();
+      }} else if (pestanaActual === 'capitulos-abiertos') {{
+        await cargarCapitulosAbiertos();
       }} else if (pestanaActual === 'capitulos-cerrados') {{
         await cargarCapitulosCerrados();
       }} else if (pestanaActual === 'descartados') {{
@@ -3716,7 +3900,10 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         datosEstado.escenas = escenasRes.escenas || [];
         datosEstado.personajes = persRes.personajes || [];
         datosEstado.ultimo_personaje = persRes.ultimo_personaje;
-        datosEstado.capitulo_activo = capRes.capitulo;
+        datosEstado.capitulo_activo = capRes.capitulo_foco || capRes.capitulo;
+        datosEstado.capitulo_foco = capRes.capitulo_foco;
+        datosEstado.capitulos_abiertos = capRes.capitulos_abiertos || [];
+        datosEstado.cantidad_abiertos = capRes.cantidad_abiertos || 0;
         datosEstado.alerta_olvidado = capRes.alerta_olvidado;
         datosEstado.horas_limite = capRes.horas_limite;
         datosEstado.balance_capitulo = capRes.balance;
@@ -3731,6 +3918,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
     function renderCapituloActivo() {{
       const bannerActivo = document.getElementById('banner-capitulo-activo');
+      const bannerSinFoco = document.getElementById('banner-sin-foco');
       const cardEmpezar = document.getElementById('card-empezar-capitulo');
       const bannerOlvidado = document.getElementById('banner-capitulo-olvidado');
       const errSpan = document.getElementById('error-capitulo-activo');
@@ -3739,22 +3927,37 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         errSpan.innerText = '';
       }}
 
-      const cap = datosEstado.capitulo_activo;
-      const esActivo = cap && cap.habilitado && cap.nombre;
+      const capFoco = datosEstado.capitulo_foco;
+      const esFoco = capFoco && capFoco.habilitado && capFoco.nombre;
+      const cantAbiertos = datosEstado.cantidad_abiertos || 0;
 
-      if (esActivo) {{
+      const badgeNav = document.getElementById('conteo-nav-abiertos');
+      if (badgeNav) badgeNav.innerText = cantAbiertos;
+
+      if (esFoco) {{
         if (cardEmpezar) cardEmpezar.style.display = 'none';
+        if (bannerSinFoco) bannerSinFoco.style.display = 'none';
         if (bannerActivo) {{
           bannerActivo.style.display = 'flex';
           const titulo = document.getElementById('banner-capitulo-titulo');
           const subtitulo = document.getElementById('banner-capitulo-subtitulo');
-          if (titulo) titulo.innerText = `Capítulo activo: ${{cap.personaje}}/${{cap.nombre}}`;
+          const otrosSpan = document.getElementById('banner-otros-abiertos');
+
+          if (titulo) titulo.innerText = `Capítulo en foco: ${{capFoco.personaje}}/${{capFoco.nombre}}`;
+          if (otrosSpan) {{
+            if (cantAbiertos > 1) {{
+              otrosSpan.innerText = `(+${{cantAbiertos - 1}} abierto(s))`;
+              otrosSpan.style.display = 'inline';
+            }} else {{
+              otrosSpan.style.display = 'none';
+            }}
+          }}
           if (subtitulo) {{
-            const fechaTxt = cap.fecha_inicio ? cap.fecha_inicio.replace('T', ' ').slice(0, 19) : '';
-            const movidos = (datosEstado.balance_capitulo && datosEstado.balance_capitulo.movidos !== undefined) ? datosEstado.balance_capitulo.movidos : (cap.archivos_movidos || 0);
-            let textoSub = `Iniciado: ${{fechaTxt}} | ${{movidos}} archivo(s) movido(s). Todo archivo candidato entrante se asigna a esta historia.`;
-            if (cap.carpeta_info && cap.carpeta_info.ya_existia && cap.carpeta_info.total_archivos > 0) {{
-              textoSub += ` • ℹ️ ${{cap.carpeta_info.mensaje}}`;
+            const fechaTxt = capFoco.fecha_inicio ? capFoco.fecha_inicio.replace('T', ' ').slice(0, 19) : '';
+            const movidos = (datosEstado.balance_capitulo && datosEstado.balance_capitulo.movidos !== undefined) ? datosEstado.balance_capitulo.movidos : (capFoco.archivos_movidos || 0);
+            let textoSub = `Iniciado: ${{fechaTxt}} | ${{movidos}} archivo(s) movido(s). Todo archivo nuevo entrante se asigna a esta historia.`;
+            if (capFoco.carpeta_info && capFoco.carpeta_info.ya_existia && capFoco.carpeta_info.total_archivos > 0) {{
+              textoSub += ` • ℹ️ ${{capFoco.carpeta_info.mensaje}}`;
             }} else if (datosEstado.mensaje_carpeta_existente) {{
               textoSub += ` • ℹ️ ${{datosEstado.mensaje_carpeta_existente}}`;
             }}
@@ -3769,10 +3972,16 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       }} else {{
         if (bannerActivo) bannerActivo.style.display = 'none';
         if (bannerOlvidado) bannerOlvidado.style.display = 'none';
-        if (cardEmpezar) {{
-          cardEmpezar.style.display = 'block';
-          const txtNombre = document.getElementById('txt-capitulo-nombre');
-          if (txtNombre && cap && !cap.nombre) txtNombre.value = '';
+        if (cantAbiertos > 0) {{
+          if (bannerSinFoco) bannerSinFoco.style.display = 'flex';
+          if (cardEmpezar) cardEmpezar.style.display = 'none';
+        }} else {{
+          if (bannerSinFoco) bannerSinFoco.style.display = 'none';
+          if (cardEmpezar) {{
+            cardEmpezar.style.display = 'block';
+            const txtNombre = document.getElementById('txt-capitulo-nombre');
+            if (txtNombre && (!datosEstado.capitulo_activo || !datosEstado.capitulo_activo.nombre)) txtNombre.value = '';
+          }}
         }}
       }}
     }}
@@ -3817,21 +4026,150 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       }}
     }}
 
-    async function abrirModalTerminarCapitulo() {{
+    async function empezarCapituloSecundario() {{
+      const selPers = document.getElementById('sel-nuevo-capitulo-pers');
+      const txtNombre = document.getElementById('txt-nuevo-capitulo-nom');
+      const errSpan = document.getElementById('error-nuevo-capitulo');
+
+      const personaje = (selPers ? selPers.value : 'lucie').trim();
+      const nombre = (txtNombre ? txtNombre.value : '').trim();
+
+      const err = validarNombreEscena(nombre);
+      if (err) {{
+        if (errSpan) {{
+          errSpan.innerText = err;
+          errSpan.style.display = 'inline-block';
+        }}
+        return;
+      }}
+      if (errSpan) {{ errSpan.style.display = 'none'; }}
+
       try {{
+        await apiFetch('/api/capitulos/empezar', {{
+          method: 'POST',
+          body: JSON.stringify({{ personaje, nombre }})
+        }});
+        if (txtNombre) txtNombre.value = '';
+        await cargarDatos();
+        await cargarCapitulosAbiertos();
+      }} catch (e) {{
+        if (errSpan) {{
+          errSpan.innerText = e.message;
+          errSpan.style.display = 'inline-block';
+        }} else {{
+          mostrarError(e.message);
+        }}
+      }}
+    }}
+
+    async function cargarCapitulosAbiertos() {{
+      const cont = document.getElementById('contenedor-capitulos-abiertos');
+      if (!cont) return;
+      try {{
+        const res = await apiFetch('/api/capitulos/abiertos');
+        const abiertos = res.abiertos || [];
+        const badgeNav = document.getElementById('conteo-nav-abiertos');
+        if (badgeNav) badgeNav.innerText = abiertos.length;
+
+        if (!abiertos.length) {{
+          cont.innerHTML = '<p style="color:var(--text-muted); padding:16px;">No hay capítulos abiertos actualmente.</p>';
+          return;
+        }}
+
+        cont.innerHTML = `
+          <table class="tabla-historial">
+            <thead>
+              <tr>
+                <th style="width:12%;">Personaje</th>
+                <th style="width:22%;">Capítulo</th>
+                <th style="width:14%; text-align:center;">Foco</th>
+                <th style="width:16%;">Fecha Inicio</th>
+                <th style="width:8%; text-align:center;">Movidos</th>
+                <th style="width:8%; text-align:center;">Pendientes</th>
+                <th style="width:20%; text-align:center;">Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${{abiertos.map(c => {{
+                const bal = c.balance || {{ pendientes: 0, movidos: 0 }};
+                const mov = bal.movidos !== undefined ? bal.movidos : (c.archivos_movidos || 0);
+                const fechaTxt = (c.fecha_inicio || '').replace('T', ' ').slice(0, 19);
+                const badgeFoco = c.en_foco 
+                  ? '<span class="badge" style="background:#f59e0b; color:#000; font-weight:700;">⭐ En foco</span>'
+                  : '<span style="color:var(--text-muted); font-size:0.85rem;">Secundario</span>';
+                
+                const btnFoco = !c.en_foco
+                  ? `<button class="btn-sm" onclick="ponerEnFoco(${{c.id}})" style="background:var(--accent); color:#000; font-weight:600; padding:4px 8px; border-radius:4px; border:none; cursor:pointer;" title="Poner en foco para recibir descargas nuevas">Poner en foco</button>`
+                  : '';
+                
+                return `
+                  <tr style="${{c.en_foco ? 'background:rgba(99, 102, 241, 0.1);' : ''}}">
+                    <td><code>${{escapeHTML(c.personaje)}}</code></td>
+                    <td><strong>${{escapeHTML(c.nombre)}}</strong></td>
+                    <td style="text-align:center;">${{badgeFoco}}</td>
+                    <td style="color:var(--text-muted);">${{fechaTxt}}</td>
+                    <td style="text-align:center;"><strong>${{mov}}</strong></td>
+                    <td style="text-align:center;">${{bal.pendientes}}</td>
+                    <td style="text-align:center;">
+                      <div style="display:flex; gap:6px; justify-content:center; align-items:center; flex-wrap:wrap;">
+                        ${{btnFoco}}
+                        <button class="btn-sm" onclick="abrirModalTerminarCapitulo(${{c.id}})" style="background:#ef4444; color:#fff; font-weight:600; padding:4px 8px; border-radius:4px; border:none; cursor:pointer;">
+                          Terminar
+                        </button>
+                        <button class="btn-sm" onclick="abrirModalDescartarCapitulo(${{c.id}}, '${{escapeHTML(c.nombre)}}', '${{escapeHTML(c.personaje)}}')" style="background:#4b5563; color:#fff; font-weight:600; padding:4px 8px; border-radius:4px; border:none; cursor:pointer;">
+                          Descartar
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                `;
+              }}).join('')}}
+            </tbody>
+          </table>
+        `;
+      }} catch (e) {{
+        cont.innerHTML = `<p style="color:var(--error); padding:16px;">Error al cargar capítulos abiertos: ${{escapeHTML(e.message)}}</p>`;
+      }}
+    }}
+
+    async function ponerEnFoco(id) {{
+      try {{
+        await apiFetch('/api/capitulos/en-foco', {{
+          method: 'POST',
+          body: JSON.stringify({{ id: id }})
+        }});
+        await cargarDatos();
+        await cargarCapitulosAbiertos();
+      }} catch (e) {{
+        mostrarError(e.message);
+      }}
+    }}
+
+    async function abrirModalTerminarCapitulo(idCap) {{
+      try {{
+        capituloATerminarId = (idCap !== undefined && idCap !== null) ? idCap : ((datosEstado.capitulo_foco && datosEstado.capitulo_foco.id) || null);
         const res = await apiFetch('/api/capitulos/estado');
-        const cap = res.capitulo;
-        const bal = res.balance || {{ pendientes: 0, movidos: 0 }};
+        let cap = res.capitulo_foco || res.capitulo;
+        let bal = res.balance || {{ pendientes: 0, movidos: 0 }};
+
+        if (idCap && datosEstado.capitulos_abiertos) {{
+          const capObj = datosEstado.capitulos_abiertos.find(c => c.id === idCap);
+          if (capObj) {{
+            cap = capObj;
+            bal = capObj.balance || bal;
+          }}
+        }}
+
         const cont = document.getElementById('modal-terminar-resumen');
-        if (cont) {{
+        if (cont && cap) {{
           cont.innerHTML = `
-            <p style="margin-bottom:8px;">Capítulo actual: <strong>${{escapeHTML(cap.personaje)}} / ${{escapeHTML(cap.nombre)}}</strong></p>
+            <p style="margin-bottom:8px;">Capítulo a terminar: <strong>${{escapeHTML(cap.personaje)}} / ${{escapeHTML(cap.nombre)}}</strong></p>
             <div style="background:var(--card-alt); padding:12px; border-radius:6px; margin:12px 0;">
               <div style="margin-bottom:6px;">📁 <strong>${{bal.pendientes}}</strong> archivo(s) pendiente(s) en Descargas</div>
               <div>📦 <strong>${{bal.movidos}}</strong> archivo(s) ya movido(s) al destino</div>
             </div>
             <p style="color:var(--text-muted); font-size:0.85rem;">
-              Al terminar, el capítulo queda cerrado: no se le asignará ningún archivo nuevo y lo que llegue después seguirá el circuito sin capítulo activo.
+              Al terminar, el capítulo queda cerrado: no se le asignará ningún archivo nuevo y lo que llegue después seguirá el circuito sin capítulo en foco.
             </p>
           `;
         }}
@@ -3843,17 +4181,26 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
     function cerrarModalTerminarCapitulo() {{
       document.getElementById('modal-terminar-capitulo').style.display = 'none';
+      capituloATerminarId = null;
     }}
 
     async function ejecutarTerminarCapitulo(trasMover) {{
       try {{
+        const payload = {{
+          accion: trasMover ? 'mover_pendientes' : 'sin_mover'
+        }};
+        if (capituloATerminarId !== null) {{
+          payload.id = capituloATerminarId;
+        }}
         await apiFetch('/api/capitulos/terminar', {{
           method: 'POST',
-          body: JSON.stringify({{ accion: trasMover ? 'mover_pendientes' : 'sin_mover' }})
+          body: JSON.stringify(payload)
         }});
         cerrarModalTerminarCapitulo();
         await cargarDatos();
-        if (pestanaActual === 'capitulos-cerrados') {{
+        if (pestanaActual === 'capitulos-abiertos') {{
+          await cargarCapitulosAbiertos();
+        }} else if (pestanaActual === 'capitulos-cerrados') {{
           await cargarCapitulosCerrados();
         }}
       }} catch (e) {{
@@ -4165,37 +4512,44 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         return;
       }}
 
-      const capActivo = datosEstado.capitulo_activo && datosEstado.capitulo_activo.habilitado ? datosEstado.capitulo_activo : null;
+      const capFoco = (datosEstado.capitulo_foco && datosEstado.capitulo_foco.habilitado) ? datosEstado.capitulo_foco : 
+                      ((datosEstado.capitulo_activo && datosEstado.capitulo_activo.habilitado) ? datosEstado.capitulo_activo : null);
+      const capsAbiertos = datosEstado.capitulos_abiertos || [];
+      const nombresAbiertos = new Set(capsAbiertos.map(c => c.nombre));
 
       cont.innerHTML = lotesActivos.map(lote => {{
-        const persPre = capActivo ? capActivo.personaje : (lote.personaje_sugerido || datosEstado.ultimo_personaje || 'lucie');
-        const escenaPre = capActivo ? capActivo.nombre : (lote.escena_sugerida || '');
+        const persPre = capFoco ? capFoco.personaje : (lote.personaje_sugerido || datosEstado.ultimo_personaje || 'lucie');
+        const escenaPre = capFoco ? capFoco.nombre : (lote.escena_sugerida || '');
 
         const persOptions = datosEstado.personajes.map(p => 
           `<option value="${{p.id}}" ${{p.id === persPre ? 'selected' : ''}}>${{p.nombre}}</option>`
         ).join('');
 
-        let escenasOptions = '';
-        let esNueva = false;
-
-        if (capActivo) {{
-          const optCap = `<option value="${{escapeHTML(capActivo.nombre)}}" data-tipo="capitulo_activo" selected>[Capítulo activo] ${{escapeHTML(capActivo.nombre)}}</option>`;
-          const optNueva = `<option value="__nueva__">+ Crear nueva escena...</option>`;
-          const otrasEscenas = (datosEstado.escenas || [])
-            .filter(e => !(e.tipo === 'destino_existente' && e.nombre === capActivo.nombre))
-            .map(e => `<option value="${{escapeHTML(e.nombre)}}" data-tipo="${{e.tipo}}">[${{e.tipo === 'descargas_alias' ? 'En Descargas' : 'Destino'}}] ${{escapeHTML(e.nombre)}}</option>`)
-            .join('');
-          escenasOptions = optCap + optNueva + otrasEscenas;
-          esNueva = false;
-        }} else {{
-          const escenaExiste = (datosEstado.escenas || []).some(e => e.nombre === escenaPre);
-          esNueva = !escenaExiste;
-          const optNueva = `<option value="__nueva__" ${{esNueva ? 'selected' : ''}}>+ Crear nueva escena...</option>`;
-          const otrasEscenas = (datosEstado.escenas || []).map(e => 
-            `<option value="${{escapeHTML(e.nombre)}}" data-tipo="${{e.tipo}}" ${{ (e.nombre === escenaPre) ? 'selected' : '' }}>[${{e.tipo === 'descargas_alias' ? 'En Descargas' : 'Destino'}}] ${{escapeHTML(e.nombre)}}</option>`
-          ).join('');
-          escenasOptions = optNueva + otrasEscenas;
+        let optFoco = '';
+        if (capFoco) {{
+          optFoco = `<option value="${{escapeHTML(capFoco.nombre)}}" data-tipo="capitulo_foco" data-personaje="${{escapeHTML(capFoco.personaje)}}" selected>[Capítulo en foco] ${{escapeHTML(capFoco.nombre)}}</option>`;
         }}
+
+        const optsAbiertosSecundarios = capsAbiertos
+          .filter(c => !capFoco || c.id !== capFoco.id)
+          .map(c => {{
+            const isSelected = (!capFoco && c.nombre === escenaPre);
+            return `<option value="${{escapeHTML(c.nombre)}}" data-tipo="capitulo_abierto" data-personaje="${{escapeHTML(c.personaje)}}" ${{isSelected ? 'selected' : ''}}>[Capítulo abierto] ${{escapeHTML(c.personaje)}}/${{escapeHTML(c.nombre)}}</option>`;
+          }})
+          .join('');
+
+        const matchAbiertoSecundario = !capFoco && capsAbiertos.some(c => c.nombre === escenaPre);
+        const matchOtraEscena = !capFoco && (datosEstado.escenas || []).some(e => !nombresAbiertos.has(e.nombre) && e.nombre === escenaPre);
+        const esNueva = !capFoco && !matchAbiertoSecundario && !matchOtraEscena;
+
+        const optNueva = `<option value="__nueva__" ${{esNueva ? 'selected' : ''}}>+ Crear nueva escena...</option>`;
+
+        const otrasEscenas = (datosEstado.escenas || [])
+          .filter(e => !nombresAbiertos.has(e.nombre))
+          .map(e => `<option value="${{escapeHTML(e.nombre)}}" data-tipo="${{e.tipo}}" ${{(matchOtraEscena && e.nombre === escenaPre) ? 'selected' : ''}}>[${{e.tipo === 'descargas_alias' ? 'En Descargas' : 'Destino'}}] ${{escapeHTML(e.nombre)}}</option>`)
+          .join('');
+
+        const escenasOptions = optFoco + optsAbiertosSecundarios + optNueva + otrasEscenas;
 
         return `
           <div class="card" id="card-${{lote.lote_id}}">
@@ -4274,9 +4628,27 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
           `<option value="${{p.id}}" ${{p.id === persPre ? 'selected' : ''}}>${{p.nombre}}</option>`
         ).join('');
 
-        const escenasOptions = (datosEstado.escenas || []).map(e => 
-          `<option value="${{escapeHTML(e.nombre)}}" data-tipo="${{e.tipo}}">[${{e.tipo === 'descargas_alias' ? 'En Descargas' : 'Destino'}}] ${{escapeHTML(e.nombre)}}</option>`
-        ).join('');
+        const capFocoAnt = (datosEstado.capitulo_foco && datosEstado.capitulo_foco.habilitado) ? datosEstado.capitulo_foco : 
+                           ((datosEstado.capitulo_activo && datosEstado.capitulo_activo.habilitado) ? datosEstado.capitulo_activo : null);
+        const capsAbiertosAnt = datosEstado.capitulos_abiertos || [];
+        const nombresAbiertosAnt = new Set(capsAbiertosAnt.map(c => c.nombre));
+
+        let optFocoAnt = '';
+        if (capFocoAnt) {{
+          optFocoAnt = `<option value="${{escapeHTML(capFocoAnt.nombre)}}" data-tipo="capitulo_foco" data-personaje="${{escapeHTML(capFocoAnt.personaje)}}">[Capítulo en foco] ${{escapeHTML(capFocoAnt.nombre)}}</option>`;
+        }}
+
+        const optsAbiertosSecundariosAnt = capsAbiertosAnt
+          .filter(c => !capFocoAnt || c.id !== capFocoAnt.id)
+          .map(c => `<option value="${{escapeHTML(c.nombre)}}" data-tipo="capitulo_abierto" data-personaje="${{escapeHTML(c.personaje)}}">[Capítulo abierto] ${{escapeHTML(c.personaje)}}/${{escapeHTML(c.nombre)}}</option>`)
+          .join('');
+
+        const otrasEscenasAnt = (datosEstado.escenas || [])
+          .filter(e => !nombresAbiertosAnt.has(e.nombre))
+          .map(e => `<option value="${{escapeHTML(e.nombre)}}" data-tipo="${{e.tipo}}">[${{e.tipo === 'descargas_alias' ? 'En Descargas' : 'Destino'}}] ${{escapeHTML(e.nombre)}}</option>`)
+          .join('');
+
+        const escenasOptions = optFocoAnt + optsAbiertosSecundariosAnt + otrasEscenasAnt;
 
         return `
           <div class="card" id="card-${{lote.lote_id}}" style="border:1px solid #333; margin-bottom:12px;">
@@ -4406,6 +4778,17 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     function toggleNuevaEscena(loteId, valor) {{
       const txt = document.getElementById(`txt-nueva-escena-${{loteId}}`);
       const errSpan = document.getElementById(`error-escena-${{loteId}}`);
+      const selEscena = document.getElementById(`sel-escena-${{loteId}}`);
+      const selPers = document.getElementById(`sel-pers-${{loteId}}`);
+
+      if (selEscena && selPers && selEscena.selectedIndex >= 0) {{
+        const opt = selEscena.options[selEscena.selectedIndex];
+        const persOpt = opt ? opt.getAttribute('data-personaje') : null;
+        if (persOpt) {{
+          selPers.value = persOpt;
+        }}
+      }}
+
       if (valor === '__nueva__') {{
         txt.style.display = 'inline-block';
         validarInputEscena(loteId);
