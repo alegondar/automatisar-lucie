@@ -217,45 +217,65 @@ La ventana modal de "Simulación previa de movimientos" SHALL tener dimensiones 
 - **WHEN** se listan los movimientos a realizar en la simulación
 - **THEN** la columna destino muestra la ruta relativa destacando las subcarpetas "videos sin editar" o "imagenes" con badges diferenciados, y al posicionar el cursor sobre la celda se visualiza la ruta absoluta completa en el tooltip
 
-### Requirement: Reconocimiento de candidatos por prefijo de personaje y detección multi-personaje
-Un archivo multimedia cuyo nombre inicie con un alias configurado en `alias-personajes.json` SHALL ser clasificado como candidato del proyecto sin enviarse a "Sin identificar". El sistema SHALL preseleccionar automáticamente el personaje asociado al alias. Si el nombre contiene alias correspondientes a más de un personaje, el sistema SHALL no preseleccionar ningún personaje y mostrar el aviso "Parece una escena con varios personajes" para que el usuario elija manualmente.
+### Requirement: Capítulo activo persistente y asignación en tiempo de detección
+El panel web SHALL incluir en su parte superior un selector de personaje y un campo "Capítulo actual" con botones "Activar" y "Desactivar", junto a un banner visible permanente. El estado del capítulo activo SHALL persistir en SQLite (`bandeja_estado`) ante reinicios del servidor. Mientras esté activo, todo nuevo archivo candidato del proyecto detectado en `~/Descargas` SHALL ser asignado en SQLite a `<personaje>/<capítulo>` en el momento de detectarse, sin importar su nombre ni hora de descarga. Cambiar o desactivar el capítulo SHALL NO reasignar archivos ya detectados. Los lotes SHALL presentarse con personaje y escena precompletados y editables.
 
-#### Scenario: Reconocimiento directo por alias inicial de personaje
-- **WHEN** se detecta un archivo multimedia cuyo nombre comienza con un alias conocido (por ejemplo `lucieasado.mp4` o `roliyacussi.mp4`)
-- **THEN** el archivo se clasifica como candidato de la bandeja y el personaje correspondiente queda preseleccionado por defecto
+#### Scenario: Asignación inmediata con capítulo activo
+- **WHEN** el capítulo activo está fijado en `lucie/capitulo_01` y se detecta un nuevo archivo multimedia candidato
+- **THEN** el archivo queda asignado en la base de datos a personaje `lucie` y escena `capitulo_01` independientemente de su nombre o fecha
 
-#### Scenario: Detección de múltiples personajes en el nombre
-- **WHEN** el nombre del archivo contiene alias de múltiples personajes distintos (por ejemplo `lucieroligym.mp4` o `roliluciegym3.mp4`)
-- **THEN** el sistema no preselecciona ningún personaje y visualiza el aviso "Parece una escena con varios personajes" para decisión del usuario
+#### Scenario: No reasignación al modificar o desactivar capítulo
+- **WHEN** se desactiva o cambia el capítulo activo en el panel
+- **THEN** los archivos previamente detectados conservan su personaje y capítulo asignado sin modificaciones
 
-### Requirement: Generación de escena sugerida y agrupación por raíz de escena
-El sistema SHALL deducir un nombre de escena sugerido y editable para cada archivo de lote, eliminando la extensión, sufijos de duplicación del navegador `" (n)"` y dígitos numéricos finales, preservando el prefijo del personaje. Asimismo, el sistema SHALL agrupar en el mismo lote a todos los archivos que compartan la misma raíz de escena sugerida, independientemente de que posean marcas de tiempo `mtime` con diferencias mayores a la ventana temporal configurada.
+#### Scenario: Persistencia del capítulo activo tras reinicio
+- **WHEN** el servidor se reinicia con un capítulo activo configurado
+- **THEN** el estado del capítulo activo se recupera desde SQLite y el banner continúa visible
 
-#### Scenario: Limpieza de nombre y deducción de escena sugerida
-- **WHEN** se procesa un archivo con sufijos como `lucie atendiendo (1).mp4`
-- **THEN** el sistema extrae como escena sugerida `lucie atendiendo`, editable en el panel web
+### Requirement: Modo de respaldo sin capítulo activo por alias inicial y raíz estricta
+Cuando no exista un capítulo activo, el personaje SHALL deducirse estrictamente del alias al INICIO del nombre (`lucie`, `luci`, `roli`, `laroli`, `magui`, `mailen`); si el nombre contiene otro alias más adelante (por ejemplo `rolitirandoaguaalucie.jpg`), el personaje SHALL mantenerse como el inicial (`roli`). La escena sugerida SHALL obtenerse removiendo la extensión, sufijos de duplicación `" (n)"` y números finales, preservando el prefijo del personaje. El sistema SHALL agrupar primero por raíz de escena y agrupar por proximidad temporal (10 minutos) solo aquellos archivos sin raíz reconocible, prohibiendo estrictamente juntar en un lote raíces distintas.
 
-#### Scenario: Agrupación en lote por raíz común con distinta hora
-- **WHEN** existen dos archivos con la misma raíz de escena pero con marcas de tiempo alejadas (por ejemplo `lucie atendiendo.mp4` y `lucie atendiendo (1).mp4` con horas distintas)
-- **THEN** ambos archivos se agrupan en el mismo lote en lugar de fragmentarse en lotes separados
+#### Scenario: Prevalencia del alias al inicio del nombre
+- **WHEN** se detecta un archivo como `rolitirandoaguaalucie.jpg` sin capítulo activo
+- **THEN** el personaje asignado es `roli` y no se altera por la presencia de `lucie` posterior en el nombre
 
-### Requirement: Enrutamiento a sala de espera unificada sin subcarpetas de tipo
-Al ejecutar movimientos hacia el destino base (`ruta_destino_base`), el sistema SHALL ubicar videos e imágenes juntos en el directorio unificado `<destino>/<personaje>/<escena>/`, suprimiendo la creación de subcarpetas intermedias `"videos sin editar"` e `"imagenes"`. Las carpetas de escenas ya existentes en `~/Descargas` SHALL permanecer sin modificaciones.
+#### Scenario: Extracción de escena sugerida limpia
+- **WHEN** se evalúa el archivo `lucie atendiendo (1).mp4`
+- **THEN** el nombre de escena sugerido es `lucie atendiendo`
 
-#### Scenario: Movimiento a sala de espera con formato plano
-- **WHEN** se confirma el movimiento de un lote mixto (videos e imágenes) hacia una nueva escena en el destino base
-- **THEN** todos los archivos se trasladan directamente a `<destino>/<personaje>/<escena>/` sin subcarpetas por tipo
+#### Scenario: Separación de lotes para raíces diferentes en la misma ventana de tiempo
+- **WHEN** se detectan dos archivos con raíces distintas (por ejemplo `lucie asado.mp4` y `roli pileta.mp4`) dentro de la misma ventana de 10 minutos
+- **THEN** el sistema genera dos lotes independientes y nunca los agrupa juntos
 
-### Requirement: Filtro de patrones a ignorar y admisión de imágenes Gemini
-El sistema SHALL incorporar en `config_bandeja.json` la lista configurable `patrones_ignorar` (por defecto `["Screenshot_*", "Captura*"]`). Cualquier archivo cuyo nombre coincida con estos patrones SHALL ser descartado inmediatamente sin aparecer en la bandeja ni en "Sin identificar". Asimismo, el sistema SHALL admitir como candidatos de imágenes los archivos que coincidan con `Gemini_Generated_Image_*`.
+### Requirement: Confirmación y simulación unificada para mover lotes listos
+El panel web SHALL proveer el botón "Mover lotes listos" que abra una única ventana modal de simulación previa conteniendo todos los lotes tildados (permitiendo destildar lotes individualmente). Ningún archivo SHALL moverse sin la confirmación explícita de dicha simulación. Tras autorizarse, el sistema SHALL ejecutar y asentar los movimientos en `bitacora_bandeja.jsonl` por cada lote de forma individual, permitiendo revertir cada lote independientemente mediante `/api/deshacer`.
 
-#### Scenario: Descarte automático de archivos que coinciden con patrones a ignorar
-- **WHEN** se descarga un archivo coincidente con `Screenshot_2026.png` o `Captura_1.jpg`
-- **THEN** el archivo es ignorado de forma inmediata y no se muestra en ninguna sección de la bandeja
+#### Scenario: Simulación unificada de múltiples lotes seleccionados
+- **WHEN** el usuario pulsa "Mover lotes listos" con varios lotes marcados
+- **THEN** se despliega una única simulación que detalla todos los archivos a transferir de todos los lotes seleccionados
 
-#### Scenario: Admisión de imágenes generadas por Gemini
-- **WHEN** se descarga una imagen que responde al patrón `Gemini_Generated_Image_*.png`
-- **THEN** el sistema la reconoce como candidata del proyecto
+#### Scenario: Deshacer independiente por lote tras movimiento masivo
+- **WHEN** se confirma el movimiento unificado de múltiples lotes
+- **THEN** cada lote conserva su propio identificador de operación permitiendo su reversión individual desde el aviso o el historial
+
+### Requirement: Sala de espera unificada sin subcarpetas de tipo
+Al ejecutar movimientos hacia el destino base (`ruta_destino_base`), el sistema SHALL ubicar videos e imágenes juntos en el directorio unificado `<destino>/<personaje>/<capítulo>/`, suprimiendo la creación de subcarpetas intermedias `"videos sin editar"` e `"imagenes"`. Las carpetas de escenas ya existentes en `~/Descargas` SHALL permanecer sin modificaciones. Los nombres de capítulo SHALL satisfacer las validaciones de sistemas de archivos vigentes.
+
+#### Scenario: Destino plano para videos y fotos
+- **WHEN** se transfieren archivos de video e imagen hacia una escena o capítulo
+- **THEN** todos los archivos se ubican en `<destino>/<personaje>/<capítulo>/` sin subcarpetas de tipo
+
+### Requirement: Patrones de exclusión y candidatos de proyecto ampliados
+El sistema SHALL leer desde `config_bandeja.json` la lista `patrones_ignorar` (por defecto `["Screenshot_*", "Captura*"]`) y descartar de inmediato los archivos coincidentes. Los candidatos del proyecto SHALL incluir `grok-video-*`, `grok-image-*`, `Gemini_Generated_Image_*` y el patrón con fecha de 14 dígitos (Nano Banana). Los archivos no coincidentes con patrones, alias ni capítulo activo SHALL remitirse a "Sin identificar".
+
+#### Scenario: Omisión de archivos ignorados
+- **WHEN** un archivo coincide con `Screenshot_*` o `Captura*`
+- **THEN** el archivo es ignorado y no aparece en la bandeja ni en sin identificar
+
+#### Scenario: Detección de imágenes de Grok y Gemini
+- **WHEN** se descargan archivos con formato `grok-image-*.jpg` o `Gemini_Generated_Image_*.png`
+- **THEN** el sistema los clasifica como candidatos del proyecto
+
 
 
 

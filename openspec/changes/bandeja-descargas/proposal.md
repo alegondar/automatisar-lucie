@@ -54,23 +54,32 @@ Este cambio introduce y perfecciona la capacidad **`bandeja-descargas`**: un sis
   - El movimiento sigue registrado y disponible en la pestaña «Historial».
   - Si la ruta original está ocupada al pulsar «Deshacer», la acción se niega con el mensaje explicativo del servidor, sin pisar ni sufijar.
 
-- **Reconocimiento por nombre de personaje (Nuevo)**:
-  - Archivos multimedia cuyo nombre comience con un alias de `alias-personajes.json` (`lucie`, `luci`, `roli`, `laroli`, `magui`, `mailen`) se clasifican como candidatos directos del proyecto sin pasar por "Sin identificar".
-  - Preselección automática del personaje según el alias de inicio.
-  - Si el nombre contiene múltiples alias de personajes (ejemplos: `"lucieroligym"`, `"roliluciegym3"`), no se preselecciona personaje, se presenta el aviso `"Parece una escena con varios personajes"` y se permite la elección manual.
-  - Los archivos reconocidos solo se muestran en la bandeja; nunca se mueven de forma autónoma.
+- **Capítulo activo y asignación en tiempo de detección (Nuevo)**:
+  - En la parte superior del panel web, selector de personaje y campo "Capítulo actual" con botones "Activar" y "Desactivar".
+  - Persistencia en SQLite (`bandeja_estado`), manteniéndose activo tras reiniciar el servidor.
+  - Banner fijo siempre visible en el panel indicando si hay un capítulo activo o no.
+  - Mientras esté activo, todo archivo candidato detectado se asigna inmediatamente a `<personaje>/<capítulo>` en SQLite en el momento de su detección, sin importar nombre ni hora de descarga.
+  - Cambiar o desactivar el capítulo no reasigna archivos ya detectados.
+  - Los lotes en la interfaz se visualizan con personaje y escena ya precompletados y editables.
 
-- **Escena sugerida y agrupación por raíz (Nuevo)**:
-  - Generación de escena sugerida editable a partir del nombre del archivo, eliminando la extensión, sufijos duplicados de descarga (`" (n)"`) y dígitos finales, conservando el prefijo del personaje.
-  - Agrupación en el mismo lote de todos los archivos que comparten la misma raíz de escena sugerida, independientemente de diferencias en la marca de tiempo `mtime`.
+- **Modo respaldo sin capítulo activo (Nuevo)**:
+  - El personaje se deduce estrictamente del alias al INICIO del nombre (`lucie`, `luci`, `roli`, `laroli`, `magui`, `mailen`); si se menciona a otro personaje más adelante (ej: `rolitirandoaguaalucie.jpg`), se mantiene el personaje del inicio (`roli`).
+  - La escena sugerida se extrae eliminando la extensión, sufijos de duplicación `" (n)"` de Chrome y números finales, preservando el prefijo del personaje (ej: `lucie atendiendo (1).mp4` -> `lucie atendiendo`).
+  - Agrupación por raíz: los archivos se agrupan primero por esa raíz; los archivos sin raíz reconocible se agrupan por proximidad temporal (ventana de 10 minutos). Nunca se mezclan en un mismo lote raíces distintas.
+
+- **Confirmación unificada "Mover lotes listos" (Nuevo)**:
+  - Botón "Mover lotes listos" en la cabecera que abre una única simulación previa con todos los lotes seleccionados (cada lote dispone de casilla para desmarcarse individualmente).
+  - Confirmación global en un solo paso: ningún archivo se mueve sin esta autorización.
+  - Registro en bitácora `.jsonl` y mecanismo de deshacer preservados por lote de manera independiente.
 
 - **Sala de espera unificada (Nuevo)**:
-  - Organización de destino en `<destino>/<personaje>/<escena>/` con videos e imágenes juntos en la misma carpeta, suprimiendo las subcarpetas intermedias `"videos sin editar"` e `"imagenes"`.
-  - Escenas existentes en `~/Descargas`: se mantienen sin alteraciones.
+  - Organización de destino en `<destino>/<personaje>/<capítulo>/` con videos e imágenes juntos en la misma carpeta, suprimiendo las subcarpetas intermedias `"videos sin editar"` e `"imagenes"`.
+  - Escenas existentes en `~/Descargas`: se mantienen sin alteraciones. Validación existente de nombres de escena (Windows/exFAT, longitud, caracteres prohibidos).
 
-- **Patrones a ignorar y admisión de Gemini (Nuevo)**:
-  - Incorporación en `config_bandeja.json` de la lista configurable `"patrones_ignorar"` (por defecto `["Screenshot_*", "Captura*"]`) para que esos archivos nunca se listen en la bandeja.
-  - Incorporación de `"Gemini_Generated_Image_*"` en los patrones de imágenes candidatos del proyecto.
+- **Patrones a ignorar y patrones candidatos ampliados (Nuevo)**:
+  - Incorporación en `config_bandeja.json` de la lista configurable `"patrones_ignorar"` (por defecto `["Screenshot_*", "Captura*"]`) para que esos archivos nunca aparezcan en la bandeja ni en "Sin identificar".
+  - Ampliación de patrones candidatos del proyecto: `"grok-video-*"`, `"grok-image-*"`, `"Gemini_Generated_Image_*"` y el patrón de imágenes con marca temporal de 14 dígitos (Nano Banana).
+  - Los archivos que no clasifiquen por patrón, por alias ni por capítulo activo continúan dirigiéndose a la pestaña "Sin identificar".
 
 - **Estructura de destino e integridad de movimiento**:
   - Destino configurable (por defecto `~/Descargas/_lucie/<personaje>/<escena>/`).
