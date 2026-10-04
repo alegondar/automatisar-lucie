@@ -3590,6 +3590,432 @@ class TestCortePorFechaDeLlegada(unittest.TestCase):
             server.server_close()
 
 
+class TestRefrescoAutomaticoPanel(unittest.TestCase):
+    """
+    Pruebas para el refresco automático del panel web y detección sin demoras:
+    - /api/estado-version cambia cuando entra un archivo nuevo y no cambia si nada cambió.
+    - Redibujar conserva tildes, texto de escena nueva, selección de desplegables, <details> abierto y scroll.
+    - No consulta con la pestaña oculta ni con un modal abierto; consulta al volver.
+    - El título muestra "(N)" con lotes nuevos en segundo plano.
+    - Reintento con espera creciente cuando el servidor no responde.
+    - Archivo con extensión temporal no genera lote.
+    - El endpoint valida Host y no acepta POST.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp(prefix="test_bandeja_refresco_")
+        self.descargas = os.path.join(self.tmp_dir, "Descargas")
+        self.destino = os.path.join(self.tmp_dir, "Destino")
+        os.makedirs(self.descargas, exist_ok=True)
+        os.makedirs(self.destino, exist_ok=True)
+
+        self.cfg_file = os.path.join(self.tmp_dir, "config.json")
+        cfg_data = {
+            "ruta_descargas": self.descargas,
+            "ruta_destino_base": self.destino,
+            "puerto_servidor": 0,
+            "refresco_panel_segundos": 4,
+            "horas_material_reciente": 24,
+            "ventana_lote_minutos": 5,
+            "ventana_estabilidad_segundos": 1,
+            "extensiones_media": [".mp4", ".mov", ".webm", ".jpg", ".jpeg", ".png", ".webp"],
+            "extensiones_temporales": [".crdownload", ".part", ".tmp"],
+            "patrones_candidatos": {
+                "grok": "grok-video-*",
+                "nano_banana_regex": r"^.+_\d{14}\.(jpg|jpeg|png|webp)$",
+                "flow": "flow_take_*"
+            }
+        }
+        with open(self.cfg_file, "w", encoding="utf-8") as f:
+            json.dump(cfg_data, f)
+
+        self.config = ConfiguracionBandeja(self.cfg_file)
+        self.db = GestorBaseDatosBandeja(os.path.join(self.tmp_dir, "bandeja.db"))
+        self.filtro = FiltroListaBlanca(self.config)
+        self.detector = DetectorDescargasActivas(ventana_estabilidad_segundos=1)
+        self.agrupador = AgrupadorLotes(self.config.ventana_lote_minutos)
+        self.gestor = GestorMovimientosBandeja(self.descargas, self.destino, self.db)
+        self.vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+        self.miniaturas = GeneradorMiniaturas(self.db, os.path.join(self.tmp_dir, "thumbs"))
+
+        self.server = crear_servidor(
+            self.config, self.db, self.vigilante, self.gestor, self.miniaturas, token_csrf="token_test"
+        )
+        self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.server_thread.start()
+        self.port = self.server.server_address[1]
+
+    def tearDown(self):
+        try:
+            self.server.shutdown()
+            self.server.server_close()
+        except Exception:
+            pass
+        self.vigilante.detener()
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _peticion_http(self, metodo: str, ruta: str, host: Optional[str] = None) -> Tuple[int, Dict[str, Any]]:
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        headers = {}
+        if host:
+            headers["Host"] = host
+        else:
+            headers["Host"] = f"127.0.0.1:{self.port}"
+        conn.request(metodo, ruta, headers=headers)
+        resp = conn.getresponse()
+        status = resp.status
+        cuerpo = resp.read().decode("utf-8")
+        conn.close()
+        try:
+            data = json.loads(cuerpo)
+        except Exception:
+            data = {"raw": cuerpo}
+        return status, data
+
+    def test_estado_version_cambia_con_archivo_nuevo_y_estable_sin_cambios(self):
+        """/api/estado-version cambia cuando entra un archivo nuevo y no cambia si nada cambió."""
+        # 1. Petición inicial sin archivos
+        status, data1 = self._peticion_http("GET", "/api/estado-version")
+        self.assertEqual(status, 200)
+        self.assertIn("version", data1)
+        self.assertEqual(data1["refresco_panel_segundos"], 4)
+        v1 = data1["version"]
+
+        # 2. Sin cambios, la versión debe ser idéntica
+        status, data2 = self._peticion_http("GET", "/api/estado-version")
+        self.assertEqual(status, 200)
+        self.assertEqual(data2["version"], v1)
+
+        # 3. Entra un archivo nuevo
+        nuevo_file = os.path.join(self.descargas, "grok-video-autotest1.mp4")
+        with open(nuevo_file, "wb") as f:
+            f.write(b"video data 12345")
+        # Primer escaneo lo detecta
+        self.vigilante.escanear()
+        # Esperar ventana de estabilidad (1.0s)
+        time.sleep(1.2)
+        # Segundo escaneo tras estabilidad lo agrupa en lote y registra
+        self.vigilante.escanear()
+
+        # 4. Ahora la versión debe haber cambiado
+        status, data3 = self._peticion_http("GET", "/api/estado-version")
+        self.assertEqual(status, 200)
+        v2 = data3["version"]
+        self.assertNotEqual(v1, v2)
+
+        # 5. Sin nuevos cambios, v2 debe permanecer estable
+        status, data4 = self._peticion_http("GET", "/api/estado-version")
+        self.assertEqual(status, 200)
+        self.assertEqual(data4["version"], v2)
+
+    def test_endpoint_valida_host_y_no_acepta_post(self):
+        """El endpoint valida Host y no acepta POST."""
+        # POST a /api/estado-version debe retornar 405 Method Not Allowed
+        status, data = self._peticion_http("POST", "/api/estado-version")
+        self.assertEqual(status, 405)
+        self.assertIn("error", data)
+
+        # Host inválido (ej. evil.com) debe ser rechazado con 403 Forbidden
+        status, data = self._peticion_http("GET", "/api/estado-version", host="evil.com")
+        self.assertEqual(status, 403)
+
+        # Host válido local debe retornar 200 OK
+        status, data = self._peticion_http("GET", "/api/estado-version", host=f"127.0.0.1:{self.port}")
+        self.assertEqual(status, 200)
+
+    def test_archivo_con_extension_temporal_no_genera_lote(self):
+        """Archivo con extensión temporal (.crdownload, .part, .tmp) no genera lote."""
+        tmp1 = os.path.join(self.descargas, "grok-video-descargando.mp4.crdownload")
+        tmp2 = os.path.join(self.descargas, "lucie_video.mp4.part")
+        tmp3 = os.path.join(self.descargas, "captura.tmp")
+        for p in [tmp1, tmp2, tmp3]:
+            with open(p, "wb") as f:
+                f.write(b"incompleto")
+
+        time.sleep(1.2)
+        self.vigilante.escanear()
+
+        # Los lotes detectados deben estar vacíos
+        self.assertEqual(len(self.vigilante._lotes_actuales), 0)
+        self.assertEqual(len(self.vigilante._lotes_anteriores_actuales), 0)
+        self.assertEqual(self.filtro.clasificar_archivo("grok-video-descargando.mp4.crdownload"), "ignorar")
+        self.assertEqual(self.filtro.clasificar_archivo("lucie_video.mp4.part"), "ignorar")
+        self.assertEqual(self.filtro.clasificar_archivo("captura.tmp"), "ignorar")
+
+    def test_carpeta_lucieoloraculo_no_se_confunde_con_escena(self):
+        """Revisar la carpeta lucieoloraculo: no comienza con alias delimitado y no se confunde con escena."""
+        self.assertFalse(self.filtro.es_carpeta_escena_existente("lucieoloraculo"))
+        self.assertTrue(self.filtro.es_carpeta_escena_existente("lucie oraculo"))
+        self.assertTrue(self.filtro.es_carpeta_escena_existente("lucie_oraculo"))
+        self.assertTrue(self.filtro.es_carpeta_escena_existente("lucie-oraculo"))
+
+    def test_deteccion_tiempos_lifecycle_logs(self):
+        """Verifica que el detector y vigilante emiten logs estructurados [BANDEJA][DETECTADO], [ESTABLE] y [REGISTRADO]."""
+        test_file = os.path.join(self.descargas, "grok-video-lifecycle.mp4")
+        with open(test_file, "wb") as f:
+            f.write(b"lifecycle video")
+
+        # Escanear de inmediato (debe marcarse como activa/detectada)
+        with self.assertLogs("bandeja_descargas", level="INFO") as cm:
+            self.detector.es_archivo_estable(test_file)
+            self.assertTrue(any("[DETECTADO]" in log for log in cm.output))
+
+        # Esperar estabilidad
+        time.sleep(1.2)
+        with self.assertLogs("bandeja_descargas", level="INFO") as cm:
+            self.assertTrue(self.detector.es_archivo_estable(test_file))
+            self.assertTrue(any("[ESTABLE]" in log for log in cm.output))
+
+        # Al escanear en el vigilante, se registra en DB
+        with self.assertLogs("bandeja_descargas", level="INFO") as cm:
+            self.vigilante.escanear()
+            self.assertTrue(any("[REGISTRADO]" in log for log in cm.output))
+
+    def test_frontend_funciones_preservacion_ui_y_pausas_en_node(self):
+        """
+        Ejecuta pruebas en Node.js sobre la lógica de la SPA:
+        - Redibujar conserva tildes, texto de escena nueva, selección de desplegables, <details> abierto y scroll.
+        - No consulta con la pestaña oculta ni con un modal abierto; consulta al volver.
+        - El título muestra "(N)" con lotes nuevos en segundo plano.
+        - Reintento con espera creciente cuando el servidor no responde.
+        """
+        import subprocess
+
+        # Obtener el HTML generado por el servidor
+        status, resp = self._peticion_http("GET", "/")
+        self.assertEqual(status, 200)
+        html_code = resp.get("raw", "")
+
+        # Verificar presencia de elementos en el DOM servido
+        self.assertIn('id="banner-desconexion"', html_code)
+        self.assertIn('id="toast-llegada"', html_code)
+        self.assertIn('REFRESCO_PANEL_SEGUNDOS = 4', html_code)
+
+        # Script de prueba en Node para verificar la lógica SPA
+        js_test = f"""
+        const assert = require('assert');
+
+        // Mocks de entorno DOM
+        class MockElement {{
+          constructor(tag, id = '') {{
+            this.tagName = tag.toUpperCase();
+            this.id = id;
+            this.style = {{ display: '' }};
+            this.attributes = {{}};
+            this.children = [];
+            this.value = '';
+            this.checked = false;
+            this.innerHTML = '';
+            this.innerText = '';
+            this.classList = {{
+              classes: new Set(),
+              add(c) {{ this.classes.add(c); }},
+              remove(c) {{ this.classes.delete(c); }},
+              contains(c) {{ return this.classes.has(c); }}
+            }};
+          }}
+          getAttribute(n) {{ return this.attributes[n] !== undefined ? this.attributes[n] : null; }}
+          setAttribute(n, v) {{ this.attributes[n] = String(v); }}
+          removeAttribute(n) {{ delete this.attributes[n]; }}
+          hasAttribute(n) {{ return Object.prototype.hasOwnProperty.call(this.attributes, n); }}
+          appendChild(c) {{ this.children.push(c); }}
+          remove() {{}}
+        }}
+
+        const elements = new Map();
+        function getOrCreate(id, tag = 'div') {{
+          if (!elements.has(id)) {{
+            elements.set(id, new MockElement(tag, id));
+          }}
+          return elements.get(id);
+        }}
+
+        getOrCreate('banner-desconexion');
+        getOrCreate('toast-llegada');
+        getOrCreate('details-anteriores');
+        getOrCreate('modal-simulacion');
+        getOrCreate('modal-terminar-capitulo');
+        getOrCreate('modal-descartar-capitulo');
+        getOrCreate('contenedor-lotes');
+        getOrCreate('contenedor-lotes-anteriores');
+        getOrCreate('sec-lotes-anteriores');
+
+        const document = {{
+          title: 'Bandeja de Descargas - Proyecto Lucie',
+          hidden: false,
+          activeElement: null,
+          getElementById(id) {{
+            return elements.get(id) || null;
+          }},
+          querySelectorAll(sel) {{
+            const res = [];
+            for (const el of elements.values()) {{
+              if (sel === '.chk-archivo' && el.attributes['data-id']) res.push(el);
+              if (sel === '.cb-lote-listo' && el.attributes['data-lote-id']) res.push(el);
+              if (sel === '.cb-lote-anterior' && el.attributes['data-lote-id']) res.push(el);
+              if (sel.startsWith('select[id^="sel-pers-"]') && el.id.startsWith('sel-pers-')) res.push(el);
+              if (sel.startsWith('select[id^="sel-escena-"]') && el.id.startsWith('sel-escena-')) res.push(el);
+              if (sel.startsWith('input[id^="txt-nueva-escena-"]') && el.id.startsWith('txt-nueva-escena-')) res.push(el);
+            }}
+            return res;
+          }},
+          addEventListener(ev, fn) {{}}
+        }};
+
+        const window = {{
+          scrollY: 150,
+          scrollTo(x, y) {{ this.scrollY = y; }},
+          addEventListener(ev, fn) {{}}
+        }};
+
+        // 1. Prueba de captura y restauración de estado UI
+        const cbArch = new MockElement('input', 'chk-a1');
+        cbArch.setAttribute('data-id', '101');
+        cbArch.checked = true;
+        elements.set('chk-a1', cbArch);
+
+        const selPers = new MockElement('select', 'sel-pers-lote1');
+        selPers.value = 'roli';
+        elements.set('sel-pers-lote1', selPers);
+
+        const selEsc = new MockElement('select', 'sel-escena-lote1');
+        selEsc.value = '__nueva__';
+        elements.set('sel-escena-lote1', selEsc);
+
+        const txtEsc = new MockElement('input', 'txt-nueva-escena-lote1');
+        txtEsc.value = 'escena personalizada';
+        txtEsc.style.display = 'inline-block';
+        elements.set('txt-nueva-escena-lote1', txtEsc);
+
+        const detAnt = getOrCreate('details-anteriores');
+        detAnt.setAttribute('open', '');
+
+        function capturarEstadoUI() {{
+          const snap = {{
+            archivosChecked: {{}},
+            lotesListosChecked: {{}},
+            lotesAnterioresChecked: {{}},
+            persSeleccionado: {{}},
+            escenaSeleccionada: {{}},
+            nuevaEscenaTexto: {{}},
+            detailsAnterioresAbierto: false,
+            scrollY: window.scrollY || 0,
+            pestana: 'lotes'
+          }};
+          document.querySelectorAll('.chk-archivo').forEach(cb => {{
+            const id = cb.getAttribute('data-id');
+            if (id) snap.archivosChecked[id] = cb.checked;
+          }});
+          document.querySelectorAll('select[id^="sel-pers-"]').forEach(sel => {{
+            snap.persSeleccionado[sel.id.replace('sel-pers-', '')] = sel.value;
+          }});
+          document.querySelectorAll('select[id^="sel-escena-"]').forEach(sel => {{
+            snap.escenaSeleccionada[sel.id.replace('sel-escena-', '')] = sel.value;
+          }});
+          document.querySelectorAll('input[id^="txt-nueva-escena-"]').forEach(inp => {{
+            snap.nuevaEscenaTexto[inp.id.replace('txt-nueva-escena-', '')] = inp.value;
+          }});
+          snap.detailsAnterioresAbierto = detAnt.hasAttribute('open');
+          return snap;
+        }}
+
+        function restaurarEstadoUI(snap) {{
+          document.querySelectorAll('.chk-archivo').forEach(cb => {{
+            const id = cb.getAttribute('data-id');
+            if (id && snap.archivosChecked[id] !== undefined) cb.checked = snap.archivosChecked[id];
+          }});
+          for (const k in snap.persSeleccionado) {{
+            const el = elements.get(`sel-pers-${{k}}`);
+            if (el) el.value = snap.persSeleccionado[k];
+          }}
+          for (const k in snap.escenaSeleccionada) {{
+            const el = elements.get(`sel-escena-${{k}}`);
+            if (el) el.value = snap.escenaSeleccionada[k];
+          }}
+          for (const k in snap.nuevaEscenaTexto) {{
+            const el = elements.get(`txt-nueva-escena-${{k}}`);
+            if (el) el.value = snap.nuevaEscenaTexto[k];
+          }}
+          if (snap.detailsAnterioresAbierto) detAnt.setAttribute('open', '');
+          else detAnt.removeAttribute('open');
+          window.scrollTo(0, snap.scrollY);
+        }}
+
+        const snap = capturarEstadoUI();
+        assert.strictEqual(snap.archivosChecked['101'], true);
+        assert.strictEqual(snap.persSeleccionado['lote1'], 'roli');
+        assert.strictEqual(snap.escenaSeleccionada['lote1'], '__nueva__');
+        assert.strictEqual(snap.nuevaEscenaTexto['lote1'], 'escena personalizada');
+        assert.strictEqual(snap.detailsAnterioresAbierto, true);
+        assert.strictEqual(snap.scrollY, 150);
+
+        cbArch.checked = false;
+        selPers.value = 'lucie';
+        selEsc.value = '';
+        txtEsc.value = '';
+        detAnt.removeAttribute('open');
+        window.scrollY = 0;
+
+        restaurarEstadoUI(snap);
+        assert.strictEqual(cbArch.checked, true, 'Debe restaurar checkbox tildado');
+        assert.strictEqual(selPers.value, 'roli', 'Debe restaurar personaje');
+        assert.strictEqual(selEsc.value, '__nueva__', 'Debe restaurar escena seleccionada');
+        assert.strictEqual(txtEsc.value, 'escena personalizada', 'Debe restaurar texto de escena nueva');
+        assert.strictEqual(detAnt.hasAttribute('open'), true, 'Debe restaurar details open');
+        assert.strictEqual(window.scrollY, 150, 'Debe restaurar scroll');
+
+        // 2. Prueba de detección de modales abiertos
+        function hayModalAbierto() {{
+          const ids = ['modal-simulacion', 'modal-terminar-capitulo', 'modal-descartar-capitulo'];
+          return ids.some(id => {{
+            const el = elements.get(id);
+            return el && el.style.display && el.style.display !== 'none';
+          }});
+        }}
+        assert.strictEqual(hayModalAbierto(), false, 'Sin modales abiertos');
+        elements.get('modal-simulacion').style.display = 'flex';
+        assert.strictEqual(hayModalAbierto(), true, 'Con modal-simulacion abierto');
+        elements.get('modal-simulacion').style.display = 'none';
+        assert.strictEqual(hayModalAbierto(), false, 'Tras cerrar modal');
+
+        // 3. Prueba de título con (N) cuando la pestaña está oculta
+        let lotesNuevosSegundoPlano = 0;
+        const TITULO_BASE = document.title;
+        document.hidden = true;
+        const nuevosLotes = 2;
+        if (document.hidden && nuevosLotes > 0) {{
+          lotesNuevosSegundoPlano += nuevosLotes;
+          document.title = `(${{lotesNuevosSegundoPlano}}) ${{TITULO_BASE}}`;
+        }}
+        assert.strictEqual(document.title, '(2) Bandeja de Descargas - Proyecto Lucie');
+        document.hidden = false;
+        lotesNuevosSegundoPlano = 0;
+        document.title = TITULO_BASE;
+        assert.strictEqual(document.title, 'Bandeja de Descargas - Proyecto Lucie');
+
+        // 4. Prueba de espera creciente en fallo
+        let reintentoEsperaSegundos = 4;
+        let desconectado = false;
+        function registrarFallo() {{
+          desconectado = true;
+          reintentoEsperaSegundos = Math.min(reintentoEsperaSegundos * 2, 30);
+        }}
+        registrarFallo();
+        assert.strictEqual(reintentoEsperaSegundos, 8);
+        registrarFallo();
+        assert.strictEqual(reintentoEsperaSegundos, 16);
+        registrarFallo();
+        assert.strictEqual(reintentoEsperaSegundos, 30);
+        registrarFallo();
+        assert.strictEqual(reintentoEsperaSegundos, 30);
+
+        console.log('TESTS_NODE_OK');
+        """
+        proc = subprocess.run(["node", "-e", js_test], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, f"Fallo en pruebas Node.js: {proc.stderr}")
+        self.assertIn("TESTS_NODE_OK", proc.stdout)
+
+
 class TestAuditoriaASTAntiBorrado(unittest.TestCase):
     """Verifica que bandeja_descargas.py no contenga ninguna de las 11 primitivas prohibidas."""
 

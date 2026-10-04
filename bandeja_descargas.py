@@ -22,6 +22,8 @@ import hashlib
 import hmac
 import html
 import json
+import contextlib
+import logging
 import os
 import re
 import secrets
@@ -34,6 +36,13 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Set, Tuple, Any, Union
 from urllib.parse import parse_qs, urlparse
+
+logger = logging.getLogger("bandeja_descargas")
+if not logger.handlers:
+    _handler_log = logging.StreamHandler()
+    _handler_log.setFormatter(logging.Formatter("[%(asctime)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+    logger.addHandler(_handler_log)
+    logger.setLevel(logging.INFO)
 
 # Constantes del sistema
 EXTENSIONES_MEDIA_DEFECTO = [".mp4", ".mov", ".webm", ".jpg", ".jpeg", ".png", ".webp"]
@@ -129,6 +138,7 @@ class ConfiguracionBandeja:
         self.horas_alerta_capitulo_olvidado = 12
         self.minutos_antes_inicio_capitulo = 0
         self.horas_material_reciente = 0.0
+        self.refresco_panel_segundos = 4
         self.cargar()
 
     def cargar(self):
@@ -152,6 +162,11 @@ class ConfiguracionBandeja:
                     self.horas_material_reciente = max(0.0, float(datos["horas_material_reciente"]))
                 except (ValueError, TypeError):
                     self.horas_material_reciente = 0.0
+            if "refresco_panel_segundos" in datos:
+                try:
+                    self.refresco_panel_segundos = max(0, int(datos["refresco_panel_segundos"]))
+                except (ValueError, TypeError):
+                    self.refresco_panel_segundos = 4
             if "intervalo_sondeo_segundos" in datos:
                 self.intervalo_sondeo_segundos = max(1, int(datos["intervalo_sondeo_segundos"]))
             if "ventana_lote_minutos" in datos:
@@ -182,10 +197,15 @@ class GestorBaseDatosBandeja:
         self._lock = threading.Lock()
         self.inicializar_tablas()
 
-    def _conectar(self) -> sqlite3.Connection:
+    @contextlib.contextmanager
+    def _conectar(self):
         con = sqlite3.connect(self.ruta_db, timeout=10.0)
         con.row_factory = sqlite3.Row
-        return con
+        try:
+            with con:
+                yield con
+        finally:
+            con.close()
 
     def inicializar_tablas(self):
         with self._lock, self._conectar() as con:
@@ -761,6 +781,39 @@ class GestorBaseDatosBandeja:
         diferencia_horas = (ahora_dt - fecha_ref).total_seconds() / 3600.0
         return diferencia_horas >= horas_limite
 
+    def obtener_resumen_version(self) -> Dict[str, Any]:
+        """
+        Retorna un resumen liviano del estado de la base de datos relevante para la vista.
+        """
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            cur.execute("""
+            SELECT id, personaje, nombre, estado, descartado, en_foco, fecha_inicio, fecha_fin, fecha_ultimo_aviso, archivos_movidos
+            FROM bandeja_capitulos
+            ORDER BY id ASC
+            """)
+            capitulos = [tuple(r) for r in cur.fetchall()]
+
+            cur.execute("""
+            SELECT estado, COUNT(*) as c
+            FROM bandeja_archivos
+            GROUP BY estado
+            ORDER BY estado ASC
+            """)
+            conteos_estado = [(r["estado"], r["c"]) for r in cur.fetchall()]
+
+            cur.execute("SELECT MAX(id) as max_id, COUNT(*) as tot FROM bandeja_archivos")
+            row_arch = cur.fetchone()
+            max_arch_id = row_arch["max_id"] or 0
+            tot_arch = row_arch["tot"] or 0
+
+            return {
+                "capitulos": capitulos,
+                "conteos_estado": conteos_estado,
+                "max_arch_id": max_arch_id,
+                "tot_arch": tot_arch
+            }
+
 
 class FiltroListaBlanca:
     """Aplica la lista blanca estricta para determinar candidatos, escenas y no reconocidos."""
@@ -1040,6 +1093,7 @@ class DetectorDescargasActivas:
     def __init__(self, ventana_estabilidad_segundos: float = 5.0):
         self.ventana = ventana_estabilidad_segundos
         self._historial_tamanio: Dict[str, Tuple[int, float]] = {}
+        self._estables_notificados: Set[str] = set()
 
     def es_archivo_estable(self, ruta_completa: str) -> bool:
         """Determina si el archivo no ha cambiado de tamaño en al menos ventana_estabilidad_segundos."""
@@ -1052,6 +1106,11 @@ class DetectorDescargasActivas:
 
         if ruta_completa not in self._historial_tamanio:
             self._historial_tamanio[ruta_completa] = (tamanio_actual, ahora)
+            logger.info(
+                f"[BANDEJA][DETECTADO] Archivo: '{os.path.basename(ruta_completa)}' | "
+                f"Tamaño: {tamanio_actual} B | mtime: {st.st_mtime:.2f} | ctime: {st.st_ctime:.2f} | "
+                f"ts: {datetime.datetime.now().isoformat()}"
+            )
             return False
 
         tamanio_previo, timestamp_previo = self._historial_tamanio[ruta_completa]
@@ -1061,6 +1120,13 @@ class DetectorDescargasActivas:
 
         # Si el tamaño no cambió, comprobar si ya pasaron los segundos requeridos
         if (ahora - timestamp_previo) >= self.ventana:
+            if ruta_completa not in self._estables_notificados:
+                self._estables_notificados.add(ruta_completa)
+                logger.info(
+                    f"[BANDEJA][ESTABLE] Archivo: '{os.path.basename(ruta_completa)}' | "
+                    f"Tamaño: {tamanio_actual} B | Estable tras {ahora - timestamp_previo:.1f}s | "
+                    f"ts: {datetime.datetime.now().isoformat()}"
+                )
             return True
 
         return False
@@ -1069,6 +1135,7 @@ class DetectorDescargasActivas:
         rutas_borrar = [r for r in self._historial_tamanio if r not in rutas_existentes]
         for r in rutas_borrar:
             self._historial_tamanio.pop(r, None)
+            self._estables_notificados.discard(r)
 
 
 class AgrupadorLotes:
@@ -2222,25 +2289,23 @@ class VigilanteBandeja:
             if es_anterior:
                 # Regla 2: Archivo anterior al inicio del capítulo activo:
                 # NO se asigna al capítulo ni se preselecciona.
-                if tipo_clasificacion == "candidato":
-                    pers_alias = self.filtro.obtener_personaje_de_alias_inicial(entrada)
-                    personaje_actual = pers_alias
-                    escena_actual = None
-                    raiz_escena = None
-                    estado_actual = "detectado"
+                pers_alias = self.filtro.obtener_personaje_de_alias_inicial(entrada) if tipo_clasificacion == "candidato" else None
+                personaje_actual = pers_alias
+                escena_actual = None
+                raiz_escena = None
+                estado_actual = "detectado"
+                if not reg or reg.get("estado") != "detectado" or reg.get("personaje") != personaje_actual or reg.get("escena") is not None:
                     id_db = self.db.registrar_o_actualizar(
                         hash_val, ruta_completa, "detectado",
                         personaje=personaje_actual, escena=None, limpiar_escena=True
                     )
-                else:
-                    personaje_actual = None
-                    escena_actual = None
-                    raiz_escena = None
-                    estado_actual = "detectado"
-                    id_db = self.db.registrar_o_actualizar(
-                        hash_val, ruta_completa, "detectado",
-                        personaje=None, escena=None, limpiar_escena=True
+                    logger.info(
+                        f"[BANDEJA][REGISTRADO] Archivo: '{entrada}' (anterior) | Hash: {hash_val[:12]}... | "
+                        f"Estado: detectado | Personaje: {personaje_actual} | "
+                        f"ts: {datetime.datetime.now().isoformat()}"
                     )
+                else:
+                    id_db = reg["id"]
             else:
                 if reg and reg["estado"] != "detectado":
                     # Archivo ya detectado previamente con decisión tomada: respetar
@@ -2259,10 +2324,18 @@ class VigilanteBandeja:
                         personaje_actual = cap_foco["personaje"]
                         escena_actual = cap_foco["nombre"]
                         estado_actual = "clasificado"
-                        id_db = self.db.registrar_o_actualizar(
-                            hash_val, ruta_completa, "clasificado",
-                            personaje=personaje_actual, escena=escena_actual
-                        )
+                        if not reg or reg.get("estado") != "clasificado" or reg.get("personaje") != personaje_actual or reg.get("escena") != escena_actual:
+                            id_db = self.db.registrar_o_actualizar(
+                                hash_val, ruta_completa, "clasificado",
+                                personaje=personaje_actual, escena=escena_actual
+                            )
+                            logger.info(
+                                f"[BANDEJA][REGISTRADO] Archivo: '{entrada}' | Hash: {hash_val[:12]}... | "
+                                f"Estado: clasificado | Personaje: {personaje_actual} | Escena: {escena_actual} | "
+                                f"ts: {datetime.datetime.now().isoformat()}"
+                            )
+                        else:
+                            id_db = reg["id"]
                         raiz_escena = f"{personaje_actual}::{escena_actual}"
                     else:
                         # Modo de respaldo por alias al inicio sin capítulo en foco
@@ -2271,17 +2344,32 @@ class VigilanteBandeja:
                             personaje_actual = pers_alias
                             escena_actual = self.filtro.extraer_escena_sugerida(entrada)
                             raiz_escena = self.filtro.obtener_raiz_escena(entrada)
-                            id_db = self.db.registrar_o_actualizar(
-                                hash_val, ruta_completa, "detectado",
-                                personaje=personaje_actual, escena=escena_actual
-                            )
+                            if not reg or reg.get("estado") != "detectado" or reg.get("personaje") != personaje_actual or reg.get("escena") != escena_actual:
+                                id_db = self.db.registrar_o_actualizar(
+                                    hash_val, ruta_completa, "detectado",
+                                    personaje=personaje_actual, escena=escena_actual
+                                )
+                                logger.info(
+                                    f"[BANDEJA][REGISTRADO] Archivo: '{entrada}' | Hash: {hash_val[:12]}... | "
+                                    f"Estado: detectado | Personaje: {personaje_actual} | Escena: {escena_actual} | "
+                                    f"ts: {datetime.datetime.now().isoformat()}"
+                                )
+                            else:
+                                id_db = reg["id"]
                             estado_actual = "detectado"
                         else:
                             personaje_actual = None
                             escena_actual = None
                             raiz_escena = None
-                            id_db = self.db.registrar_o_actualizar(hash_val, ruta_completa, "detectado")
                             estado_actual = "detectado"
+                            if not reg or reg.get("estado") != "detectado":
+                                id_db = self.db.registrar_o_actualizar(hash_val, ruta_completa, "detectado")
+                                logger.info(
+                                    f"[BANDEJA][REGISTRADO] Archivo: '{entrada}' | Hash: {hash_val[:12]}... | "
+                                    f"Estado: detectado | ts: {datetime.datetime.now().isoformat()}"
+                                )
+                            else:
+                                id_db = reg["id"]
 
             fecha_llegada_str = datetime.datetime.fromtimestamp(fecha_llegada).strftime("%Y-%m-%d %H:%M:%S")
             item_info = {
@@ -2405,6 +2493,51 @@ class VigilanteBandeja:
                 "escenas": list(self._escenas_existentes_actuales)
             }
 
+    def obtener_token_version(self) -> str:
+        """
+        Calcula un token determinista basado en todo lo que afecta a la vista:
+        - Lotes principales y lotes anteriores (IDs, hashes, estados).
+        - Cantidad de archivos sin identificar.
+        - Capítulos abiertos, cerrados y descartados.
+        - Capítulo en foco y balance (pendientes/movidos).
+        - Estado de alertas (olvidado).
+        """
+        with self._lock:
+            res_lotes = []
+            for l in self._lotes_actuales:
+                archs = [(a.get("id_db"), a.get("hash"), a.get("estado"), a.get("es_anterior")) for a in l.get("archivos", [])]
+                res_lotes.append((l.get("lote_id"), l.get("escena_sugerida"), l.get("personaje_sugerido"), archs))
+
+            res_anteriores = []
+            for l in self._lotes_anteriores_actuales:
+                archs = [(a.get("id_db"), a.get("hash"), a.get("estado"), a.get("es_anterior")) for a in l.get("archivos", [])]
+                res_anteriores.append((l.get("lote_id"), archs))
+
+            res_sin_id = [(a.get("id_db"), a.get("hash"), a.get("nombre")) for a in self._sin_identificar_actuales]
+            res_escenas = [(e.get("nombre"), e.get("personaje"), e.get("tipo")) for e in self._escenas_existentes_actuales]
+
+        res_db = self.db.obtener_resumen_version()
+        alerta_olvidado = self.db.es_capitulo_olvidado(float(self.config.horas_alerta_capitulo_olvidado))
+        cap_foco = self.db.obtener_capitulo_en_foco()
+
+        balance = (0, 0)
+        if cap_foco and cap_foco.get("habilitado") and cap_foco.get("personaje") and cap_foco.get("nombre"):
+            bal_dict = self.db.calcular_balance_capitulo(cap_foco["personaje"], cap_foco["nombre"], verificar_disco=False)
+            balance = (bal_dict.get("pendientes", 0), bal_dict.get("movidos", 0))
+
+        raw_payload = (
+            res_lotes,
+            res_anteriores,
+            res_sin_id,
+            res_escenas,
+            res_db,
+            alerta_olvidado,
+            cap_foco.get("id"),
+            cap_foco.get("en_foco"),
+            balance
+        )
+        return hashlib.sha256(repr(raw_payload).encode("utf-8")).hexdigest()[:16]
+
 
 class HandlerServidorBandeja(BaseHTTPRequestHandler):
     """Manejador HTTP para el panel web de la bandeja de descargas."""
@@ -2429,25 +2562,33 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     def _enviar_error(self, codigo: int, mensaje: str):
         self._enviar_json({"error": mensaje, "codigo": codigo}, codigo=codigo)
 
-    def _validar_seguridad_post(self) -> bool:
-        """
-        Valida que la petición POST cumpla:
-        1. Token anti-CSRF en cabecera 'X-CSRF-Token'.
-        2. Content-Type 'application/json'.
-        3. Host coincidente con 127.0.0.1:<puerto> o localhost:<puerto>.
-        Responde 403 Forbidden si no se cumplen.
-        """
-        # 1. Validar Host
+    def _validar_host(self) -> bool:
         host_header = self.headers.get("Host", "").strip()
         puerto_esperado = str(self.config.puerto_servidor)
+        puerto_real = str(self.server.server_address[1]) if hasattr(self, "server") and hasattr(self.server, "server_address") else puerto_esperado
         hosts_validos = {
             f"127.0.0.1:{puerto_esperado}",
             f"localhost:{puerto_esperado}",
+            f"127.0.0.1:{puerto_real}",
+            f"localhost:{puerto_real}",
             "127.0.0.1",
             "localhost"
         }
         if host_header not in hosts_validos:
             self._enviar_error(HTTPStatus.FORBIDDEN, f"Cabecera Host no permitida: '{host_header}'")
+            return False
+        return True
+
+    def _validar_seguridad_post(self) -> bool:
+        """
+        Valida que la petición POST cumpla:
+        1. Host coincidente con 127.0.0.1:<puerto> o localhost:<puerto>.
+        2. Content-Type 'application/json'.
+        3. Token anti-CSRF en cabecera 'X-CSRF-Token'.
+        Responde 403 Forbidden si no se cumplen.
+        """
+        # 1. Validar Host
+        if not self._validar_host():
             return False
 
         # 2. Validar Content-Type
@@ -2478,8 +2619,18 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         ruta = parsed.path
 
+        if ruta.startswith("/api/"):
+            if not self._validar_host():
+                return
+
         if ruta in ("/", "/index.html"):
             self._servir_html_spa()
+        elif ruta == "/api/estado-version":
+            token = self.vigilante.obtener_token_version()
+            self._enviar_json({
+                "version": token,
+                "refresco_panel_segundos": getattr(self.config, "refresco_panel_segundos", 4)
+            })
         elif ruta == "/api/lotes":
             estado = self.vigilante.obtener_estado()
             self._enviar_json({
@@ -2594,11 +2745,16 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         self.wfile.write(datos)
 
     def do_POST(self):
+        parsed = urlparse(self.path)
+        ruta = parsed.path
+
+        if ruta == "/api/estado-version":
+            self._enviar_error(HTTPStatus.METHOD_NOT_ALLOWED, "El endpoint /api/estado-version solo admite peticiones GET.")
+            return
+
         if not self._validar_seguridad_post():
             return
 
-        parsed = urlparse(self.path)
-        ruta = parsed.path
         body = self._leer_json_body()
 
         if body is None:
@@ -3519,6 +3675,43 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     .btn-cerrar-aviso:hover {{
       color: #fff;
     }}
+    .banner-desconexion {{
+      background: #7f1d1d;
+      border-bottom: 2px solid #ef4444;
+      color: #fee2e2;
+      padding: 10px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      font-weight: 600;
+      position: sticky;
+      top: 61px;
+      z-index: 96;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+    }}
+    .toast-llegada {{
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: #065f46;
+      border: 1px solid #10b981;
+      color: #ecfdf5;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-weight: 600;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+      z-index: 300;
+      transition: opacity 0.3s ease, transform 0.3s ease;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(10px);
+    }}
+    .toast-llegada.visible {{
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
+    }}
   </style>
 </head>
 <body>
@@ -3529,6 +3722,10 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     </div>
     <span class="badge">127.0.0.1:{self.config.puerto_servidor}</span>
   </header>
+
+  <div id="banner-desconexion" class="banner-desconexion" style="display:none;">
+    <span>⚠️ Sin conexión con la bandeja de descargas. Reintentando reconectar...</span>
+  </div>
 
   <div id="banner-aviso" class="banner-aviso" style="display:none;">
     <div class="banner-aviso-texto">
@@ -3790,6 +3987,16 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
   <script>
     const CSRF_TOKEN = "{self.token_csrf}";
+    const REFRESCO_PANEL_SEGUNDOS = {getattr(self.config, "refresco_panel_segundos", 4)};
+    const TITULO_BASE = document.title;
+    let versionActualToken = null;
+    let temporizadorSondeo = null;
+    let sondeoEnCurso = false;
+    let reintentoEsperaSegundos = REFRESCO_PANEL_SEGUNDOS > 0 ? REFRESCO_PANEL_SEGUNDOS : 4;
+    let desconectado = false;
+    let lotesNuevosSegundoPlano = 0;
+    let temporizadorToast = null;
+
     let datosEstado = {{ lotes: [], lotes_anteriores: [], sin_identificar: [], escenas: [], personajes: [], ultimo_personaje: "lucie", capitulo_activo: null, capitulo_foco: null, capitulos_abiertos: [], cantidad_abiertos: 0, alerta_olvidado: false, horas_limite: 12, balance_capitulo: {{ pendientes: 0, movidos: 0 }} }};
     let simulacionActiva = null;
     let descarteSimulacionActiva = null;
@@ -3798,6 +4005,164 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     let pestanaActual = 'lotes';
     let historialActual = [];
     let operacionAvisoActual = null;
+
+    function mostrarToastLlegada(mensaje) {{
+      const toast = document.getElementById('toast-llegada');
+      if (!toast) return;
+      toast.innerText = mensaje;
+      toast.classList.add('visible');
+      if (temporizadorToast) clearTimeout(temporizadorToast);
+      temporizadorToast = setTimeout(() => {{
+        toast.classList.remove('visible');
+      }}, 5000);
+    }}
+
+    function mostrarAvisoDesconexion() {{
+      const banner = document.getElementById('banner-desconexion');
+      if (banner) banner.style.display = 'flex';
+    }}
+
+    function ocultarAvisoDesconexion() {{
+      const banner = document.getElementById('banner-desconexion');
+      if (banner) banner.style.display = 'none';
+    }}
+
+    function hayModalAbierto() {{
+      const idsModales = ['modal-simulacion', 'modal-terminar-capitulo', 'modal-descartar-capitulo'];
+      return idsModales.some(id => {{
+        const el = document.getElementById(id);
+        return el && el.style.display && el.style.display !== 'none';
+      }});
+    }}
+
+    function hayCampoEnEdicion() {{
+      const activo = document.activeElement;
+      if (activo && (activo.tagName === 'INPUT' || activo.tagName === 'SELECT' || activo.tagName === 'TEXTAREA')) {{
+        return true;
+      }}
+      const inputs = document.querySelectorAll('input[id^="txt-nueva-escena-"]');
+      for (const inp of inputs) {{
+        if (inp.value && inp.value.trim().length > 0 && inp.style.display !== 'none') {{
+          return true;
+        }}
+      }}
+      return false;
+    }}
+
+    function capturarEstadoUI() {{
+      const snap = {{
+        archivosChecked: {{}},
+        lotesListosChecked: {{}},
+        lotesAnterioresChecked: {{}},
+        persSeleccionado: {{}},
+        escenaSeleccionada: {{}},
+        nuevaEscenaTexto: {{}},
+        detailsAnterioresAbierto: false,
+        scrollY: window.scrollY || document.documentElement.scrollTop || 0,
+        pestana: pestanaActual
+      }};
+
+      document.querySelectorAll('.chk-archivo').forEach(cb => {{
+        const id = cb.getAttribute('data-id');
+        if (id) snap.archivosChecked[id] = cb.checked;
+      }});
+
+      document.querySelectorAll('.cb-lote-listo').forEach(cb => {{
+        const loteId = cb.getAttribute('data-lote-id');
+        if (loteId) snap.lotesListosChecked[loteId] = cb.checked;
+      }});
+
+      document.querySelectorAll('.cb-lote-anterior').forEach(cb => {{
+        const loteId = cb.getAttribute('data-lote-id');
+        if (loteId) snap.lotesAnterioresChecked[loteId] = cb.checked;
+      }});
+
+      document.querySelectorAll('select[id^="sel-pers-"]').forEach(sel => {{
+        const loteId = sel.id.replace('sel-pers-', '');
+        snap.persSeleccionado[loteId] = sel.value;
+      }});
+
+      document.querySelectorAll('select[id^="sel-escena-"]').forEach(sel => {{
+        const loteId = sel.id.replace('sel-escena-', '');
+        snap.escenaSeleccionada[loteId] = sel.value;
+      }});
+
+      document.querySelectorAll('input[id^="txt-nueva-escena-"]').forEach(inp => {{
+        const loteId = inp.id.replace('txt-nueva-escena-', '');
+        snap.nuevaEscenaTexto[loteId] = inp.value;
+      }});
+
+      const detailsAnt = document.getElementById('details-anteriores');
+      if (detailsAnt) {{
+        snap.detailsAnterioresAbierto = detailsAnt.hasAttribute('open');
+      }}
+
+      return snap;
+    }}
+
+    function restaurarEstadoUI(snap) {{
+      if (!snap) return;
+
+      document.querySelectorAll('.chk-archivo').forEach(cb => {{
+        const id = cb.getAttribute('data-id');
+        if (id && Object.prototype.hasOwnProperty.call(snap.archivosChecked, id)) {{
+          cb.checked = snap.archivosChecked[id];
+        }}
+      }});
+
+      document.querySelectorAll('.cb-lote-listo').forEach(cb => {{
+        const loteId = cb.getAttribute('data-lote-id');
+        if (loteId && Object.prototype.hasOwnProperty.call(snap.lotesListosChecked, loteId)) {{
+          cb.checked = snap.lotesListosChecked[loteId];
+        }}
+      }});
+
+      document.querySelectorAll('.cb-lote-anterior').forEach(cb => {{
+        const loteId = cb.getAttribute('data-lote-id');
+        if (loteId && Object.prototype.hasOwnProperty.call(snap.lotesAnterioresChecked, loteId)) {{
+          cb.checked = snap.lotesAnterioresChecked[loteId];
+        }}
+      }});
+
+      for (const loteId in snap.persSeleccionado) {{
+        const sel = document.getElementById(`sel-pers-${{loteId}}`);
+        if (sel) sel.value = snap.persSeleccionado[loteId];
+      }}
+
+      for (const loteId in snap.escenaSeleccionada) {{
+        const sel = document.getElementById(`sel-escena-${{loteId}}`);
+        if (sel) {{
+          sel.value = snap.escenaSeleccionada[loteId];
+          toggleNuevaEscena(loteId, sel.value);
+        }}
+      }}
+
+      for (const loteId in snap.nuevaEscenaTexto) {{
+        const inp = document.getElementById(`txt-nueva-escena-${{loteId}}`);
+        if (inp && snap.nuevaEscenaTexto[loteId] !== undefined) {{
+          inp.value = snap.nuevaEscenaTexto[loteId];
+          validarInputEscena(loteId);
+        }}
+      }}
+
+      const detailsAnt = document.getElementById('details-anteriores');
+      if (detailsAnt) {{
+        if (snap.detailsAnterioresAbierto) {{
+          detailsAnt.setAttribute('open', '');
+        }} else {{
+          detailsAnt.removeAttribute('open');
+        }}
+      }}
+
+      const todosLotes = (datosEstado.lotes || []).concat(datosEstado.lotes_anteriores || []);
+      todosLotes.forEach(l => {{
+        actualizarSeleccionLote(l.lote_id);
+      }});
+
+      if (typeof snap.scrollY === 'number') {{
+        window.scrollTo(0, snap.scrollY);
+      }}
+    }}
 
     function escapeHTML(str) {{
       return String(str || '').replace(/[&<>'"]/g, tag => ({{
@@ -3929,13 +4294,17 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
     async function cargarDatos() {{
       try {{
-        const [lotesRes, sinIdRes, escenasRes, persRes, capRes] = await Promise.all([
+        const [lotesRes, sinIdRes, escenasRes, persRes, capRes, versionRes] = await Promise.all([
           apiFetch('/api/lotes'),
           apiFetch('/api/sin-identificar'),
           apiFetch('/api/escenas'),
           apiFetch('/api/personajes'),
-          apiFetch('/api/capitulos/estado')
+          apiFetch('/api/capitulos/estado'),
+          apiFetch('/api/estado-version').catch(() => null)
         ]);
+        if (versionRes && versionRes.version) {{
+          versionActualToken = versionRes.version;
+        }}
         datosEstado.lotes = lotesRes.lotes || [];
         datosEstado.lotes_anteriores = lotesRes.lotes_anteriores || [];
         datosEstado.sin_identificar = sinIdRes.sin_identificar || [];
@@ -3957,6 +4326,165 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         mostrarError(e.message);
       }}
     }}
+
+    async function recargarConPreservacion() {{
+      const snap = capturarEstadoUI();
+      const enEdicion = hayCampoEnEdicion();
+
+      try {{
+        const [lotesRes, sinIdRes, escenasRes, persRes, capRes, versionRes] = await Promise.all([
+          apiFetch('/api/lotes'),
+          apiFetch('/api/sin-identificar'),
+          apiFetch('/api/escenas'),
+          apiFetch('/api/personajes'),
+          apiFetch('/api/capitulos/estado'),
+          apiFetch('/api/estado-version').catch(() => null)
+        ]);
+
+        if (versionRes && versionRes.version) {{
+          versionActualToken = versionRes.version;
+        }}
+
+        const nuevosLotes = lotesRes.lotes || [];
+        const nuevosAnt = lotesRes.lotes_anteriores || [];
+
+        const idsLotesPrevios = new Set((datosEstado.lotes || []).map(l => l.lote_id));
+        const lotesNuevosEntrantes = nuevosLotes.filter(l => !l.es_anterior && !idsLotesPrevios.has(l.lote_id));
+
+        const idsArchivosPrevios = new Set();
+        (datosEstado.lotes || []).forEach(l => (l.archivos || []).forEach(a => idsArchivosPrevios.add(String(a.id_db))));
+        (datosEstado.lotes_anteriores || []).forEach(l => (l.archivos || []).forEach(a => idsArchivosPrevios.add(String(a.id_db))));
+
+        let cantArchivosNuevos = 0;
+        nuevosLotes.forEach(l => (l.archivos || []).forEach(a => {{
+          if (!idsArchivosPrevios.has(String(a.id_db))) cantArchivosNuevos++;
+        }}));
+        nuevosAnt.forEach(l => (l.archivos || []).forEach(a => {{
+          if (!idsArchivosPrevios.has(String(a.id_db))) cantArchivosNuevos++;
+        }}));
+
+        datosEstado.lotes = nuevosLotes;
+        datosEstado.lotes_anteriores = nuevosAnt;
+        datosEstado.sin_identificar = sinIdRes.sin_identificar || [];
+        datosEstado.escenas = escenasRes.escenas || [];
+        datosEstado.personajes = persRes.personajes || [];
+        datosEstado.ultimo_personaje = persRes.ultimo_personaje;
+        datosEstado.capitulo_activo = capRes.capitulo_foco || capRes.capitulo;
+        datosEstado.capitulo_foco = capRes.capitulo_foco;
+        datosEstado.capitulos_abiertos = capRes.capitulos_abiertos || [];
+        datosEstado.cantidad_abiertos = capRes.cantidad_abiertos || 0;
+        datosEstado.alerta_olvidado = capRes.alerta_olvidado;
+        datosEstado.horas_limite = capRes.horas_limite;
+        datosEstado.balance_capitulo = capRes.balance;
+
+        renderCapituloActivo();
+        if (enEdicion) {{
+          renderLotesIncremental();
+          renderLotesAnterioresIncremental();
+        }} else {{
+          renderLotes();
+          renderLotesAnteriores();
+        }}
+        renderSinIdentificar();
+        restaurarEstadoUI(snap);
+
+        if (cantArchivosNuevos > 0) {{
+          mostrarToastLlegada(`Llegaron ${{cantArchivosNuevos}} archivo(s) nuevo(s)`);
+          if (document.hidden && lotesNuevosEntrantes.length > 0) {{
+            lotesNuevosSegundoPlano += lotesNuevosEntrantes.length;
+            document.title = `(${{lotesNuevosSegundoPlano}}) ${{TITULO_BASE}}`;
+          }}
+        }}
+
+        if (pestanaActual === 'capitulos-abiertos') {{
+          await cargarCapitulosAbiertos();
+        }} else if (pestanaActual === 'capitulos-cerrados') {{
+          await cargarCapitulosCerrados();
+        }} else if (pestanaActual === 'descartados') {{
+          await cargarCapitulosDescartados();
+        }} else if (pestanaActual === 'historial') {{
+          await cargarHistorial();
+        }}
+      }} catch (e) {{
+        console.error('Error al recargar con preservación:', e);
+      }}
+    }}
+
+    function programarSiguienteSondeo(esperaMs) {{
+      if (temporizadorSondeo) {{
+        clearTimeout(temporizadorSondeo);
+        temporizadorSondeo = null;
+      }}
+      if (REFRESCO_PANEL_SEGUNDOS <= 0) return;
+
+      const ms = (typeof esperaMs === 'number') ? esperaMs : (reintentoEsperaSegundos * 1000);
+      temporizadorSondeo = setTimeout(verificarVersionEstado, ms);
+    }}
+
+    async function verificarVersionEstado() {{
+      if (REFRESCO_PANEL_SEGUNDOS <= 0) return;
+      if (sondeoEnCurso) return;
+      if (temporizadorSondeo) {{
+        clearTimeout(temporizadorSondeo);
+        temporizadorSondeo = null;
+      }}
+
+      if (document.hidden) {{
+        return;
+      }}
+
+      if (hayModalAbierto()) {{
+        programarSiguienteSondeo();
+        return;
+      }}
+
+      sondeoEnCurso = true;
+      try {{
+        const res = await apiFetch('/api/estado-version');
+
+        if (desconectado) {{
+          desconectado = false;
+          ocultarAvisoDesconexion();
+          reintentoEsperaSegundos = REFRESCO_PANEL_SEGUNDOS > 0 ? REFRESCO_PANEL_SEGUNDOS : 4;
+          versionActualToken = res.version;
+          await recargarConPreservacion();
+          programarSiguienteSondeo();
+          return;
+        }}
+
+        reintentoEsperaSegundos = REFRESCO_PANEL_SEGUNDOS > 0 ? REFRESCO_PANEL_SEGUNDOS : 4;
+
+        if (versionActualToken === null) {{
+          versionActualToken = res.version;
+        }} else if (res.version !== versionActualToken) {{
+          versionActualToken = res.version;
+          await recargarConPreservacion();
+        }}
+
+        programarSiguienteSondeo();
+      }} catch (e) {{
+        console.warn('Fallo en sondeo de estado-version:', e);
+        desconectado = true;
+        mostrarAvisoDesconexion();
+        reintentoEsperaSegundos = Math.min(reintentoEsperaSegundos * 2, 30);
+        programarSiguienteSondeo(reintentoEsperaSegundos * 1000);
+      }} finally {{
+        sondeoEnCurso = false;
+      }}
+    }}
+
+    document.addEventListener('visibilitychange', () => {{
+      if (!document.hidden) {{
+        lotesNuevosSegundoPlano = 0;
+        document.title = TITULO_BASE;
+        verificarVersionEstado();
+      }}
+    }});
+
+    window.addEventListener('focus', () => {{
+      lotesNuevosSegundoPlano = 0;
+      document.title = TITULO_BASE;
+    }});
 
     function renderCapituloActivo() {{
       const bannerActivo = document.getElementById('banner-capitulo-activo');
@@ -4224,6 +4752,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     function cerrarModalTerminarCapitulo() {{
       document.getElementById('modal-terminar-capitulo').style.display = 'none';
       capituloATerminarId = null;
+      programarSiguienteSondeo(500);
     }}
 
     async function ejecutarTerminarCapitulo(trasMover) {{
@@ -4505,6 +5034,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       const modal = document.getElementById('modal-descartar-capitulo');
       if (modal) modal.style.display = 'none';
       descarteSimulacionActiva = null;
+      programarSiguienteSondeo(500);
     }}
 
     async function guardarCapituloActivo(habilitar) {{
@@ -4546,6 +5076,174 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       }}
     }}
 
+    function generarHtmlCardLote(lote) {{
+      const capFoco = (datosEstado.capitulo_foco && datosEstado.capitulo_foco.habilitado) ? datosEstado.capitulo_foco : 
+                      ((datosEstado.capitulo_activo && datosEstado.capitulo_activo.habilitado) ? datosEstado.capitulo_activo : null);
+      const capsAbiertos = datosEstado.capitulos_abiertos || [];
+      const nombresAbiertos = new Set(capsAbiertos.map(c => c.nombre));
+
+      const persPre = capFoco ? capFoco.personaje : (lote.personaje_sugerido || datosEstado.ultimo_personaje || 'lucie');
+      const escenaPre = capFoco ? capFoco.nombre : (lote.escena_sugerida || '');
+
+      const persOptions = datosEstado.personajes.map(p => 
+        `<option value="${{p.id}}" ${{p.id === persPre ? 'selected' : ''}}>${{p.nombre}}</option>`
+      ).join('');
+
+      let optFoco = '';
+      if (capFoco) {{
+        optFoco = `<option value="${{escapeHTML(capFoco.nombre)}}" data-tipo="capitulo_foco" data-personaje="${{escapeHTML(capFoco.personaje)}}" selected>[Capítulo en foco] ${{escapeHTML(capFoco.nombre)}}</option>`;
+      }}
+
+      const optsAbiertosSecundarios = capsAbiertos
+        .filter(c => !capFoco || c.id !== capFoco.id)
+        .map(c => {{
+          const isSelected = (!capFoco && c.nombre === escenaPre);
+          return `<option value="${{escapeHTML(c.nombre)}}" data-tipo="capitulo_abierto" data-personaje="${{escapeHTML(c.personaje)}}" ${{isSelected ? 'selected' : ''}}>[Capítulo abierto] ${{escapeHTML(c.personaje)}}/${{escapeHTML(c.nombre)}}</option>`;
+        }})
+        .join('');
+
+      const matchAbiertoSecundario = !capFoco && capsAbiertos.some(c => c.nombre === escenaPre);
+      const matchOtraEscena = !capFoco && (datosEstado.escenas || []).some(e => !nombresAbiertos.has(e.nombre) && e.nombre === escenaPre);
+      const esNueva = !capFoco && !matchAbiertoSecundario && !matchOtraEscena;
+
+      const optNueva = `<option value="__nueva__" ${{esNueva ? 'selected' : ''}}>+ Crear nueva escena...</option>`;
+
+      const otrasEscenas = (datosEstado.escenas || [])
+        .filter(e => !nombresAbiertos.has(e.nombre))
+        .map(e => `<option value="${{escapeHTML(e.nombre)}}" data-tipo="${{e.tipo}}" ${{(matchOtraEscena && e.nombre === escenaPre) ? 'selected' : ''}}>[${{e.tipo === 'descargas_alias' ? 'En Descargas' : 'Destino'}}] ${{escapeHTML(e.nombre)}}</option>`)
+        .join('');
+
+      const escenasOptions = optFoco + optsAbiertosSecundarios + optNueva + otrasEscenas;
+
+      return `
+        <div class="card" id="card-${{lote.lote_id}}">
+          <div class="card-header">
+            <div style="display:flex; align-items:center; gap:10px;">
+              <input type="checkbox" class="cb-lote-listo" data-lote-id="${{lote.lote_id}}" checked title="Tildar para mover con 'Mover lotes listos'">
+              <h3>Lote #${{lote.numero}} (${{lote.total_archivos}} archivos &bull; ${{formatearBytes(lote.total_bytes)}})</h3>
+            </div>
+            <span style="color:var(--text-muted);font-size:0.85rem">${{lote.fecha}}</span>
+          </div>
+          <div class="lote-toolbar">
+            <span id="lbl-sel-${{lote.lote_id}}" style="font-size:0.85rem; color:var(--text-muted);">${{lote.archivos.length}} seleccionados</span>
+            <div style="display:flex; gap:8px;">
+              <button type="button" class="btn-sm" onclick="seleccionarTodosLote('${{lote.lote_id}}', true)">Seleccionar todos</button>
+              <button type="button" class="btn-sm" onclick="seleccionarTodosLote('${{lote.lote_id}}', false)">Ninguno</button>
+            </div>
+          </div>
+          <div class="archivos-grid">
+            ${{lote.archivos.map(a => `
+              <div class="archivo-item" title="Archivo: ${{a.nombre}}&#10;Fecha llegada: ${{a.fecha_llegada || a.fecha || ''}}&#10;Fecha modificación: ${{a.fecha || ''}}&#10;Tamaño: ${{formatearBytes(a.tamanio)}}">
+                <div class="chk-container">
+                  <input type="checkbox" class="chk-archivo chk-lote-${{lote.lote_id}}" data-id="${{a.id_db}}" checked onchange="actualizarSeleccionLote('${{lote.lote_id}}')">
+                </div>
+                <div class="miniatura-wrap">
+                  <img src="/api/miniatura?id=${{a.id_db}}" alt="${{a.nombre}}" onerror="this.onerror=null;this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22><rect width=%22100%%22 height=%22100%%22 fill=%22%23222%22/><text x=%2250%%22 y=%2250%%22 fill=%22%23888%22 text-anchor=%22middle%22 dy=%22.3em%22>Media</text></svg>';">
+                </div>
+                <div class="archivo-meta">
+                  <div class="archivo-nombre" title="${{a.nombre}}">${{a.nombre}}</div>
+                  <div class="archivo-peso">${{formatearBytes(a.tamanio)}}</div>
+                  <div class="archivo-llegada" style="font-size:0.75rem; color:var(--text-muted);" title="Fecha de llegada: ${{a.fecha_llegada || a.fecha || ''}}">🕒 ${{a.fecha_llegada || a.fecha || ''}}</div>
+                </div>
+              </div>
+            `).join('')}}
+          </div>
+          <div class="form-row">
+            <label>Personaje: <select id="sel-pers-${{lote.lote_id}}">${{persOptions}}</select></label>
+            <label>Escena:
+              <select id="sel-escena-${{lote.lote_id}}" onchange="toggleNuevaEscena('${{lote.lote_id}}', this.value)">
+                ${{escenasOptions}}
+              </select>
+            </label>
+            <div class="campo-escena-wrap">
+              <input type="text" id="txt-nueva-escena-${{lote.lote_id}}" value="${{esNueva ? escapeHTML(escenaPre) : ''}}" placeholder="Nombre de escena nueva" style="max-width:200px; display:${{esNueva ? 'inline-block' : 'none'}};" oninput="validarInputEscena('${{lote.lote_id}}')">
+              <span id="error-escena-${{lote.lote_id}}" class="error-inline" style="display:none;"></span>
+            </div>
+            <button class="btn-accion" id="btn-mover-${{lote.lote_id}}" onclick="iniciarMover('${{lote.lote_id}}')">Mover seleccionados (${{lote.archivos.length}})</button>
+          </div>
+        </div>
+      `;
+    }}
+
+    function generarHtmlCardLoteAnterior(lote) {{
+      const persPre = lote.personaje_sugerido || datosEstado.ultimo_personaje || 'lucie';
+      const persOptions = datosEstado.personajes.map(p => 
+        `<option value="${{p.id}}" ${{p.id === persPre ? 'selected' : ''}}>${{p.nombre}}</option>`
+      ).join('');
+
+      const capFocoAnt = (datosEstado.capitulo_foco && datosEstado.capitulo_foco.habilitado) ? datosEstado.capitulo_foco : 
+                         ((datosEstado.capitulo_activo && datosEstado.capitulo_activo.habilitado) ? datosEstado.capitulo_activo : null);
+      const capsAbiertosAnt = datosEstado.capitulos_abiertos || [];
+      const nombresAbiertosAnt = new Set(capsAbiertosAnt.map(c => c.nombre));
+
+      let optFocoAnt = '';
+      if (capFocoAnt) {{
+        optFocoAnt = `<option value="${{escapeHTML(capFocoAnt.nombre)}}" data-tipo="capitulo_foco" data-personaje="${{escapeHTML(capFocoAnt.personaje)}}">[Capítulo en foco] ${{escapeHTML(capFocoAnt.nombre)}}</option>`;
+      }}
+
+      const optsAbiertosSecundariosAnt = capsAbiertosAnt
+        .filter(c => !capFocoAnt || c.id !== capFocoAnt.id)
+        .map(c => `<option value="${{escapeHTML(c.nombre)}}" data-tipo="capitulo_abierto" data-personaje="${{escapeHTML(c.personaje)}}">[Capítulo abierto] ${{escapeHTML(c.personaje)}}/${{escapeHTML(c.nombre)}}</option>`)
+        .join('');
+
+      const otrasEscenasAnt = (datosEstado.escenas || [])
+        .filter(e => !nombresAbiertosAnt.has(e.nombre))
+        .map(e => `<option value="${{escapeHTML(e.nombre)}}" data-tipo="${{e.tipo}}">[${{e.tipo === 'descargas_alias' ? 'En Descargas' : 'Destino'}}] ${{escapeHTML(e.nombre)}}</option>`)
+        .join('');
+
+      const escenasOptions = optFocoAnt + optsAbiertosSecundariosAnt + otrasEscenasAnt;
+
+      return `
+        <div class="card" id="card-${{lote.lote_id}}" style="border:1px solid #333; margin-bottom:12px;">
+          <div class="card-header">
+            <div style="display:flex; align-items:center; gap:10px;">
+              <input type="checkbox" class="cb-lote-anterior" data-lote-id="${{lote.lote_id}}" title="Lote anterior al capítulo" onchange="seleccionarTodosLote('${{lote.lote_id}}', this.checked)">
+              <h3>Lote #${{lote.numero}} (${{lote.total_archivos}} archivos &bull; ${{formatearBytes(lote.total_bytes)}})</h3>
+            </div>
+            <span style="color:var(--text-muted);font-size:0.85rem">${{lote.fecha}}</span>
+          </div>
+          <div class="lote-toolbar">
+            <span id="lbl-sel-${{lote.lote_id}}" style="font-size:0.85rem; color:var(--text-muted);">0 seleccionados</span>
+            <div style="display:flex; gap:8px;">
+              <button type="button" class="btn-sm" onclick="seleccionarTodosLote('${{lote.lote_id}}', true)">Seleccionar todos</button>
+              <button type="button" class="btn-sm" onclick="seleccionarTodosLote('${{lote.lote_id}}', false)">Ninguno</button>
+            </div>
+          </div>
+          <div class="archivos-grid">
+            ${{lote.archivos.map(a => `
+              <div class="archivo-item" title="Archivo: ${{a.nombre}}&#10;Fecha llegada: ${{a.fecha_llegada || a.fecha || ''}}&#10;Fecha modificación: ${{a.fecha || ''}}&#10;Tamaño: ${{formatearBytes(a.tamanio)}}">
+                <div class="chk-container">
+                  <input type="checkbox" class="chk-archivo chk-lote-${{lote.lote_id}}" data-id="${{a.id_db}}" onchange="actualizarSeleccionLote('${{lote.lote_id}}')">
+                </div>
+                <div class="miniatura-wrap">
+                  <img src="/api/miniatura?id=${{a.id_db}}" alt="${{a.nombre}}" onerror="this.onerror=null;this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22><rect width=%22100%%22 height=%22100%%22 fill=%22%23222%22/><text x=%2250%%22 y=%2250%%22 fill=%22%23888%22 text-anchor=%22middle%22 dy=%22.3em%22>Media</text></svg>';">
+                </div>
+                <div class="archivo-meta">
+                  <div class="archivo-nombre" title="${{a.nombre}}">${{a.nombre}}</div>
+                  <div class="archivo-peso">${{formatearBytes(a.tamanio)}}</div>
+                  <div class="archivo-llegada" style="font-size:0.75rem; color:var(--text-muted);" title="Fecha de llegada: ${{a.fecha_llegada || a.fecha || ''}}">🕒 ${{a.fecha_llegada || a.fecha || ''}}</div>
+                </div>
+              </div>
+            `).join('')}}
+          </div>
+          <div class="form-row">
+            <label>Personaje: <select id="sel-pers-${{lote.lote_id}}">${{persOptions}}</select></label>
+            <label>Escena:
+              <select id="sel-escena-${{lote.lote_id}}" onchange="toggleNuevaEscena('${{lote.lote_id}}', this.value)">
+                <option value="__nueva__" selected>+ Crear nueva escena...</option>
+                ${{escenasOptions}}
+              </select>
+            </label>
+            <div class="campo-escena-wrap">
+              <input type="text" id="txt-nueva-escena-${{lote.lote_id}}" value="" placeholder="Nombre de escena nueva" style="max-width:200px; display:inline-block;" oninput="validarInputEscena('${{lote.lote_id}}')">
+              <span id="error-escena-${{lote.lote_id}}" class="error-inline" style="display:none;"></span>
+            </div>
+            <button class="btn-accion" id="btn-mover-${{lote.lote_id}}" onclick="iniciarMover('${{lote.lote_id}}')" disabled>Mover seleccionados (0)</button>
+          </div>
+        </div>
+      `;
+    }}
+
     function renderLotes() {{
       const cont = document.getElementById('contenedor-lotes');
       const lotesActivos = (datosEstado.lotes || []).filter(l => !l.es_anterior);
@@ -4553,95 +5251,39 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         cont.innerHTML = '<div class="card"><p style="color:var(--text-muted)">No hay nuevos lotes de candidatos en ~/Descargas.</p></div>';
         return;
       }}
+      cont.innerHTML = lotesActivos.map(lote => generarHtmlCardLote(lote)).join('');
+    }}
 
-      const capFoco = (datosEstado.capitulo_foco && datosEstado.capitulo_foco.habilitado) ? datosEstado.capitulo_foco : 
-                      ((datosEstado.capitulo_activo && datosEstado.capitulo_activo.habilitado) ? datosEstado.capitulo_activo : null);
-      const capsAbiertos = datosEstado.capitulos_abiertos || [];
-      const nombresAbiertos = new Set(capsAbiertos.map(c => c.nombre));
+    function renderLotesIncremental() {{
+      const cont = document.getElementById('contenedor-lotes');
+      const lotesActivos = (datosEstado.lotes || []).filter(l => !l.es_anterior);
+      if (!lotesActivos.length) {{
+        cont.innerHTML = '<div class="card"><p style="color:var(--text-muted)">No hay nuevos lotes de candidatos en ~/Descargas.</p></div>';
+        return;
+      }}
+      const pVacio = cont.querySelector('p');
+      if (pVacio && pVacio.innerText.includes('No hay nuevos lotes')) {{
+        cont.innerHTML = '';
+      }}
 
-      cont.innerHTML = lotesActivos.map(lote => {{
-        const persPre = capFoco ? capFoco.personaje : (lote.personaje_sugerido || datosEstado.ultimo_personaje || 'lucie');
-        const escenaPre = capFoco ? capFoco.nombre : (lote.escena_sugerida || '');
-
-        const persOptions = datosEstado.personajes.map(p => 
-          `<option value="${{p.id}}" ${{p.id === persPre ? 'selected' : ''}}>${{p.nombre}}</option>`
-        ).join('');
-
-        let optFoco = '';
-        if (capFoco) {{
-          optFoco = `<option value="${{escapeHTML(capFoco.nombre)}}" data-tipo="capitulo_foco" data-personaje="${{escapeHTML(capFoco.personaje)}}" selected>[Capítulo en foco] ${{escapeHTML(capFoco.nombre)}}</option>`;
+      const idsActivos = new Set(lotesActivos.map(l => l.lote_id));
+      const cardsExistentes = cont.querySelectorAll('[id^="card-"]');
+      cardsExistentes.forEach(card => {{
+        const id = card.id.replace('card-', '');
+        if (!idsActivos.has(id)) {{
+          card.remove();
         }}
+      }});
 
-        const optsAbiertosSecundarios = capsAbiertos
-          .filter(c => !capFoco || c.id !== capFoco.id)
-          .map(c => {{
-            const isSelected = (!capFoco && c.nombre === escenaPre);
-            return `<option value="${{escapeHTML(c.nombre)}}" data-tipo="capitulo_abierto" data-personaje="${{escapeHTML(c.personaje)}}" ${{isSelected ? 'selected' : ''}}>[Capítulo abierto] ${{escapeHTML(c.personaje)}}/${{escapeHTML(c.nombre)}}</option>`;
-          }})
-          .join('');
-
-        const matchAbiertoSecundario = !capFoco && capsAbiertos.some(c => c.nombre === escenaPre);
-        const matchOtraEscena = !capFoco && (datosEstado.escenas || []).some(e => !nombresAbiertos.has(e.nombre) && e.nombre === escenaPre);
-        const esNueva = !capFoco && !matchAbiertoSecundario && !matchOtraEscena;
-
-        const optNueva = `<option value="__nueva__" ${{esNueva ? 'selected' : ''}}>+ Crear nueva escena...</option>`;
-
-        const otrasEscenas = (datosEstado.escenas || [])
-          .filter(e => !nombresAbiertos.has(e.nombre))
-          .map(e => `<option value="${{escapeHTML(e.nombre)}}" data-tipo="${{e.tipo}}" ${{(matchOtraEscena && e.nombre === escenaPre) ? 'selected' : ''}}>[${{e.tipo === 'descargas_alias' ? 'En Descargas' : 'Destino'}}] ${{escapeHTML(e.nombre)}}</option>`)
-          .join('');
-
-        const escenasOptions = optFoco + optsAbiertosSecundarios + optNueva + otrasEscenas;
-
-        return `
-          <div class="card" id="card-${{lote.lote_id}}">
-            <div class="card-header">
-              <div style="display:flex; align-items:center; gap:10px;">
-                <input type="checkbox" class="cb-lote-listo" data-lote-id="${{lote.lote_id}}" checked title="Tildar para mover con 'Mover lotes listos'">
-                <h3>Lote #${{lote.numero}} (${{lote.total_archivos}} archivos &bull; ${{formatearBytes(lote.total_bytes)}})</h3>
-              </div>
-              <span style="color:var(--text-muted);font-size:0.85rem">${{lote.fecha}}</span>
-            </div>
-            <div class="lote-toolbar">
-              <span id="lbl-sel-${{lote.lote_id}}" style="font-size:0.85rem; color:var(--text-muted);">${{lote.archivos.length}} seleccionados</span>
-              <div style="display:flex; gap:8px;">
-                <button type="button" class="btn-sm" onclick="seleccionarTodosLote('${{lote.lote_id}}', true)">Seleccionar todos</button>
-                <button type="button" class="btn-sm" onclick="seleccionarTodosLote('${{lote.lote_id}}', false)">Ninguno</button>
-              </div>
-            </div>
-            <div class="archivos-grid">
-              ${{lote.archivos.map(a => `
-                <div class="archivo-item" title="Archivo: ${{a.nombre}}&#10;Fecha llegada: ${{a.fecha_llegada || a.fecha || ''}}&#10;Fecha modificación: ${{a.fecha || ''}}&#10;Tamaño: ${{formatearBytes(a.tamanio)}}">
-                  <div class="chk-container">
-                    <input type="checkbox" class="chk-archivo chk-lote-${{lote.lote_id}}" data-id="${{a.id_db}}" checked onchange="actualizarSeleccionLote('${{lote.lote_id}}')">
-                  </div>
-                  <div class="miniatura-wrap">
-                    <img src="/api/miniatura?id=${{a.id_db}}" alt="${{a.nombre}}" onerror="this.onerror=null;this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22><rect width=%22100%%22 height=%22100%%22 fill=%22%23222%22/><text x=%2250%%22 y=%2250%%22 fill=%22%23888%22 text-anchor=%22middle%22 dy=%22.3em%22>Media</text></svg>';">
-                  </div>
-                  <div class="archivo-meta">
-                    <div class="archivo-nombre" title="${{a.nombre}}">${{a.nombre}}</div>
-                    <div class="archivo-peso">${{formatearBytes(a.tamanio)}}</div>
-                    <div class="archivo-llegada" style="font-size:0.75rem; color:var(--text-muted);" title="Fecha de llegada: ${{a.fecha_llegada || a.fecha || ''}}">🕒 ${{a.fecha_llegada || a.fecha || ''}}</div>
-                  </div>
-                </div>
-              `).join('')}}
-            </div>
-            <div class="form-row">
-              <label>Personaje: <select id="sel-pers-${{lote.lote_id}}">${{persOptions}}</select></label>
-              <label>Escena:
-                <select id="sel-escena-${{lote.lote_id}}" onchange="toggleNuevaEscena('${{lote.lote_id}}', this.value)">
-                  ${{escenasOptions}}
-                </select>
-              </label>
-              <div class="campo-escena-wrap">
-                <input type="text" id="txt-nueva-escena-${{lote.lote_id}}" value="${{esNueva ? escapeHTML(escenaPre) : ''}}" placeholder="Nombre de escena nueva" style="max-width:200px; display:${{esNueva ? 'inline-block' : 'none'}};" oninput="validarInputEscena('${{lote.lote_id}}')">
-                <span id="error-escena-${{lote.lote_id}}" class="error-inline" style="display:none;"></span>
-              </div>
-              <button class="btn-accion" id="btn-mover-${{lote.lote_id}}" onclick="iniciarMover('${{lote.lote_id}}')">Mover seleccionados (${{lote.archivos.length}})</button>
-            </div>
-          </div>
-        `;
-      }}).join('');
+      lotesActivos.forEach(lote => {{
+        const cardExistente = document.getElementById(`card-${{lote.lote_id}}`);
+        if (!cardExistente) {{
+          const divTemp = document.createElement('div');
+          divTemp.innerHTML = generarHtmlCardLote(lote).trim();
+          const nuevaCard = divTemp.firstElementChild;
+          cont.appendChild(nuevaCard);
+        }}
+      }});
     }}
 
     function renderLotesAnteriores() {{
@@ -4662,87 +5304,46 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
       sec.style.display = 'block';
       if (conteo) conteo.innerText = String(lotesAnt.length);
+      cont.innerHTML = lotesAnt.map(lote => generarHtmlCardLoteAnterior(lote)).join('');
+    }}
 
-      cont.innerHTML = lotesAnt.map(lote => {{
-        const persPre = lote.personaje_sugerido || datosEstado.ultimo_personaje || 'lucie';
-        const escenaPre = '';
+    function renderLotesAnterioresIncremental() {{
+      const sec = document.getElementById('sec-lotes-anteriores');
+      const cont = document.getElementById('contenedor-lotes-anteriores');
+      const conteo = document.getElementById('conteo-lotes-anteriores');
+      if (!sec || !cont) return;
 
-        const persOptions = datosEstado.personajes.map(p => 
-          `<option value="${{p.id}}" ${{p.id === persPre ? 'selected' : ''}}>${{p.nombre}}</option>`
-        ).join('');
+      const capActivo = datosEstado.capitulo_activo && datosEstado.capitulo_activo.habilitado ? datosEstado.capitulo_activo : null;
+      const lotesAnt = datosEstado.lotes_anteriores || [];
 
-        const capFocoAnt = (datosEstado.capitulo_foco && datosEstado.capitulo_foco.habilitado) ? datosEstado.capitulo_foco : 
-                           ((datosEstado.capitulo_activo && datosEstado.capitulo_activo.habilitado) ? datosEstado.capitulo_activo : null);
-        const capsAbiertosAnt = datosEstado.capitulos_abiertos || [];
-        const nombresAbiertosAnt = new Set(capsAbiertosAnt.map(c => c.nombre));
+      if (!capActivo || !lotesAnt.length) {{
+        sec.style.display = 'none';
+        cont.innerHTML = '';
+        if (conteo) conteo.innerText = '0';
+        return;
+      }}
 
-        let optFocoAnt = '';
-        if (capFocoAnt) {{
-          optFocoAnt = `<option value="${{escapeHTML(capFocoAnt.nombre)}}" data-tipo="capitulo_foco" data-personaje="${{escapeHTML(capFocoAnt.personaje)}}">[Capítulo en foco] ${{escapeHTML(capFocoAnt.nombre)}}</option>`;
+      sec.style.display = 'block';
+      if (conteo) conteo.innerText = String(lotesAnt.length);
+
+      const idsAnt = new Set(lotesAnt.map(l => l.lote_id));
+      const cardsExistentes = cont.querySelectorAll('[id^="card-"]');
+      cardsExistentes.forEach(card => {{
+        const id = card.id.replace('card-', '');
+        if (!idsAnt.has(id)) {{
+          card.remove();
         }}
+      }});
 
-        const optsAbiertosSecundariosAnt = capsAbiertosAnt
-          .filter(c => !capFocoAnt || c.id !== capFocoAnt.id)
-          .map(c => `<option value="${{escapeHTML(c.nombre)}}" data-tipo="capitulo_abierto" data-personaje="${{escapeHTML(c.personaje)}}">[Capítulo abierto] ${{escapeHTML(c.personaje)}}/${{escapeHTML(c.nombre)}}</option>`)
-          .join('');
-
-        const otrasEscenasAnt = (datosEstado.escenas || [])
-          .filter(e => !nombresAbiertosAnt.has(e.nombre))
-          .map(e => `<option value="${{escapeHTML(e.nombre)}}" data-tipo="${{e.tipo}}">[${{e.tipo === 'descargas_alias' ? 'En Descargas' : 'Destino'}}] ${{escapeHTML(e.nombre)}}</option>`)
-          .join('');
-
-        const escenasOptions = optFocoAnt + optsAbiertosSecundariosAnt + otrasEscenasAnt;
-
-        return `
-          <div class="card" id="card-${{lote.lote_id}}" style="border:1px solid #333; margin-bottom:12px;">
-            <div class="card-header">
-              <div style="display:flex; align-items:center; gap:10px;">
-                <input type="checkbox" class="cb-lote-anterior" data-lote-id="${{lote.lote_id}}" title="Lote anterior al capítulo" onchange="seleccionarTodosLote('${{lote.lote_id}}', this.checked)">
-                <h3>Lote #${{lote.numero}} (${{lote.total_archivos}} archivos &bull; ${{formatearBytes(lote.total_bytes)}})</h3>
-              </div>
-              <span style="color:var(--text-muted);font-size:0.85rem">${{lote.fecha}}</span>
-            </div>
-            <div class="lote-toolbar">
-              <span id="lbl-sel-${{lote.lote_id}}" style="font-size:0.85rem; color:var(--text-muted);">0 seleccionados</span>
-              <div style="display:flex; gap:8px;">
-                <button type="button" class="btn-sm" onclick="seleccionarTodosLote('${{lote.lote_id}}', true)">Seleccionar todos</button>
-                <button type="button" class="btn-sm" onclick="seleccionarTodosLote('${{lote.lote_id}}', false)">Ninguno</button>
-              </div>
-            </div>
-            <div class="archivos-grid">
-              ${{lote.archivos.map(a => `
-                <div class="archivo-item" title="Archivo: ${{a.nombre}}&#10;Fecha llegada: ${{a.fecha_llegada || a.fecha || ''}}&#10;Fecha modificación: ${{a.fecha || ''}}&#10;Tamaño: ${{formatearBytes(a.tamanio)}}">
-                  <div class="chk-container">
-                    <input type="checkbox" class="chk-archivo chk-lote-${{lote.lote_id}}" data-id="${{a.id_db}}" onchange="actualizarSeleccionLote('${{lote.lote_id}}')">
-                  </div>
-                  <div class="miniatura-wrap">
-                    <img src="/api/miniatura?id=${{a.id_db}}" alt="${{a.nombre}}" onerror="this.onerror=null;this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22><rect width=%22100%%22 height=%22100%%22 fill=%22%23222%22/><text x=%2250%%22 y=%2250%%22 fill=%22%23888%22 text-anchor=%22middle%22 dy=%22.3em%22>Media</text></svg>';">
-                  </div>
-                  <div class="archivo-meta">
-                    <div class="archivo-nombre" title="${{a.nombre}}">${{a.nombre}}</div>
-                    <div class="archivo-peso">${{formatearBytes(a.tamanio)}}</div>
-                    <div class="archivo-llegada" style="font-size:0.75rem; color:var(--text-muted);" title="Fecha de llegada: ${{a.fecha_llegada || a.fecha || ''}}">🕒 ${{a.fecha_llegada || a.fecha || ''}}</div>
-                  </div>
-                </div>
-              `).join('')}}
-            </div>
-            <div class="form-row">
-              <label>Personaje: <select id="sel-pers-${{lote.lote_id}}">${{persOptions}}</select></label>
-              <label>Escena:
-                <select id="sel-escena-${{lote.lote_id}}" onchange="toggleNuevaEscena('${{lote.lote_id}}', this.value)">
-                  <option value="__nueva__" selected>+ Crear nueva escena...</option>
-                  ${{escenasOptions}}
-                </select>
-              </label>
-              <div class="campo-escena-wrap">
-                <input type="text" id="txt-nueva-escena-${{lote.lote_id}}" value="" placeholder="Nombre de escena nueva" style="max-width:200px; display:inline-block;" oninput="validarInputEscena('${{lote.lote_id}}')">
-                <span id="error-escena-${{lote.lote_id}}" class="error-inline" style="display:none;"></span>
-              </div>
-              <button class="btn-accion" id="btn-mover-${{lote.lote_id}}" onclick="iniciarMover('${{lote.lote_id}}')" disabled>Mover seleccionados (0)</button>
-            </div>
-          </div>
-        `;
-      }}).join('');
+      lotesAnt.forEach(lote => {{
+        const cardExistente = document.getElementById(`card-${{lote.lote_id}}`);
+        if (!cardExistente) {{
+          const divTemp = document.createElement('div');
+          divTemp.innerHTML = generarHtmlCardLoteAnterior(lote).trim();
+          const nuevaCard = divTemp.firstElementChild;
+          cont.appendChild(nuevaCard);
+        }}
+      }});
     }}
 
     function seleccionarTodosLote(loteId, marcar) {{
@@ -5145,6 +5746,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       simulacionActiva = null;
       loteActivoId = null;
       terminarCapituloTrasMover = false;
+      programarSiguienteSondeo(500);
     }}
 
     async function ejecutarMoverLote() {{
@@ -5208,8 +5810,11 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       return (b / 1048576).toFixed(1) + ' MB';
     }}
 
-    cargarDatos();
+    cargarDatos().then(() => {{
+      programarSiguienteSondeo();
+    }});
   </script>
+  <div id="toast-llegada" class="toast-llegada"></div>
 </body>
 </html>
 """
@@ -5238,6 +5843,8 @@ def crear_servidor(config: ConfiguracionBandeja, db: GestorBaseDatosBandeja,
     CustomHandler.token_csrf = token
 
     servidor = ThreadingHTTPServer((config.host_servidor, config.puerto_servidor), CustomHandler)
+    if config.puerto_servidor == 0:
+        config.puerto_servidor = servidor.server_address[1]
     return servidor
 
 
