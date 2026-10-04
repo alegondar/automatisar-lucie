@@ -1932,17 +1932,18 @@ class TestCapituloSoloMaterialNuevo(unittest.TestCase):
 
     def test_archivo_anterior_no_se_asigna_posterior_si(self):
         """Archivo con mtime anterior al inicio del capítulo no se asigna al capítulo ni se preselecciona; posterior sí."""
-        ahora = datetime.datetime.now()
-        fecha_ini = ahora.isoformat()
-        ts_ini = ahora.timestamp()
-
-        self.db.empezar_capitulo("lucie", "capitulo_playa", fecha_inicio=fecha_ini)
-
-        # Archivo anterior (1 hora antes)
+        # Archivo anterior (creado antes del inicio del capítulo)
         f_anterior = os.path.join(self.descargas, "grok-video-anterior.mp4")
         with open(f_anterior, "wb") as f:
             f.write(b"video viejo")
+        time.sleep(0.02)
+
+        ahora = datetime.datetime.now()
+        fecha_ini = ahora.isoformat()
+        ts_ini = ahora.timestamp()
         os.utime(f_anterior, (ts_ini - 3600, ts_ini - 3600))
+
+        self.db.empezar_capitulo("lucie", "capitulo_playa", fecha_inicio=fecha_ini)
 
         # Archivo posterior (1 minuto después)
         f_posterior = os.path.join(self.descargas, "grok-video-nuevo.mp4")
@@ -1994,52 +1995,55 @@ class TestCapituloSoloMaterialNuevo(unittest.TestCase):
             f.write(b"data 15min")
         os.utime(f_15min_antes, (ts_ini - 900, ts_ini - 900))
 
-        # 1. Caso margen = 0: ambos archivos son anteriores al capítulo
-        self.config.minutos_antes_inicio_capitulo = 0
-        vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
-        vigilante.escanear()
-        time.sleep(0.02)
-        vigilante.escanear()
-        est0 = vigilante.obtener_estado()
-        self.assertEqual(len(est0["lotes"]), 0)
-        self.assertGreater(len(est0["lotes_anteriores"]), 0)
+        with patch("bandeja_descargas.obtener_fecha_llegada", side_effect=lambda st: getattr(st, "st_mtime", getattr(st, "mtime", time.time()))):
+            # 1. Caso margen = 0: ambos archivos son anteriores al capítulo
+            self.config.minutos_antes_inicio_capitulo = 0
+            vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+            vigilante.escanear()
+            time.sleep(0.02)
+            vigilante.escanear()
+            est0 = vigilante.obtener_estado()
+            self.assertEqual(len(est0["lotes"]), 0)
+            self.assertGreater(len(est0["lotes_anteriores"]), 0)
 
-        # Limpiar registros para volver a evaluar con margen = 10
-        with self.db._lock, self.db._conectar() as con:
-            con.execute("DELETE FROM bandeja_archivos")
-            con.commit()
+            # Limpiar registros para volver a evaluar con margen = 10
+            with self.db._lock, self.db._conectar() as con:
+                con.execute("DELETE FROM bandeja_archivos")
+                con.commit()
 
-        # 2. Caso margen = 10 minutos: f_5min_antes (-300s >= -600s) debe ser adoptado; f_15min_antes (-900s) sigue siendo anterior
-        self.config.minutos_antes_inicio_capitulo = 10
-        vigilante10 = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
-        vigilante10.escanear()
-        time.sleep(0.02)
-        vigilante10.escanear()
-        est10 = vigilante10.obtener_estado()
+            # 2. Caso margen = 10 minutos: f_5min_antes (-300s >= -600s) debe ser adoptado; f_15min_antes (-900s) sigue siendo anterior
+            self.config.minutos_antes_inicio_capitulo = 10
+            vigilante10 = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+            vigilante10.escanear()
+            time.sleep(0.02)
+            vigilante10.escanear()
+            est10 = vigilante10.obtener_estado()
 
-        nombres_nuevos = [a["nombre"] for l in est10["lotes"] for a in l["archivos"]]
-        self.assertIn("grok-video-5min.mp4", nombres_nuevos)
-        self.assertNotIn("grok-video-15min.mp4", nombres_nuevos)
+            nombres_nuevos = [a["nombre"] for l in est10["lotes"] for a in l["archivos"]]
+            self.assertIn("grok-video-5min.mp4", nombres_nuevos)
+            self.assertNotIn("grok-video-15min.mp4", nombres_nuevos)
 
-        nombres_ant = [a["nombre"] for l in est10["lotes_anteriores"] for a in l["archivos"]]
-        self.assertIn("grok-video-15min.mp4", nombres_ant)
+            nombres_ant = [a["nombre"] for l in est10["lotes_anteriores"] for a in l["archivos"]]
+            self.assertIn("grok-video-15min.mp4", nombres_ant)
 
     def test_candidato_patron_grok_anterior_queda_sin_tildar_y_sin_escena(self):
         """Candidato por patrón IA (grok-image-*) anterior al capítulo queda sin escena precargada y marcado como anterior."""
-        ahora = datetime.datetime.now()
-        self.db.empezar_capitulo("lucie", "sesion_fotos", fecha_inicio=ahora.isoformat())
-        ts_ini = ahora.timestamp()
-
         f_grok = os.path.join(self.descargas, "grok-image-3545ac09.jpg")
         with open(f_grok, "wb") as f:
             f.write(b"imagen grok")
-        os.utime(f_grok, (ts_ini - 600, ts_ini - 600))
 
         # Archivo sin identificar anterior (no patrón ni alias)
         f_random = os.path.join(self.descargas, "random_viejo.jpg")
         with open(f_random, "wb") as f:
             f.write(b"random")
+
+        time.sleep(0.02)
+        ahora = datetime.datetime.now()
+        ts_ini = ahora.timestamp()
+        os.utime(f_grok, (ts_ini - 600, ts_ini - 600))
         os.utime(f_random, (ts_ini - 600, ts_ini - 600))
+
+        self.db.empezar_capitulo("lucie", "sesion_fotos", fecha_inicio=ahora.isoformat())
 
         vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
         vigilante.escanear()
@@ -3083,12 +3087,13 @@ class TestCapitulosAbiertosMultiples(unittest.TestCase):
             conn.execute("UPDATE bandeja_capitulos SET fecha_inicio = '2026-01-01T00:00:00' WHERE id = ?", (cap1["id"],))
         conn.close()
 
-        # cap2 en foco iniciado 'ahora'
-        cap2 = self.db.empezar_capitulo("roli", "foco_actual")
-
-        # Archivo anterior a cap2
+        # cap2 en foco iniciado después de arch_ant
+        # Archivo anterior a cap2 (creado antes de empezar cap2)
         arch_ant = os.path.join(self.descargas, "grok-image-1.jpg")
         self._crear_archivo(arch_ant, b"foto anterior", mtime=ahora - 500)
+        time.sleep(0.02)
+
+        cap2 = self.db.empezar_capitulo("roli", "foco_actual")
 
         # Archivo posterior a cap2
         arch_post = os.path.join(self.descargas, "grok-image-2.jpg")
@@ -3293,6 +3298,296 @@ class TestCapitulosAbiertosMultiples(unittest.TestCase):
         c1 = self.db.obtener_capitulo_por_id(cap1["id"])
         self.assertEqual(c1["estado"], "cerrado")
         self.assertEqual(c1["en_foco"], 0)
+
+
+class TestCortePorFechaDeLlegada(unittest.TestCase):
+    """
+    Pruebas para el cambio corte-por-fecha-de-llegada:
+    - Archivo con mtime viejo pero ctime posterior al inicio del capítulo se asigna al capítulo en foco y queda tildado.
+    - Archivo con mtime y ctime anteriores queda en 'Anteriores', destildado.
+    - horas_material_reciente usa la fecha de llegada.
+    - El aviso de lotes nuevos no cuenta los de 'Anteriores'.
+    - La función de fecha de llegada devuelve el máximo entre mtime y ctime.
+    - El banner en foco incluye la marca visual de foco.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp(prefix="test_corte_llegada_")
+        self.descargas = os.path.join(self.tmp_dir, "Descargas")
+        self.destino = os.path.join(self.descargas, "_lucie")
+        os.makedirs(self.descargas, exist_ok=True)
+        os.makedirs(self.destino, exist_ok=True)
+
+        self.db_file = os.path.join(self.tmp_dir, "bandeja.db")
+        self.bitacora_file = os.path.join(self.tmp_dir, "bitacora.jsonl")
+        self.cfg_file = os.path.join(self.tmp_dir, "config.json")
+        self.alias_file = os.path.join(self.tmp_dir, "alias.json")
+
+        with open(self.alias_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "lucie": ["lucie", "luci"],
+                "roli": ["roli", "laroli", "magui"],
+                "mailen": ["mailen"]
+            }, f)
+
+        cfg_data = {
+            "ruta_descargas": self.descargas,
+            "ruta_destino_base": self.destino,
+            "archivo_alias_personajes": self.alias_file,
+            "ventana_lote_minutos": 10,
+            "minutos_antes_inicio_capitulo": 0,
+            "horas_material_reciente": 0,
+            "intervalo_sondeo_segundos": 1,
+            "patrones_ignorar": ["Screenshot_*", "Captura*"],
+            "patrones_candidatos": {
+                "grok_video": "grok-video-*",
+                "grok_image": "grok-image-*",
+                "gemini": "Gemini_Generated_Image_*"
+            }
+        }
+        with open(self.cfg_file, "w", encoding="utf-8") as f:
+            json.dump(cfg_data, f)
+
+        self.config = ConfiguracionBandeja(ruta_config=self.cfg_file)
+        self.db = GestorBaseDatosBandeja(ruta_db=self.db_file)
+        self.filtro = FiltroListaBlanca(self.config)
+        self.detector = DetectorDescargasActivas(ventana_estabilidad_segundos=0.01)
+        self.agrupador = AgrupadorLotes(ventana_minutos=10)
+        self.gestor = GestorMovimientosBandeja(
+            self.descargas, self.destino, self.db,
+            ruta_bitacora=self.bitacora_file, ruta_alias=self.alias_file
+        )
+        self.vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+
+    def tearDown(self):
+        for root, dirs, files in os.walk(self.tmp_dir, topdown=False):
+            for file in files:
+                try:
+                    os.unlink(os.path.join(root, file))
+                except OSError:
+                    pass
+            for dir_name in dirs:
+                try:
+                    os.rmdir(os.path.join(root, dir_name))
+                except OSError:
+                    pass
+        try:
+            os.rmdir(self.tmp_dir)
+        except OSError:
+            pass
+
+    def test_archivo_mtime_viejo_pero_ctime_posterior_se_asigna_a_foco_y_queda_tildado(self):
+        """Archivo con mtime viejo pero ctime posterior al inicio del capítulo se asigna al capítulo en foco y queda tildado."""
+        t0 = datetime.datetime.now() - datetime.timedelta(seconds=5)
+        self.db.empezar_capitulo("lucie", "parque_grok", fecha_inicio=t0.isoformat())
+
+        ruta = os.path.join(self.descargas, "grok-video-descargado.mp4")
+        with open(ruta, "wb") as f:
+            f.write(b"video fresco de grok")
+
+        # Simular descarga con mtime viejo del servidor (hace 1 hora)
+        ts_viejo = t0.timestamp() - 3600
+        os.utime(ruta, (ts_viejo, ts_viejo))
+
+        # Verificar que efectivamente mtime es viejo pero ctime es nuevo
+        st = os.stat(ruta)
+        self.assertLess(st.st_mtime, t0.timestamp())
+        self.assertGreater(st.st_ctime, t0.timestamp())
+
+        self.vigilante.escanear()
+        time.sleep(0.02)
+        self.vigilante.escanear()
+
+        estado = self.vigilante.obtener_estado()
+        self.assertEqual(len(estado["lotes"]), 1)
+        self.assertEqual(len(estado["lotes_anteriores"]), 0)
+        lote = estado["lotes"][0]
+        self.assertFalse(lote.get("es_anterior", False))
+        self.assertEqual(lote["personaje_sugerido"], "lucie")
+        self.assertEqual(lote["escena_sugerida"], "parque_grok")
+        self.assertEqual(len(lote["archivos"]), 1)
+        arch = lote["archivos"][0]
+        self.assertEqual(arch["nombre"], "grok-video-descargado.mp4")
+        self.assertFalse(arch.get("es_anterior", False))
+        self.assertEqual(arch["personaje"], "lucie")
+        self.assertEqual(arch["escena"], "parque_grok")
+        self.assertEqual(arch["estado"], "clasificado")
+        self.assertIn("fecha_llegada", arch)
+        self.assertGreater(arch["fecha_llegada_ts"], t0.timestamp())
+
+    def test_archivo_mtime_y_ctime_anteriores_queda_en_anteriores_destildado(self):
+        """Archivo con mtime y ctime anteriores queda en 'Anteriores', destildado."""
+        ruta = os.path.join(self.descargas, "grok-video-antiguo.mp4")
+        with open(ruta, "wb") as f:
+            f.write(b"archivo anterior")
+        time.sleep(0.02)
+
+        t_cap = datetime.datetime.now()
+        ts_cap = t_cap.timestamp()
+        ts_viejo = ts_cap - 3600
+        os.utime(ruta, (ts_viejo, ts_viejo))
+
+        self.db.empezar_capitulo("roli", "gimnasio", fecha_inicio=t_cap.isoformat())
+
+        st = os.stat(ruta)
+        self.assertLess(st.st_mtime, ts_cap)
+        self.assertLess(st.st_ctime, ts_cap)
+
+        self.vigilante.escanear()
+        time.sleep(0.02)
+        self.vigilante.escanear()
+
+        estado = self.vigilante.obtener_estado()
+        self.assertEqual(len(estado["lotes"]), 0)
+        self.assertEqual(len(estado["lotes_anteriores"]), 1)
+        lote_ant = estado["lotes_anteriores"][0]
+        self.assertTrue(lote_ant["es_anterior"])
+        self.assertEqual(lote_ant.get("escena_sugerida", ""), "")
+        arch = lote_ant["archivos"][0]
+        self.assertTrue(arch.get("es_anterior", False))
+        self.assertEqual(arch.get("escena", ""), "")
+        self.assertEqual(arch["estado"], "detectado")
+
+    def test_horas_material_reciente_usa_fecha_llegada(self):
+        """horas_material_reciente usa la fecha de llegada."""
+        self.config.horas_material_reciente = 2.0
+        now_ts = time.time()
+
+        # Archivo A: mtime viejo (10h atrás) pero ctime reciente (ahora)
+        ruta_a = os.path.join(self.descargas, "grok-video-fresco.mp4")
+        with open(ruta_a, "wb") as f:
+            f.write(b"video fresco con Last-Modified viejo")
+        os.utime(ruta_a, (now_ts - 36000, now_ts - 36000))
+
+        # Archivo B: archivo viejo fuera de las 2 horas
+        ruta_b = os.path.join(self.descargas, "grok-video-viejo.mp4")
+        with open(ruta_b, "wb") as f:
+            f.write(b"video viejo")
+
+        stat_b_mock = os.stat_result((
+            33188, 1, 1, 1, 1000, 1000, 100,
+            now_ts - 18000,
+            now_ts - 18000,
+            now_ts - 18000
+        ))
+
+        orig_stat = os.stat
+        def fake_stat(p, *args, **kwargs):
+            if os.path.abspath(p) == os.path.abspath(ruta_b):
+                return stat_b_mock
+            return orig_stat(p, *args, **kwargs)
+
+        with patch("os.stat", side_effect=fake_stat):
+            self.vigilante.escanear()
+            time.sleep(0.02)
+            self.vigilante.escanear()
+
+            estado = self.vigilante.obtener_estado()
+            nombres_principales = [a["nombre"] for l in estado["lotes"] for a in l["archivos"]]
+            self.assertIn("grok-video-fresco.mp4", nombres_principales)
+            self.assertNotIn("grok-video-viejo.mp4", nombres_principales)
+
+            nombres_ant = [a["nombre"] for l in estado["lotes_anteriores"] for a in l["archivos"]]
+            self.assertIn("grok-video-viejo.mp4", nombres_ant)
+
+    def test_aviso_lotes_nuevos_no_cuenta_anteriores(self):
+        """El aviso de lotes nuevos no cuenta los de 'Anteriores'."""
+        ruta_ant = os.path.join(self.descargas, "grok-video-anterior.mp4")
+        with open(ruta_ant, "wb") as f:
+            f.write(b"archivo anterior")
+        time.sleep(0.02)
+
+        t_cap = datetime.datetime.now()
+        ts_cap = t_cap.timestamp()
+        os.utime(ruta_ant, (ts_cap - 500, ts_cap - 500))
+        self.db.empezar_capitulo("lucie", "aviso_test", fecha_inicio=t_cap.isoformat())
+
+        with patch.object(self.vigilante, "_notificar_escritorio") as mock_notif:
+            self.vigilante.escanear()
+            time.sleep(0.02)
+            self.vigilante.escanear()
+
+            estado = self.vigilante.obtener_estado()
+            self.assertEqual(len(estado["lotes_anteriores"]), 1)
+            self.assertEqual(len(estado["lotes"]), 0)
+            mock_notif.assert_not_called()
+
+            # Llega un archivo nuevo posterior al inicio del capítulo
+            ruta_nuevo = os.path.join(self.descargas, "grok-video-nuevo.mp4")
+            with open(ruta_nuevo, "wb") as f:
+                f.write(b"archivo nuevo")
+
+            self.vigilante.escanear()
+            time.sleep(0.02)
+            self.vigilante.escanear()
+
+            estado2 = self.vigilante.obtener_estado()
+            self.assertEqual(len(estado2["lotes"]), 1)
+            mock_notif.assert_called_once()
+            self.assertIn("1 lote(s) nuevo(s)", mock_notif.call_args[0][0])
+
+    def test_funcion_fecha_llegada_devuelve_maximo_entre_mtime_y_ctime(self):
+        """La función de fecha de llegada devuelve el máximo entre mtime y ctime."""
+        from bandeja_descargas import obtener_fecha_llegada
+
+        class MockStat1:
+            st_mtime = 1000.0
+            st_ctime = 2500.0
+        self.assertEqual(obtener_fecha_llegada(MockStat1()), 2500.0)
+
+        class MockStat2:
+            st_mtime = 3500.0
+            st_ctime = 1500.0
+        self.assertEqual(obtener_fecha_llegada(MockStat2()), 3500.0)
+
+        class MockStat3:
+            st_mtime = 2000.0
+            st_ctime = 2000.0
+        self.assertEqual(obtener_fecha_llegada(MockStat3()), 2000.0)
+
+        d = {"mtime": 1200.0, "ctime": 4800.0}
+        self.assertEqual(obtener_fecha_llegada(d), 4800.0)
+
+        test_file = os.path.join(self.descargas, "prueba_llegada.mp4")
+        with open(test_file, "wb") as f:
+            f.write(b"prueba")
+        os.utime(test_file, (1000.0, 1000.0))
+        st = os.stat(test_file)
+        self.assertEqual(obtener_fecha_llegada(test_file), st.st_ctime)
+        self.assertGreater(obtener_fecha_llegada(test_file), 1000.0)
+
+    def test_banner_en_foco_incluye_marca_visual_de_foco(self):
+        """El banner en foco incluye la marca visual de foco."""
+        ruta_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bandeja_descargas.py")
+        with open(ruta_script, "r", encoding="utf-8") as f:
+            contenido = f.read()
+
+        self.assertIn("⭐ EN FOCO", contenido)
+        self.assertIn("#f59e0b", contenido)
+        self.assertIn("banner-otros-abiertos", contenido)
+
+        from bandeja_descargas import crear_servidor, GeneradorMiniaturas
+        thumbs_dir = os.path.join(self.tmp_dir, "thumbs")
+        miniaturas = GeneradorMiniaturas(self.db, thumbs_dir)
+        self.config.puerto_servidor = 0
+        server = crear_servidor(
+            self.config, self.db, self.vigilante, self.gestor, miniaturas, token_csrf="token_test"
+        )
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        port = server.server_address[1]
+
+        try:
+            import urllib.request
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/") as resp:
+                self.assertEqual(resp.status, 200)
+                html_body = resp.read().decode("utf-8")
+                self.assertIn("⭐ EN FOCO", html_body)
+                self.assertIn("banner-capitulo-activo", html_body)
+                self.assertIn("banner-otros-abiertos", html_body)
+        finally:
+            server.shutdown()
+            server.server_close()
 
 
 class TestAuditoriaASTAntiBorrado(unittest.TestCase):

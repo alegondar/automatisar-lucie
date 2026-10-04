@@ -32,7 +32,7 @@ import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Dict, List, Optional, Set, Tuple, Any
+from typing import Dict, List, Optional, Set, Tuple, Any, Union
 from urllib.parse import parse_qs, urlparse
 
 # Constantes del sistema
@@ -85,6 +85,25 @@ def formatear_bytes(total_bytes: int) -> str:
     return f"{total_bytes / (1024 * 1024 * 1024):.1f} GB"
 
 
+def obtener_fecha_llegada(archivo_o_stat: Union[str, os.stat_result, Any]) -> float:
+    """
+    Retorna la fecha de llegada efectiva de un archivo: max(st_mtime, st_ctime).
+    st_ctime se actualiza al crear, descargar, escribir, renombrar o copiar en el sistema de
+    archivos local y no puede ser manipulado con os.utime, evitando que archivos descargados
+    con Last-Modified antiguo del servidor caigan erróneamente en material anterior.
+    """
+    if hasattr(archivo_o_stat, "st_mtime") and hasattr(archivo_o_stat, "st_ctime"):
+        return max(float(archivo_o_stat.st_mtime), float(archivo_o_stat.st_ctime))
+    if isinstance(archivo_o_stat, dict):
+        mt = archivo_o_stat.get("st_mtime", archivo_o_stat.get("mtime", 0.0))
+        ct = archivo_o_stat.get("st_ctime", archivo_o_stat.get("ctime", 0.0))
+        return max(float(mt), float(ct))
+    if isinstance(archivo_o_stat, (int, float)):
+        return float(archivo_o_stat)
+    st = os.stat(str(archivo_o_stat))
+    return max(float(st.st_mtime), float(st.st_ctime))
+
+
 class ConfiguracionBandeja:
     """Gestiona la carga y validación de config_bandeja.json."""
 
@@ -109,6 +128,7 @@ class ConfiguracionBandeja:
         self.patrones_ignorar = ["Screenshot_*", "Captura*"]
         self.horas_alerta_capitulo_olvidado = 12
         self.minutos_antes_inicio_capitulo = 0
+        self.horas_material_reciente = 0.0
         self.cargar()
 
     def cargar(self):
@@ -127,6 +147,11 @@ class ConfiguracionBandeja:
                 self.horas_alerta_capitulo_olvidado = max(1, int(datos["horas_alerta_capitulo_olvidado"]))
             if "minutos_antes_inicio_capitulo" in datos:
                 self.minutos_antes_inicio_capitulo = max(0, int(datos["minutos_antes_inicio_capitulo"]))
+            if "horas_material_reciente" in datos:
+                try:
+                    self.horas_material_reciente = max(0.0, float(datos["horas_material_reciente"]))
+                except (ValueError, TypeError):
+                    self.horas_material_reciente = 0.0
             if "intervalo_sondeo_segundos" in datos:
                 self.intervalo_sondeo_segundos = max(1, int(datos["intervalo_sondeo_segundos"]))
             if "ventana_lote_minutos" in datos:
@@ -1138,6 +1163,9 @@ class AgrupadorLotes:
             for arch in grupo:
                 if "fecha" not in arch and "mtime" in arch:
                     arch["fecha"] = datetime.datetime.fromtimestamp(arch["mtime"]).strftime("%Y-%m-%d %H:%M:%S")
+                if "fecha_llegada" not in arch:
+                    fl_ts = arch.get("fecha_llegada_ts", arch.get("mtime", 0.0))
+                    arch["fecha_llegada"] = datetime.datetime.fromtimestamp(fl_ts).strftime("%Y-%m-%d %H:%M:%S")
                 if es_ant:
                     arch["es_anterior"] = True
                     arch["escena"] = ""
@@ -2168,13 +2196,20 @@ class VigilanteBandeja:
                 st = os.stat(ruta_completa)
                 tamanio = st.st_size
                 mtime = st.st_mtime
+                fecha_llegada = obtener_fecha_llegada(st)
             except OSError:
                 continue
 
-            # Comprobar si el archivo es anterior al capítulo en foco
+            # Comprobar si el archivo es anterior al capítulo en foco o según horas_material_reciente
             es_anterior = False
-            if es_cap_foco and mtime < ts_corte_capitulo:
+            if es_cap_foco and fecha_llegada < ts_corte_capitulo:
                 es_anterior = True
+
+            horas_reciente = float(getattr(self.config, "horas_material_reciente", 0) or 0)
+            if horas_reciente > 0:
+                ts_corte_reciente = time.time() - (horas_reciente * 3600.0)
+                if fecha_llegada < ts_corte_reciente:
+                    es_anterior = True
 
             # Comprobar en base de datos SQLite si ya tiene decisión tomada
             reg = self.db.obtener_por_ruta(ruta_completa)
@@ -2248,12 +2283,15 @@ class VigilanteBandeja:
                             id_db = self.db.registrar_o_actualizar(hash_val, ruta_completa, "detectado")
                             estado_actual = "detectado"
 
+            fecha_llegada_str = datetime.datetime.fromtimestamp(fecha_llegada).strftime("%Y-%m-%d %H:%M:%S")
             item_info = {
                 "id_db": id_db,
                 "nombre": entrada,
                 "ruta": ruta_completa,
                 "tamanio": tamanio,
                 "mtime": mtime,
+                "fecha_llegada": fecha_llegada_str,
+                "fecha_llegada_ts": fecha_llegada,
                 "hash": hash_val,
                 "estado": estado_actual,
                 "personaje": personaje_actual,
@@ -2343,11 +2381,12 @@ class VigilanteBandeja:
             self._sin_identificar_actuales = sin_identificar
             self._escenas_existentes_actuales = escenas_existentes
 
-            # Notificar si hay nuevos lotes
-            if len(lotes_generados) > self._ultimo_conteo_lotes:
-                nuevos = len(lotes_generados) - self._ultimo_conteo_lotes
+            # Notificar si hay nuevos lotes en la lista principal (NUNCA en Anteriores)
+            lotes_principales = [l for l in lotes_generados if not l.get("es_anterior")]
+            if len(lotes_principales) > self._ultimo_conteo_lotes:
+                nuevos = len(lotes_principales) - self._ultimo_conteo_lotes
                 self._notificar_escritorio(f"Se detectaron {nuevos} lote(s) nuevo(s) listos para ordenar.")
-            self._ultimo_conteo_lotes = len(lotes_generados)
+            self._ultimo_conteo_lotes = len(lotes_principales)
 
     def _bucle_sondeo(self):
         while not self._detener.is_set():
@@ -3383,14 +3422,17 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       margin-bottom: 20px;
     }}
     .badge-capitulo-activo {{
-      background: rgba(3, 218, 198, 0.2);
-      color: var(--teal);
-      border: 1px solid var(--teal);
+      background: #f59e0b;
+      color: #000;
+      border: 1px solid #f59e0b;
       padding: 2px 8px;
       border-radius: 4px;
       font-size: 0.75rem;
-      font-weight: bold;
+      font-weight: 700;
       text-transform: uppercase;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
     }}
     .badge-capitulo-inactivo {{
       background: rgba(255, 255, 255, 0.08);
@@ -3404,7 +3446,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     }}
     .banner-capitulo-activo {{
       background: #1e1b4b;
-      border: 1px solid #6366f1;
+      border: 1px solid #f59e0b;
       border-radius: 8px;
       padding: 14px 20px;
       margin-bottom: 20px;
@@ -3525,7 +3567,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     <div id="banner-capitulo-activo" class="banner-capitulo-activo" style="display:none;">
       <div>
         <div style="display:flex; align-items:center; gap:10px;">
-          <span class="badge-capitulo-activo">En Foco</span>
+          <span class="badge-capitulo-activo">⭐ EN FOCO</span>
           <span id="banner-capitulo-titulo" style="font-weight:700; font-size:1.1rem; color:#e0e7ff;">Capítulo en foco:</span>
           <span id="banner-otros-abiertos" style="font-size:0.85rem; color:#a5b4fc; cursor:pointer; text-decoration:underline;" onclick="mostrarPestana('capitulos-abiertos')"></span>
         </div>
@@ -4569,7 +4611,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             </div>
             <div class="archivos-grid">
               ${{lote.archivos.map(a => `
-                <div class="archivo-item" title="Archivo: ${{a.nombre}}&#10;Fecha: ${{a.fecha || lote.fecha || ''}}&#10;Tamaño: ${{formatearBytes(a.tamanio)}}">
+                <div class="archivo-item" title="Archivo: ${{a.nombre}}&#10;Fecha llegada: ${{a.fecha_llegada || a.fecha || ''}}&#10;Fecha modificación: ${{a.fecha || ''}}&#10;Tamaño: ${{formatearBytes(a.tamanio)}}">
                   <div class="chk-container">
                     <input type="checkbox" class="chk-archivo chk-lote-${{lote.lote_id}}" data-id="${{a.id_db}}" checked onchange="actualizarSeleccionLote('${{lote.lote_id}}')">
                   </div>
@@ -4579,6 +4621,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
                   <div class="archivo-meta">
                     <div class="archivo-nombre" title="${{a.nombre}}">${{a.nombre}}</div>
                     <div class="archivo-peso">${{formatearBytes(a.tamanio)}}</div>
+                    <div class="archivo-llegada" style="font-size:0.75rem; color:var(--text-muted);" title="Fecha de llegada: ${{a.fecha_llegada || a.fecha || ''}}">🕒 ${{a.fecha_llegada || a.fecha || ''}}</div>
                   </div>
                 </div>
               `).join('')}}
@@ -4668,7 +4711,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             </div>
             <div class="archivos-grid">
               ${{lote.archivos.map(a => `
-                <div class="archivo-item" title="Archivo: ${{a.nombre}}&#10;Fecha: ${{a.fecha || lote.fecha || ''}}&#10;Tamaño: ${{formatearBytes(a.tamanio)}}">
+                <div class="archivo-item" title="Archivo: ${{a.nombre}}&#10;Fecha llegada: ${{a.fecha_llegada || a.fecha || ''}}&#10;Fecha modificación: ${{a.fecha || ''}}&#10;Tamaño: ${{formatearBytes(a.tamanio)}}">
                   <div class="chk-container">
                     <input type="checkbox" class="chk-archivo chk-lote-${{lote.lote_id}}" data-id="${{a.id_db}}" onchange="actualizarSeleccionLote('${{lote.lote_id}}')">
                   </div>
@@ -4678,6 +4721,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
                   <div class="archivo-meta">
                     <div class="archivo-nombre" title="${{a.nombre}}">${{a.nombre}}</div>
                     <div class="archivo-peso">${{formatearBytes(a.tamanio)}}</div>
+                    <div class="archivo-llegada" style="font-size:0.75rem; color:var(--text-muted);" title="Fecha de llegada: ${{a.fecha_llegada || a.fecha || ''}}">🕒 ${{a.fecha_llegada || a.fecha || ''}}</div>
                   </div>
                 </div>
               `).join('')}}

@@ -5,6 +5,7 @@
   "host_servidor": "127.0.0.1",
   "horas_alerta_capitulo_olvidado": 12,
   "minutos_antes_inicio_capitulo": 0,
+  "horas_material_reciente": 0,
   "intervalo_sondeo_segundos": 5,
   "ventana_lote_minutos": 10,
   "extensiones_media": [
