@@ -45,7 +45,8 @@ from bandeja_descargas import (
     ErrorSeguridadBandeja,
     ErrorDeshacer,
     calcular_sha256,
-    generar_html_simulacion
+    generar_html_simulacion,
+    asegurar_carpeta_capitulo
 )
 from seguridad_anti_borrado import analizar_ast_archivo
 
@@ -2599,6 +2600,301 @@ class TestDescartarCapitulo(unittest.TestCase):
         # FiltroListaBlanca nunca debe considerar _descartados como escena existente
         self.assertFalse(self.filtro.es_carpeta_escena_existente("_descartados"))
         self.assertFalse(self.filtro.es_carpeta_escena_existente("_cualquier_oculta"))
+
+
+class TestAjustesEscenaCapituloYAnteriores(unittest.TestCase):
+    """Pruebas para el change ajustes-escena-capitulo-y-anteriores:
+    - Creación inmediata de carpeta al empezar o reabrir capítulo.
+    - Detección e información si la carpeta ya existía con archivos.
+    - Validación y rechazo de nombres inválidos o escapes por path traversal.
+    - Desplegable de escena con [Capítulo activo] <nombre> preseleccionado y sin duplicar [Destino].
+    - Mover archivos con la escena del capítulo renombra ordenadamente y deshace sin problemas.
+    - Descarte de capítulo con carpeta vacía existente la mueve a _descartados y permite deshacer.
+    - Material anterior al inicio del capítulo queda destildado y sin escena precargada.
+    - Lote mixto con archivos anteriores y nuevos se divide, dejando solo lo nuevo tildado.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp(prefix="test_ajustes_escena_")
+        self.descargas = os.path.join(self.tmp_dir, "Descargas")
+        self.destino = os.path.join(self.descargas, "_lucie")
+        self.db_path = os.path.join(self.tmp_dir, "bandeja.db")
+        self.bitacora = os.path.join(self.tmp_dir, "bitacora.jsonl")
+        self.alias_file = os.path.join(self.tmp_dir, "alias.json")
+
+        os.makedirs(self.descargas, exist_ok=True)
+        os.makedirs(self.destino, exist_ok=True)
+
+        with open(self.alias_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "lucie": ["lucie", "luci"],
+                "roli": ["roli", "laroli", "magui"],
+                "mailen": ["mailen"]
+            }, f)
+
+        self.config = ConfiguracionBandeja()
+        self.config.ruta_descargas = self.descargas
+        self.config.ruta_destino_base = self.destino
+        self.config.archivo_alias_personajes = self.alias_file
+        self.config.puerto_servidor = 8806
+        self.config.host_servidor = "127.0.0.1"
+
+        self.db = GestorBaseDatosBandeja(self.db_path, ruta_destino_base=self.destino, ruta_descargas=self.descargas)
+        self.movimientos = GestorMovimientosBandeja(self.descargas, self.destino, self.db, self.bitacora, archivo_alias_personajes=self.alias_file)
+        self.filtro = FiltroListaBlanca(self.config)
+        self.detector = DetectorDescargasActivas(0.0)
+        self.agrupador = AgrupadorLotes(10)
+        self.vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _crear_archivo(self, ruta: str, contenido: bytes = b"datos de prueba", mtime: Optional[float] = None) -> str:
+        os.makedirs(os.path.dirname(ruta), exist_ok=True)
+        with open(ruta, "wb") as f:
+            f.write(contenido)
+        if mtime is not None:
+            os.utime(ruta, (mtime, mtime))
+        return ruta
+
+    def test_empezar_capitulo_crea_carpeta_y_repetir_avisa(self):
+        """Al empezar capítulo se crea la carpeta en disco inmediatamente; si ya existía con archivos avisa."""
+        carpeta_cap = os.path.join(self.destino, "lucie", "olor a culo")
+        self.assertFalse(os.path.exists(carpeta_cap))
+
+        cap = self.db.empezar_capitulo("lucie", "olor a culo")
+        self.assertTrue(os.path.exists(carpeta_cap))
+        self.assertTrue(os.path.isdir(carpeta_cap))
+        self.assertIn("carpeta_info", cap)
+        self.assertFalse(cap["carpeta_info"]["ya_existia"])
+        self.assertEqual(cap["carpeta_info"]["total_archivos"], 0)
+
+        # Crear archivos dentro de la carpeta
+        self._crear_archivo(os.path.join(carpeta_cap, "lucieolor a culo1.jpg"))
+        self._crear_archivo(os.path.join(carpeta_cap, "lucieolor a culo2.jpg"))
+
+        self.db.terminar_capitulo()
+
+        # Al volver a empezar un capítulo con el mismo nombre y archivos existentes
+        cap2 = self.db.empezar_capitulo("lucie", "olor a culo")
+        self.assertTrue(cap2["carpeta_info"]["ya_existia"])
+        self.assertEqual(cap2["carpeta_info"]["total_archivos"], 2)
+        self.assertIn("La carpeta ya existía y tiene 2 archivos", cap2["carpeta_info"]["mensaje"])
+        # Los archivos previos no se tocan
+        self.assertTrue(os.path.exists(os.path.join(carpeta_cap, "lucieolor a culo1.jpg")))
+        self.assertTrue(os.path.exists(os.path.join(carpeta_cap, "lucieolor a culo2.jpg")))
+
+    def test_reabrir_capitulo_asegura_carpeta(self):
+        """Reabrir un capítulo cerrado asegura la carpeta y no borra nada."""
+        cap = self.db.empezar_capitulo("roli", "fiesta_roli")
+        carpeta_cap = os.path.join(self.destino, "roli", "fiesta_roli")
+        self.assertTrue(os.path.exists(carpeta_cap))
+
+        self.db.terminar_capitulo()
+        # La carpeta sigue existiendo en disco aunque el capítulo haya terminado
+        self.assertTrue(os.path.exists(carpeta_cap))
+
+        reabierto = self.db.reabrir_capitulo(cap["id"])
+        self.assertTrue(reabierto["carpeta_info"]["ya_existia"])
+        self.assertTrue(os.path.exists(carpeta_cap))
+
+    def test_nombre_invalido_o_traversal_no_crea_nada(self):
+        """Validación estricta de nombres y confinamiento con realpath rechaza escapes."""
+        with self.assertRaises(ValueError):
+            asegurar_carpeta_capitulo("lucie", "../escape_directorio", self.destino, self.descargas)
+
+        with self.assertRaises(ValueError):
+            asegurar_carpeta_capitulo("lucie", "", self.destino, self.descargas)
+
+        with self.assertRaises(ValueError):
+            asegurar_carpeta_capitulo("lucie", "nombre*invalido", self.destino, self.descargas)
+
+        with self.assertRaises(ValueError):
+            asegurar_carpeta_capitulo("personaje_falso", "escena", self.destino, self.descargas)
+
+        self.assertFalse(os.path.exists(os.path.join(self.descargas, "escape_directorio")))
+
+    def test_desplegable_capitulo_activo_preseleccionado_sin_duplicado(self):
+        """Verifica que el estado y la simulación manejan correctamente el capítulo activo y advierten desajustes de personaje."""
+        cap = self.db.empezar_capitulo("lucie", "paseo")
+        self.assertIn("carpeta_info", cap)
+        self.assertFalse(cap["carpeta_info"]["ya_existia"])
+
+        cap_activo = self.db.obtener_capitulo_activo()
+        self.assertEqual(cap_activo["personaje"], "lucie")
+        self.assertEqual(cap_activo["nombre"], "paseo")
+        info = self.movimientos.asegurar_carpeta_capitulo(cap_activo["personaje"], cap_activo["nombre"])
+        self.assertTrue(info["ya_existia"])
+
+        # Si el lote usa un personaje distinto al del capítulo activo, la simulación debe advertirlo claramente
+        arch_roli = self._crear_archivo(os.path.join(self.descargas, "grok-roli-1.jpg"))
+        sim = self.movimientos.simular_movimiento_lote(
+            [{"ruta": arch_roli, "id_db": 10}],
+            personaje="roli",
+            nombre_escena="paseo"
+        )
+        self.assertTrue(sim["diferente_personaje_capitulo"])
+        self.assertEqual(sim["personaje_capitulo"], "lucie")
+        self.assertIn("Aviso de Personaje", sim["html"])
+        self.assertIn("difiere del personaje del capítulo activo", sim["html"])
+        self.assertIn("_lucie/roli/paseo", sim["html"])
+
+    def test_mover_con_opcion_capitulo_renombra_y_deshacer(self):
+        """Mover archivos al capítulo activo renombra con correlativos y deshacer revierte con os.rename."""
+        self.db.empezar_capitulo("lucie", "playa")
+        f1 = self._crear_archivo(os.path.join(self.descargas, "grok-img1.jpg"), b"foto 1", mtime=1000.0)
+        f2 = self._crear_archivo(os.path.join(self.descargas, "grok-img2.png"), b"foto 2", mtime=1005.0)
+
+        candidatos = [
+            {"ruta": f1, "tamanio": 6, "hash": "h_f1"},
+            {"ruta": f2, "tamanio": 6, "hash": "h_f2"}
+        ]
+
+        sim = self.movimientos.simular_movimiento_lote(
+            candidatos,
+            personaje="lucie",
+            nombre_escena="playa"
+        )
+        self.assertEqual(sim["total_archivos"], 2)
+        nombres_nuevos = [m["nombre_nuevo"] for m in sim["movimientos"]]
+        self.assertEqual(nombres_nuevos, ["lucieplaya1.jpg", "lucieplaya2.png"])
+
+        res = self.movimientos.ejecutar_movimiento_lote(sim, "lote_capitulo")
+        self.assertTrue(res["exito"])
+
+        dest_f1 = os.path.join(self.destino, "lucie", "playa", "lucieplaya1.jpg")
+        dest_f2 = os.path.join(self.destino, "lucie", "playa", "lucieplaya2.png")
+        self.assertTrue(os.path.exists(dest_f1))
+        self.assertTrue(os.path.exists(dest_f2))
+        self.assertFalse(os.path.exists(f1))
+        self.assertFalse(os.path.exists(f2))
+
+        # Deshacer restaura los archivos originales a ~/Descargas
+        desh = self.movimientos.deshacer_operacion(res["id_operacion"])
+        self.assertTrue(desh["exito"])
+        self.assertTrue(os.path.exists(f1))
+        self.assertTrue(os.path.exists(f2))
+        self.assertFalse(os.path.exists(dest_f1))
+        self.assertFalse(os.path.exists(dest_f2))
+
+    def test_descartar_capitulo_carpeta_vacia_mueve_y_deshace(self):
+        """Descartar un capítulo con carpeta vacía existente la mueve a _descartados y permite deshacer."""
+        cap = self.db.empezar_capitulo("mailen", "cap_vacio")
+        carpeta_cap = os.path.join(self.destino, "mailen", "cap_vacio")
+        self.assertTrue(os.path.exists(carpeta_cap))
+
+        sim = self.movimientos.simular_descartar_capitulo(cap["id"])
+        self.assertTrue(sim["carpeta_existe"])
+        self.assertTrue(sim["carpeta_vacia"])
+        self.assertEqual(sim["total_archivos"], 0)
+
+        res = self.movimientos.ejecutar_descartar_capitulo(sim, "cap_vacio")
+        self.assertTrue(res["exito"])
+        # La carpeta original se movió (no existe en la ruta de origen)
+        self.assertFalse(os.path.exists(carpeta_cap))
+        self.assertTrue(os.path.exists(res["destino"]))
+        self.assertIn("_descartados", res["destino"])
+
+        # Deshacer restaura la carpeta vacía al origen
+        desh = self.movimientos.deshacer_operacion(res["id_operacion"])
+        self.assertTrue(desh["exito"])
+        self.assertTrue(os.path.exists(carpeta_cap))
+        self.assertFalse(os.path.exists(res["destino"]))
+
+    def test_lote_anterior_lucie_destildado_sin_escena(self):
+        """Material descargado antes del capítulo queda en lotes_anteriores, destildado y sin escena."""
+        t_viejo = time.time() - 3600
+        f_antigua = self._crear_archivo(os.path.join(self.descargas, "lucie_trapitos_antigua.jpg"), mtime=t_viejo)
+
+        # Empezar capítulo activo AHORA
+        self.db.empezar_capitulo("lucie", "capitulo_reciente")
+
+        self.vigilante.escanear()
+        self.vigilante.escanear()
+        estado = self.vigilante.obtener_estado()
+        self.assertEqual(len(estado["lotes"]), 0)
+        self.assertEqual(len(estado["lotes_anteriores"]), 1)
+
+        lote_ant = estado["lotes_anteriores"][0]
+        self.assertTrue(lote_ant["es_anterior"])
+        self.assertEqual(lote_ant["escena_sugerida"], "")
+        self.assertEqual(len(lote_ant["archivos"]), 1)
+        self.assertTrue(lote_ant["archivos"][0]["es_anterior"])
+
+        # Verificar en base de datos que escena_sugerida quedó en None/vacío
+        cand_db = self.db.obtener_por_ruta(f_antigua)
+        self.assertIsNotNone(cand_db)
+        self.assertIsNone(cand_db.get("escena"))
+
+        # Si entra un archivo nuevo posterior a la fecha de inicio
+        t_nuevo = time.time() + 10
+        f_nueva = self._crear_archivo(os.path.join(self.descargas, "lucie_trapitos_nueva.jpg"), mtime=t_nuevo)
+        self.vigilante.escanear()
+        self.vigilante.escanear()
+        estado2 = self.vigilante.obtener_estado()
+
+        self.assertEqual(len(estado2["lotes"]), 1)
+        self.assertEqual(len(estado2["lotes_anteriores"]), 1)
+        lote_nuevo = estado2["lotes"][0]
+        self.assertFalse(lote_nuevo.get("es_anterior", False))
+        self.assertEqual(lote_nuevo["escena_sugerida"], "capitulo_reciente")
+
+    def test_lote_mixto_se_parte_y_solo_nuevo_queda_tildado(self):
+        """Un lote con candidatos mixtos (anteriores y nuevos) se parte en lotes separados."""
+        candidatos = [
+            {
+                "id_db": 1,
+                "ruta": os.path.join(self.descargas, "ant1.jpg"),
+                "tamanio": 100,
+                "mtime": 1000.0,
+                "es_anterior": True,
+                "personaje": "lucie",
+                "escena": "trapitos",
+                "raiz_escena": "trapitos"
+            },
+            {
+                "id_db": 2,
+                "ruta": os.path.join(self.descargas, "ant2.jpg"),
+                "tamanio": 100,
+                "mtime": 1005.0,
+                "es_anterior": True,
+                "personaje": "lucie",
+                "escena": "trapitos",
+                "raiz_escena": "trapitos"
+            },
+            {
+                "id_db": 3,
+                "ruta": os.path.join(self.descargas, "new1.jpg"),
+                "tamanio": 100,
+                "mtime": 2000.0,
+                "es_anterior": False,
+                "personaje": "lucie",
+                "escena": "cap_nuevo",
+                "raiz_escena": "cap_nuevo"
+            },
+            {
+                "id_db": 4,
+                "ruta": os.path.join(self.descargas, "new2.jpg"),
+                "tamanio": 100,
+                "mtime": 2005.0,
+                "es_anterior": False,
+                "personaje": "lucie",
+                "escena": "cap_nuevo",
+                "raiz_escena": "cap_nuevo"
+            }
+        ]
+
+        lotes = self.agrupador.agrupar(candidatos)
+        self.assertEqual(len(lotes), 2)
+
+        lote_nuevos = next(l for l in lotes if not l.get("es_anterior"))
+        lote_anteriores = next(l for l in lotes if l.get("es_anterior"))
+
+        self.assertEqual(len(lote_nuevos["archivos"]), 2)
+        self.assertEqual(lote_nuevos["escena_sugerida"], "cap_nuevo")
+
+        self.assertEqual(len(lote_anteriores["archivos"]), 2)
+        self.assertEqual(lote_anteriores["escena_sugerida"], "")
 
 
 class TestAuditoriaASTAntiBorrado(unittest.TestCase):

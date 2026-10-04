@@ -148,8 +148,11 @@ class ConfiguracionBandeja:
 class GestorBaseDatosBandeja:
     """Administra la tabla bandeja_archivos y bandeja_estado en SQLite."""
 
-    def __init__(self, ruta_db: str = ".cache/inventario_pendrive_cache.sqlite"):
+    def __init__(self, ruta_db: str = ".cache/inventario_pendrive_cache.sqlite",
+                 ruta_destino_base: Optional[str] = None, ruta_descargas: Optional[str] = None):
         self.ruta_db = ruta_db
+        self.ruta_destino_base = ruta_destino_base
+        self.ruta_descargas = ruta_descargas
         os.makedirs(os.path.dirname(os.path.abspath(self.ruta_db)), exist_ok=True)
         self._lock = threading.Lock()
         self.inicializar_tablas()
@@ -207,7 +210,8 @@ class GestorBaseDatosBandeja:
             con.commit()
 
     def registrar_o_actualizar(self, hash_val: str, ruta_actual: str, estado: str,
-                               personaje: Optional[str] = None, escena: Optional[str] = None) -> int:
+                               personaje: Optional[str] = None, escena: Optional[str] = None,
+                               limpiar_escena: bool = False) -> int:
         fecha_iso = datetime.datetime.now().isoformat()
         with self._lock, self._conectar() as con:
             cur = con.cursor()
@@ -218,9 +222,9 @@ class GestorBaseDatosBandeja:
                 ruta_actual = excluded.ruta_actual,
                 estado = excluded.estado,
                 personaje = COALESCE(excluded.personaje, bandeja_archivos.personaje),
-                escena = COALESCE(excluded.escena, bandeja_archivos.escena),
+                escena = CASE WHEN ? THEN NULL ELSE COALESCE(excluded.escena, bandeja_archivos.escena) END,
                 fecha = excluded.fecha;
-            """, (hash_val, ruta_actual, estado, personaje, escena, fecha_iso))
+            """, (hash_val, ruta_actual, estado, personaje, escena, fecha_iso, 1 if limpiar_escena else 0))
             con.commit()
             cur.execute("SELECT id FROM bandeja_archivos WHERE hash = ?", (hash_val,))
             row = cur.fetchone()
@@ -267,14 +271,31 @@ class GestorBaseDatosBandeja:
             """, (personaje,))
             con.commit()
 
-    def empezar_capitulo(self, personaje: str, nombre: str, fecha_inicio: Optional[str] = None) -> Dict[str, Any]:
+    def asegurar_carpeta_capitulo(self, personaje: str, nombre: str,
+                                  ruta_destino_base: Optional[str] = None,
+                                  ruta_descargas: Optional[str] = None) -> Dict[str, Any]:
+        dest_base = ruta_destino_base or self.ruta_destino_base
+        if not dest_base:
+            dest_base = os.path.expanduser("~/Descargas/_lucie")
+        desc = ruta_descargas or self.ruta_descargas or os.path.expanduser("~/Descargas")
+        return asegurar_carpeta_capitulo(personaje, nombre, dest_base, desc)
+
+    def empezar_capitulo(self, personaje: str, nombre: str, fecha_inicio: Optional[str] = None,
+                         ruta_destino_base: Optional[str] = None, ruta_descargas: Optional[str] = None) -> Dict[str, Any]:
         """
         Inicia un nuevo capítulo activo. Falla si ya existe otro capítulo activo.
+        Asegura la creación de la carpeta física si ruta_destino_base está disponible o configurada.
         """
         nombre_limpio = (nombre or "").strip()
-        personaje_limpio = (personaje or "").strip() or "lucie"
+        personaje_limpio = (personaje or "").strip().lower() or "lucie"
         if not nombre_limpio:
             raise ValueError("El nombre del capítulo no puede estar vacío.")
+
+        dest_base = ruta_destino_base or self.ruta_destino_base
+        desc = ruta_descargas or self.ruta_descargas
+        info_carpeta = None
+        if dest_base:
+            info_carpeta = self.asegurar_carpeta_capitulo(personaje_limpio, nombre_limpio, dest_base, desc)
 
         fecha_ini = fecha_inicio or datetime.datetime.now().isoformat()
         with self._lock, self._conectar() as con:
@@ -296,6 +317,8 @@ class GestorBaseDatosBandeja:
         self.guardar_capitulo_activo(personaje_limpio, nombre_limpio, True)
         d = dict(row)
         d["habilitado"] = True
+        if info_carpeta:
+            d["carpeta_info"] = info_carpeta
         return d
 
     def obtener_capitulo_activo(self) -> Dict[str, Any]:
@@ -405,10 +428,15 @@ class GestorBaseDatosBandeja:
             self.guardar_capitulo_activo("", "", False)
         return afectados
 
-    def reabrir_capitulo(self, id_capitulo: int) -> Dict[str, Any]:
+    def reabrir_capitulo(self, id_capitulo: int,
+                         ruta_destino_base: Optional[str] = None,
+                         ruta_descargas: Optional[str] = None) -> Dict[str, Any]:
         """
         Reabre un capítulo cerrado como activo. Falla si ya hay otro capítulo activo.
+        Asegura la creación de la carpeta física si ruta_destino_base está disponible o configurada.
         """
+        dest_base = ruta_destino_base or self.ruta_destino_base
+        desc = ruta_descargas or self.ruta_descargas
         with self._lock, self._conectar() as con:
             cur = con.cursor()
             cur.execute("SELECT id, personaje, nombre FROM bandeja_capitulos WHERE estado = 'activo' LIMIT 1")
@@ -420,9 +448,16 @@ class GestorBaseDatosBandeja:
             row = cur.fetchone()
             if not row:
                 raise ValueError("Capítulo no encontrado.")
+
+            info_carpeta = None
+            if dest_base:
+                info_carpeta = self.asegurar_carpeta_capitulo(row["personaje"], row["nombre"], dest_base, desc)
+
             if row["estado"] == "activo":
                 d = dict(row)
                 d["habilitado"] = True
+                if info_carpeta:
+                    d["carpeta_info"] = info_carpeta
                 return d
 
             now_iso = datetime.datetime.now().isoformat()
@@ -438,6 +473,8 @@ class GestorBaseDatosBandeja:
 
         self.guardar_capitulo_activo(updated["personaje"], updated["nombre"], True)
         updated["habilitado"] = True
+        if info_carpeta:
+            updated["carpeta_info"] = info_carpeta
         return updated
 
     def obtener_capitulo_por_id(self, id_capitulo: int) -> Optional[Dict[str, Any]]:
@@ -833,6 +870,62 @@ class ValidadorEscenas:
         return True, ""
 
 
+def asegurar_carpeta_capitulo(
+    personaje: str,
+    nombre: str,
+    ruta_destino_base: str,
+    ruta_descargas: str = ""
+) -> Dict[str, Any]:
+    """
+    Asegura la creación física y segura de la carpeta ~/Descargas/_lucie/<personaje>/<nombre>/
+    al empezar o reabrir un capítulo.
+    Valida previamente el nombre con ValidadorEscenas y el confinamiento con realpath.
+    Si ya existía, no modifica ni borra nada y contabiliza los archivos existentes.
+    """
+    nombre_limpio = (nombre or "").strip()
+    personaje_limpio = (personaje or "").strip().lower()
+    if personaje_limpio not in ("lucie", "roli", "mailen"):
+        raise ValueError(f"Personaje inválido: '{personaje}'. Debe ser 'lucie', 'roli' o 'mailen'.")
+
+    if not nombre_limpio:
+        raise ValueError("El nombre del capítulo no puede estar vacío.")
+
+    valido, motivo = ValidadorEscenas.validar_nombre_escena(
+        nombre_limpio, ruta_destino_base, ruta_descargas,
+        es_existente_descargas=False, personaje=personaje_limpio
+    )
+    if not valido:
+        raise ValueError(f"Nombre de capítulo inválido: {motivo}")
+
+    carpeta = os.path.join(ruta_destino_base, personaje_limpio, nombre_limpio)
+    base_confinada = os.path.realpath(ruta_destino_base)
+    carpeta_real = os.path.realpath(carpeta)
+    if not (carpeta_real == base_confinada or carpeta_real.startswith(base_confinada + os.sep)):
+        raise ValueError("La ruta del capítulo escapa de los límites permitidos del directorio de destino.")
+
+    ya_existia = os.path.exists(carpeta)
+    total_archivos = 0
+    if ya_existia:
+        if not os.path.isdir(carpeta):
+            raise ValueError(f"La ruta de destino existe pero no es un directorio: {carpeta}")
+        for _, _, files in os.walk(carpeta):
+            total_archivos += len(files)
+        if total_archivos > 0:
+            mensaje = f"La carpeta ya existía y tiene {total_archivos} archivos"
+        else:
+            mensaje = "La carpeta ya existía y está vacía"
+    else:
+        os.makedirs(carpeta, exist_ok=True)
+        mensaje = "Carpeta creada exitosamente"
+
+    return {
+        "carpeta": carpeta,
+        "ya_existia": ya_existia,
+        "total_archivos": total_archivos,
+        "mensaje": mensaje
+    }
+
+
 class DetectorDescargasActivas:
     """Verifica si un archivo se encuentra en descarga activa o inestable (ventana de 5s)."""
 
@@ -879,13 +972,32 @@ class AgrupadorLotes:
     def agrupar(self, candidatos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Agrupa los candidatos:
-        1. Archivos con raíz de escena reconocible (o capítulo asignado) se agrupan estrictamente
+        1. Si hay mezcla de candidatos anteriores y nuevos, se particionan estrictamente
+           para que ningún archivo anterior contamine los lotes nuevos.
+        2. Archivos con raíz de escena reconocible (o capítulo asignado) se agrupan estrictamente
            por dicha raíz compartida, independientemente de la hora. Raíces distintas NUNCA se mezclan.
-        2. Archivos sin raíz reconocible se agrupan por proximidad temporal (ventana_minutos).
-        3. Los lotes resultantes se ordenan cronológicamente.
+        3. Archivos sin raíz reconocible se agrupan por proximidad temporal (ventana_minutos).
+        4. Los lotes resultantes se ordenan cronológicamente.
         """
         if not candidatos:
             return []
+
+        # Partición estricta de lote mixto: anteriores y nuevos nunca comparten lote
+        cand_nuevos = [c for c in candidatos if not c.get("es_anterior")]
+        cand_ant = [c for c in candidatos if c.get("es_anterior")]
+        if cand_nuevos and cand_ant:
+            lotes_nuevos = self.agrupar(cand_nuevos)
+            lotes_anteriores = self.agrupar(cand_ant)
+            for l in lotes_nuevos:
+                l["es_anterior"] = False
+            for idx, l in enumerate(lotes_anteriores, 1):
+                l["es_anterior"] = True
+                l["escena_sugerida"] = ""
+                l["lote_id"] = f"ant_{l['lote_id']}" if not l["lote_id"].startswith("ant_") else l["lote_id"]
+                for a in l.get("archivos", []):
+                    a["es_anterior"] = True
+                    a["escena"] = ""
+            return lotes_nuevos + lotes_anteriores
 
         # Separar candidatos con raíz reconocible de aquellos sin raíz
         con_raiz: Dict[str, List[Dict[str, Any]]] = {}
@@ -933,14 +1045,19 @@ class AgrupadorLotes:
             bytes_totales = sum(g["tamanio"] for g in grupo)
             lote_id = f"lote_{int(mtime_min)}_{idx}"
 
+            es_ant = any(bool(g.get("es_anterior")) for g in grupo)
+
             # Extraer personaje y escena sugeridos para el lote si están disponibles
             personaje_sug = next((g.get("personaje") for g in grupo if g.get("personaje")), None)
-            escena_sug = next((g.get("escena") for g in grupo if g.get("escena")), None)
-            raiz_sug = next((g.get("raiz_escena") for g in grupo if g.get("raiz_escena")), None)
+            escena_sug = "" if es_ant else next((g.get("escena") for g in grupo if g.get("escena")), None)
+            raiz_sug = "" if es_ant else next((g.get("raiz_escena") for g in grupo if g.get("raiz_escena")), None)
 
             for arch in grupo:
                 if "fecha" not in arch and "mtime" in arch:
                     arch["fecha"] = datetime.datetime.fromtimestamp(arch["mtime"]).strftime("%Y-%m-%d %H:%M:%S")
+                if es_ant:
+                    arch["es_anterior"] = True
+                    arch["escena"] = ""
 
             resultado.append({
                 "lote_id": lote_id,
@@ -953,6 +1070,7 @@ class AgrupadorLotes:
                 "personaje_sugerido": personaje_sug,
                 "escena_sugerida": escena_sug,
                 "raiz_escena": raiz_sug,
+                "es_anterior": es_ant,
                 "archivos": grupo
             })
 
@@ -970,6 +1088,17 @@ def generar_html_simulacion(simulacion: Dict[str, Any]) -> str:
     escena = html.escape(str(simulacion.get("escena", "")))
     es_descargas = simulacion.get("es_existente_descargas", False)
     descargas_tag = " (En Descargas)" if es_descargas else ""
+
+    alerta_personaje = ""
+    if simulacion.get("diferente_personaje_capitulo"):
+        pers_cap = html.escape(str(simulacion.get("personaje_capitulo", "")))
+        alerta_personaje = (
+            f'<div style="margin:8px 0 14px 0; padding:10px 14px; background:rgba(234, 179, 8, 0.15); border:1px solid #eab308; border-radius:6px; color:#fde047; font-size:0.9rem;">'
+            f'<strong>Aviso de Personaje:</strong> El personaje seleccionado para este lote es <strong>{personaje}</strong>, '
+            f'el cual difiere del personaje del capítulo activo (<strong>{pers_cap}</strong>). '
+            f'Los archivos se moverán a la ruta resultante: <code>_lucie/{personaje}/{escena}</code>.'
+            f'</div>\n'
+        )
 
     filas = []
     for m in simulacion.get("movimientos", []):
@@ -998,6 +1127,7 @@ def generar_html_simulacion(simulacion: Dict[str, Any]) -> str:
 
     filas_html = "\n".join(filas)
     return (
+        f'{alerta_personaje}'
         f'<p><strong>Personaje:</strong> {personaje} | <strong>Escena:</strong> {escena}{descargas_tag}</p>\n'
         f'<table class="modal-tabla">\n'
         f'  <thead>\n'
@@ -1034,6 +1164,10 @@ class GestorMovimientosBandeja:
         self.ruta_alias = ruta_alias
         self.alias_map = self._cargar_alias(ruta_alias)
         self._lock = threading.Lock()
+
+    def asegurar_carpeta_capitulo(self, personaje: str, nombre: str) -> Dict[str, Any]:
+        """Asegura la creación segura y validada de la carpeta de capítulo en el destino."""
+        return asegurar_carpeta_capitulo(personaje, nombre, self.ruta_destino_base, self.ruta_descargas)
 
     def _cargar_alias(self, ruta_alias: Optional[str]) -> Dict[str, Set[str]]:
         alias_map: Dict[str, Set[str]] = {
@@ -1280,6 +1414,18 @@ class GestorMovimientosBandeja:
                 "hash": arch.get("hash", "")
             })
 
+        diferente_personaje_capitulo = False
+        personaje_capitulo = None
+        if self.db:
+            try:
+                cap_activo = self.db.obtener_capitulo_activo()
+                if cap_activo and cap_activo.get("habilitado") and cap_activo.get("nombre"):
+                    personaje_capitulo = cap_activo.get("personaje")
+                    if personaje_capitulo and personaje_capitulo.lower() != personaje.lower():
+                        diferente_personaje_capitulo = True
+            except Exception:
+                pass
+
         resultado_sim = {
             "valido": True,
             "personaje": personaje,
@@ -1287,7 +1433,9 @@ class GestorMovimientosBandeja:
             "base": base,
             "es_existente_descargas": es_existente_descargas,
             "total_archivos": len(movimientos_simulados),
-            "movimientos": movimientos_simulados
+            "movimientos": movimientos_simulados,
+            "diferente_personaje_capitulo": diferente_personaje_capitulo,
+            "personaje_capitulo": personaje_capitulo
         }
         resultado_sim["html"] = generar_html_simulacion(resultado_sim)
         return resultado_sim
@@ -1445,6 +1593,14 @@ class GestorMovimientosBandeja:
         total_archivos = len(archivos_encontrados)
         carpeta_vacia = (total_archivos == 0)
 
+        if carpeta_existe:
+            if carpeta_vacia:
+                aviso = "La carpeta está vacía: se moverá a _descartados y se puede deshacer."
+            else:
+                aviso = "Esto NO borra: mueve a _descartados y se puede deshacer."
+        else:
+            aviso = "La carpeta no existe en disco. El capítulo se marcará como descartado en la base de datos."
+
         return {
             "valido": True,
             "capitulo_id": capitulo_id,
@@ -1457,7 +1613,7 @@ class GestorMovimientosBandeja:
             "peso_total_fmt": formatear_bytes(peso_total),
             "carpeta_existe": carpeta_existe,
             "carpeta_vacia": carpeta_vacia,
-            "aviso": "Esto NO borra: mueve a _descartados y se puede deshacer.",
+            "aviso": aviso,
             "archivos": archivos_encontrados
         }
 
@@ -1485,7 +1641,7 @@ class GestorMovimientosBandeja:
             self._validar_confinamiento_destino_base(destino_carpeta)
 
             movio_carpeta = False
-            if carpeta_existe and not carpeta_vacia:
+            if carpeta_existe:
                 if not os.path.exists(origen_carpeta):
                     raise ErrorMovimiento(f"La carpeta origen '{origen_carpeta}' ya no existe.")
                 if os.path.exists(destino_carpeta):
@@ -1527,9 +1683,12 @@ class GestorMovimientosBandeja:
                 f.write(json.dumps(registro_bitacora, ensure_ascii=False) + "\n")
 
             if movio_carpeta:
-                mensaje = f"Capítulo '{escena_esperada}' descartado. Se movieron {simulacion.get('total_archivos', 0)} archivos a _descartados."
+                if carpeta_vacia:
+                    mensaje = f"Capítulo '{escena_esperada}' descartado. Se movió la carpeta vacía a _descartados."
+                else:
+                    mensaje = f"Capítulo '{escena_esperada}' descartado. Se movieron {simulacion.get('total_archivos', 0)} archivos a _descartados."
             else:
-                mensaje = f"Capítulo '{escena_esperada}' descartado en la base de datos (no poseía archivos en disco)."
+                mensaje = f"Capítulo '{escena_esperada}' descartado en la base de datos (no existía carpeta en disco)."
 
             return {
                 "exito": True,
@@ -1953,14 +2112,17 @@ class VigilanteBandeja:
                     estado_actual = "detectado"
                     id_db = self.db.registrar_o_actualizar(
                         hash_val, ruta_completa, "detectado",
-                        personaje=personaje_actual, escena=None
+                        personaje=personaje_actual, escena=None, limpiar_escena=True
                     )
                 else:
                     personaje_actual = None
                     escena_actual = None
                     raiz_escena = None
                     estado_actual = "detectado"
-                    id_db = self.db.registrar_o_actualizar(hash_val, ruta_completa, "detectado")
+                    id_db = self.db.registrar_o_actualizar(
+                        hash_val, ruta_completa, "detectado",
+                        personaje=None, escena=None, limpiar_escena=True
+                    )
             else:
                 if reg and reg["estado"] != "detectado":
                     # Archivo ya detectado previamente con decisión tomada: respetar
@@ -2064,9 +2226,21 @@ class VigilanteBandeja:
                 pass
 
         self.detector.limpiar_rutas_inexistentes(rutas_existentes)
-        lotes_generados = self.agrupador.agrupar(candidatos_estables)
-        for l in lotes_generados:
-            l["es_anterior"] = False
+        lotes_generados_raw = self.agrupador.agrupar(candidatos_estables)
+        lotes_generados = []
+        lotes_extra_ant = []
+        for l in lotes_generados_raw:
+            if l.get("es_anterior"):
+                l["es_anterior"] = True
+                l["escena_sugerida"] = ""
+                l["lote_id"] = f"ant_{l['lote_id']}" if not l["lote_id"].startswith("ant_") else l["lote_id"]
+                for a in l.get("archivos", []):
+                    a["es_anterior"] = True
+                    a["escena"] = ""
+                lotes_extra_ant.append(l)
+            else:
+                l["es_anterior"] = False
+                lotes_generados.append(l)
 
         lotes_anteriores = []
         if candidatos_anteriores:
@@ -2074,9 +2248,11 @@ class VigilanteBandeja:
             for idx, l in enumerate(lotes_anteriores, 1):
                 l["es_anterior"] = True
                 l["escena_sugerida"] = ""
-                l["lote_id"] = f"ant_{l['lote_id']}"
+                l["lote_id"] = f"ant_{l['lote_id']}" if not l["lote_id"].startswith("ant_") else l["lote_id"]
                 for a in l.get("archivos", []):
                     a["es_anterior"] = True
+                    a["escena"] = ""
+        lotes_anteriores.extend(lotes_extra_ant)
 
         with self._lock:
             self._lotes_actuales = lotes_generados
@@ -2232,6 +2408,15 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             balance = self.db.calcular_balance_capitulo(
                 cap["personaje"], cap["nombre"], verificar_disco=True
             )
+            carpeta_cap = os.path.join(self.config.ruta_destino_base, cap["personaje"], cap["nombre"])
+            if os.path.isdir(carpeta_cap):
+                tot_arch = sum(len(f) for _, _, f in os.walk(carpeta_cap))
+                if tot_arch > 0:
+                    cap["carpeta_info"] = {
+                        "ya_existia": True,
+                        "total_archivos": tot_arch,
+                        "mensaje": f"La carpeta ya existía y tiene {tot_arch} archivos"
+                    }
 
         self._enviar_json({
             "activo": es_activo,
@@ -2327,15 +2512,25 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             return
 
         try:
-            cap = self.db.empezar_capitulo(personaje, nombre)
+            info_carpeta = self.movimientos.asegurar_carpeta_capitulo(personaje, nombre)
+            cap = self.db.empezar_capitulo(
+                personaje, nombre,
+                ruta_destino_base=self.config.ruta_destino_base,
+                ruta_descargas=self.config.ruta_descargas
+            )
+            cap["carpeta_info"] = info_carpeta
             self.vigilante.escanear()
+            mensaje = f"Capítulo '{personaje}/{nombre}' iniciado con éxito."
+            if info_carpeta.get("ya_existia") and info_carpeta.get("total_archivos", 0) > 0:
+                mensaje = f"{mensaje} {info_carpeta['mensaje']}."
             self._enviar_json({
                 "exito": True,
-                "mensaje": f"Capítulo '{personaje}/{nombre}' iniciado con éxito.",
+                "mensaje": mensaje,
+                "carpeta_info": info_carpeta,
                 "capitulo": cap
             })
         except ValueError as e:
-            self._enviar_error(HTTPStatus.CONFLICT, str(e))
+            self._enviar_error(HTTPStatus.BAD_REQUEST if "inválido" in str(e).lower() or "límite" in str(e).lower() else HTTPStatus.CONFLICT, str(e))
         except Exception as e:
             self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al empezar capítulo: {str(e)}")
 
@@ -2362,11 +2557,21 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             return
 
         try:
-            cap = self.db.reabrir_capitulo(int(id_cap))
+            cap = self.db.reabrir_capitulo(
+                int(id_cap),
+                ruta_destino_base=self.config.ruta_destino_base,
+                ruta_descargas=self.config.ruta_descargas
+            )
+            info_carpeta = self.movimientos.asegurar_carpeta_capitulo(cap["personaje"], cap["nombre"])
+            cap["carpeta_info"] = info_carpeta
             self.vigilante.escanear()
+            mensaje = f"Capítulo '{cap['personaje']}/{cap['nombre']}' reabierto como activo."
+            if info_carpeta.get("ya_existia") and info_carpeta.get("total_archivos", 0) > 0:
+                mensaje = f"{mensaje} {info_carpeta['mensaje']}."
             self._enviar_json({
                 "exito": True,
-                "mensaje": f"Capítulo '{cap['personaje']}/{cap['nombre']}' reabierto como activo.",
+                "mensaje": mensaje,
+                "carpeta_info": info_carpeta,
                 "capitulo": cap
             })
         except ValueError as e:
@@ -2462,6 +2667,12 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             if not valido:
                 self._enviar_error(HTTPStatus.BAD_REQUEST, f"Nombre de capítulo inválido: {motivo}")
                 return
+
+        if habilitado and nombre:
+            try:
+                self.movimientos.asegurar_carpeta_capitulo(personaje, nombre)
+            except Exception:
+                pass
 
         self.db.guardar_capitulo_activo(personaje, nombre, habilitado)
         self.vigilante.escanear()
@@ -3541,7 +3752,13 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
           if (subtitulo) {{
             const fechaTxt = cap.fecha_inicio ? cap.fecha_inicio.replace('T', ' ').slice(0, 19) : '';
             const movidos = (datosEstado.balance_capitulo && datosEstado.balance_capitulo.movidos !== undefined) ? datosEstado.balance_capitulo.movidos : (cap.archivos_movidos || 0);
-            subtitulo.innerText = `Iniciado: ${{fechaTxt}} | ${{movidos}} archivo(s) movido(s). Todo archivo candidato entrante se asigna a esta historia.`;
+            let textoSub = `Iniciado: ${{fechaTxt}} | ${{movidos}} archivo(s) movido(s). Todo archivo candidato entrante se asigna a esta historia.`;
+            if (cap.carpeta_info && cap.carpeta_info.ya_existia && cap.carpeta_info.total_archivos > 0) {{
+              textoSub += ` • ℹ️ ${{cap.carpeta_info.mensaje}}`;
+            }} else if (datosEstado.mensaje_carpeta_existente) {{
+              textoSub += ` • ℹ️ ${{datosEstado.mensaje_carpeta_existente}}`;
+            }}
+            subtitulo.innerText = textoSub;
           }}
         }}
         if (bannerOlvidado) {{
@@ -3579,11 +3796,16 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       if (errSpan) {{ errSpan.style.display = 'none'; }}
 
       try {{
-        await apiFetch('/api/capitulos/empezar', {{
+        const res = await apiFetch('/api/capitulos/empezar', {{
           method: 'POST',
           body: JSON.stringify({{ personaje, nombre }})
         }});
         if (txtNombre) txtNombre.value = '';
+        if (res && res.carpeta_info && res.carpeta_info.ya_existia && res.carpeta_info.total_archivos > 0) {{
+          datosEstado.mensaje_carpeta_existente = res.carpeta_info.mensaje;
+        }} else {{
+          datosEstado.mensaje_carpeta_existente = null;
+        }}
         await cargarDatos();
       }} catch (e) {{
         if (errSpan) {{
@@ -3937,14 +4159,15 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
     function renderLotes() {{
       const cont = document.getElementById('contenedor-lotes');
-      if (!datosEstado.lotes.length) {{
+      const lotesActivos = (datosEstado.lotes || []).filter(l => !l.es_anterior);
+      if (!lotesActivos.length) {{
         cont.innerHTML = '<div class="card"><p style="color:var(--text-muted)">No hay nuevos lotes de candidatos en ~/Descargas.</p></div>';
         return;
       }}
 
       const capActivo = datosEstado.capitulo_activo && datosEstado.capitulo_activo.habilitado ? datosEstado.capitulo_activo : null;
 
-      cont.innerHTML = datosEstado.lotes.map(lote => {{
+      cont.innerHTML = lotesActivos.map(lote => {{
         const persPre = capActivo ? capActivo.personaje : (lote.personaje_sugerido || datosEstado.ultimo_personaje || 'lucie');
         const escenaPre = capActivo ? capActivo.nombre : (lote.escena_sugerida || '');
 
@@ -3952,12 +4175,27 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
           `<option value="${{p.id}}" ${{p.id === persPre ? 'selected' : ''}}>${{p.nombre}}</option>`
         ).join('');
 
-        const escenaExiste = datosEstado.escenas.some(e => e.nombre === escenaPre);
-        const escenasOptions = datosEstado.escenas.map(e => 
-          `<option value="${{e.nombre}}" data-tipo="${{e.tipo}}" ${{ (e.nombre === escenaPre) ? 'selected' : '' }}>[${{e.tipo === 'descargas_alias' ? 'En Descargas' : 'Destino'}}] ${{e.nombre}}</option>`
-        ).join('');
+        let escenasOptions = '';
+        let esNueva = false;
 
-        const esNueva = !escenaExiste;
+        if (capActivo) {{
+          const optCap = `<option value="${{escapeHTML(capActivo.nombre)}}" data-tipo="capitulo_activo" selected>[Capítulo activo] ${{escapeHTML(capActivo.nombre)}}</option>`;
+          const optNueva = `<option value="__nueva__">+ Crear nueva escena...</option>`;
+          const otrasEscenas = (datosEstado.escenas || [])
+            .filter(e => !(e.tipo === 'destino_existente' && e.nombre === capActivo.nombre))
+            .map(e => `<option value="${{escapeHTML(e.nombre)}}" data-tipo="${{e.tipo}}">[${{e.tipo === 'descargas_alias' ? 'En Descargas' : 'Destino'}}] ${{escapeHTML(e.nombre)}}</option>`)
+            .join('');
+          escenasOptions = optCap + optNueva + otrasEscenas;
+          esNueva = false;
+        }} else {{
+          const escenaExiste = (datosEstado.escenas || []).some(e => e.nombre === escenaPre);
+          esNueva = !escenaExiste;
+          const optNueva = `<option value="__nueva__" ${{esNueva ? 'selected' : ''}}>+ Crear nueva escena...</option>`;
+          const otrasEscenas = (datosEstado.escenas || []).map(e => 
+            `<option value="${{escapeHTML(e.nombre)}}" data-tipo="${{e.tipo}}" ${{ (e.nombre === escenaPre) ? 'selected' : '' }}>[${{e.tipo === 'descargas_alias' ? 'En Descargas' : 'Destino'}}] ${{escapeHTML(e.nombre)}}</option>`
+          ).join('');
+          escenasOptions = optNueva + otrasEscenas;
+        }}
 
         return `
           <div class="card" id="card-${{lote.lote_id}}">
@@ -3995,7 +4233,6 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
               <label>Personaje: <select id="sel-pers-${{lote.lote_id}}">${{persOptions}}</select></label>
               <label>Escena:
                 <select id="sel-escena-${{lote.lote_id}}" onchange="toggleNuevaEscena('${{lote.lote_id}}', this.value)">
-                  <option value="__nueva__" ${{esNueva ? 'selected' : ''}}>+ Crear nueva escena...</option>
                   ${{escenasOptions}}
                 </select>
               </label>
@@ -4037,8 +4274,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
           `<option value="${{p.id}}" ${{p.id === persPre ? 'selected' : ''}}>${{p.nombre}}</option>`
         ).join('');
 
-        const escenasOptions = datosEstado.escenas.map(e => 
-          `<option value="${{e.nombre}}" data-tipo="${{e.tipo}}">[${{e.tipo === 'descargas_alias' ? 'En Descargas' : 'Destino'}}] ${{e.nombre}}</option>`
+        const escenasOptions = (datosEstado.escenas || []).map(e => 
+          `<option value="${{escapeHTML(e.nombre)}}" data-tipo="${{e.tipo}}">[${{e.tipo === 'descargas_alias' ? 'En Descargas' : 'Destino'}}] ${{escapeHTML(e.nombre)}}</option>`
         ).join('');
 
         return `
