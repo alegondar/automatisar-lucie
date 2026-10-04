@@ -84,3 +84,15 @@
 - [x] 11.5 Implementar `generar_html_simulacion` en el servidor con renderizado seguro y fallback reactivo en el cliente.
 - [x] 11.6 Añadir pruebas unitarias en `test_bandeja_descargas.py` que comprueben la inclusión de la ruta completa en el tooltip del HTML de simulación, las rutas relativas y el resaltado de tipo.
 - [x] 11.7 Verificar la auditoría AST anti-borrado (0 violaciones) y la ejecución exitosa de toda la suite de pruebas del proyecto.
+
+## 12. Reconocimiento por Prefijo de Personaje, Escena Sugerida y Sala de Espera Unificada
+
+- [ ] 12.1 Incorporar en `config_bandeja.json` y `ConfiguracionBandeja` el parámetro `"patrones_ignorar": ["Screenshot_*", "Captura*"]` y el patrón de candidatos de imágenes `"Gemini_Generated_Image_*"`, verificando con pruebas unitarias que los archivos ignorados no aparezcan en la bandeja ni en sin identificar.
+- [ ] 12.2 Actualizar `FiltroListaBlanca` para reconocer archivos multimedia cuyo nombre comience con un alias de `alias-personajes.json`, clasificándolos como candidatos directos del proyecto sin pasar por "Sin identificar" y determinando el personaje preseleccionado según el alias inicial.
+- [ ] 12.3 Implementar en `FiltroListaBlanca` la detección de múltiples personajes en el nombre del archivo (ejemplo: `"lucieroligym.mp4"`): omitir la preselección de personaje y generar la advertencia `"Parece una escena con varios personajes"` para que el usuario elija en la interfaz.
+- [ ] 12.4 Implementar la función de extracción de escena sugerida a partir del nombre del archivo (removiendo extensión, sufijo `" (n)"` de Chrome y dígitos finales, conservando el prefijo del personaje), verificando que para `"lucie atendiendo (1).mp4"` devuelva `"lucie atendiendo"`.
+- [ ] 12.5 Actualizar `AgrupadorLotes` para agrupar en el mismo lote a todos los archivos que compartan la misma raíz de escena sugerida, independientemente de que difieran en la hora o superen la ventana temporal configurada, verificando con pruebas unitarias.
+- [ ] 12.6 Modificar la estructura de destino de la sala de espera en `GestorMovimientosBandeja` para ubicar videos e imágenes conjuntamente en `<destino>/<personaje>/<escena>/` sin generar subcarpetas `"videos sin editar"` ni `"imagenes"`, preservando el destino directo para escenas existentes en Descargas.
+- [ ] 12.7 Actualizar la interfaz SPA para mostrar el nombre de escena sugerido en el campo de texto editable y visualizar el aviso preventivo cuando un lote contenga múltiples personajes detectados.
+- [ ] 12.8 Añadir pruebas unitarias completas en `test_bandeja_descargas.py` que verifiquen: reconocimiento por prefijo, aviso y no preselección ante múltiples personajes en `"lucieroligym.mp4"`, deducción correcta de escena sugerida en `"lucie atendiendo (1).mp4"`, agrupación de archivos con distinta hora y misma raíz, descarte de archivos ignorados, y 0 violaciones en la auditoría AST anti-borrado.
+

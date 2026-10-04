@@ -90,7 +90,29 @@ El presente ajuste técnico complementa la arquitectura inicial con mejoras del 
   - Aplicar `word-break: break-word` y `overflow-wrap: anywhere` en las celdas de rutas (`.ruta-celda`) para evitar que se corten las rutas o fuercen barras de desplazamiento horizontal.
   - Mostrar la ruta de destino relativa al directorio base (`<personaje>/<subcarpeta_tipo>/<escena>/<archivo>`), y preservar la ruta absoluta completa en el atributo `title` (tooltip nativo) y `data-destino` de cada archivo.
   - Resaltar visualmente el segmento de tipo ("imagenes" con badge `.tag-imagen` o "videos sin editar" con badge `.tag-video`) en el destino relativo para diferenciarlos a simple vista.
-  - Implementar la función `generar_html_simulacion` en el servidor devuelta en `/api/simular-mover` y consumida directamente por la SPA con fallback reactivo en JavaScript.
+### 7. Reconocimiento por Prefijo de Personaje y Manejo Multi-Personaje
+- **Decisión**:
+  - `FiltroListaBlanca` examina si el nombre de un archivo multimedia comienza con un alias de `alias-personajes.json`.
+  - Si inicia con un alias válido, se categoriza como `"candidato"` directo sin pasar por "Sin identificar".
+  - Se analiza si el nombre contiene alias correspondientes a más de un personaje (ej. `"lucieroligym"` contiene alias de `lucie` y de `roli`). En tal caso, no se preselecciona personaje, se marca la advertencia `"Parece una escena con varios personajes"` y se solicita la selección manual del usuario.
+  - Si solo contiene alias de un único personaje, dicho personaje se preselecciona en el selector del lote.
+  - Los archivos reconocidos solo se muestran en la bandeja; nunca se mueven de forma autónoma.
+
+### 8. Extracción de Escena Sugerida y Agrupación por Raíz Común
+- **Decisión**:
+  - Implementar la función de normalización que elimina la extensión del archivo, el sufijo de duplicados de navegador `" (n)"` y dígitos finales, conservando el prefijo del personaje (ej: `"lucie atendiendo (1).mp4"` genera `"lucie atendiendo"`).
+  - En `AgrupadorLotes`, agrupar en el mismo lote a los archivos que compartan la misma raíz de escena sugerida, incluso si sus marcas temporales `mtime` poseen una diferencia mayor a la ventana de 10 minutos.
+
+### 9. Sala de Espera Unificada sin Subcarpetas de Tipo
+- **Decisión**:
+  - Configurar el destino en `ruta_destino_base` como `<destino>/<personaje>/<escena>/<archivo>`, alojando videos y fotografías conjuntamente en la carpeta de la escena, sin generar subcarpetas `"videos sin editar"` ni `"imagenes"`.
+  - Las escenas preexistentes detectadas en `~/Descargas` mantienen su comportamiento directo sin alteraciones.
+
+### 10. Patrones Ignorados y Soporte para Imágenes Gemini
+- **Decisión**:
+  - Agregar en `config_bandeja.json` la clave editable `"patrones_ignorar"` con valores predeterminados `["Screenshot_*", "Captura*"]`.
+  - Descartar inmediatamente con resultado `"ignorar"` cualquier archivo coincidente con dicha lista antes de evaluar candidatos o sin identificar.
+  - Agregar `"Gemini_Generated_Image_*"` a los patrones de candidatos de imágenes del proyecto.
 
 ## Risks / Trade-offs
 

@@ -217,4 +217,45 @@ La ventana modal de "Simulación previa de movimientos" SHALL tener dimensiones 
 - **WHEN** se listan los movimientos a realizar en la simulación
 - **THEN** la columna destino muestra la ruta relativa destacando las subcarpetas "videos sin editar" o "imagenes" con badges diferenciados, y al posicionar el cursor sobre la celda se visualiza la ruta absoluta completa en el tooltip
 
+### Requirement: Reconocimiento de candidatos por prefijo de personaje y detección multi-personaje
+Un archivo multimedia cuyo nombre inicie con un alias configurado en `alias-personajes.json` SHALL ser clasificado como candidato del proyecto sin enviarse a "Sin identificar". El sistema SHALL preseleccionar automáticamente el personaje asociado al alias. Si el nombre contiene alias correspondientes a más de un personaje, el sistema SHALL no preseleccionar ningún personaje y mostrar el aviso "Parece una escena con varios personajes" para que el usuario elija manualmente.
+
+#### Scenario: Reconocimiento directo por alias inicial de personaje
+- **WHEN** se detecta un archivo multimedia cuyo nombre comienza con un alias conocido (por ejemplo `lucieasado.mp4` o `roliyacussi.mp4`)
+- **THEN** el archivo se clasifica como candidato de la bandeja y el personaje correspondiente queda preseleccionado por defecto
+
+#### Scenario: Detección de múltiples personajes en el nombre
+- **WHEN** el nombre del archivo contiene alias de múltiples personajes distintos (por ejemplo `lucieroligym.mp4` o `roliluciegym3.mp4`)
+- **THEN** el sistema no preselecciona ningún personaje y visualiza el aviso "Parece una escena con varios personajes" para decisión del usuario
+
+### Requirement: Generación de escena sugerida y agrupación por raíz de escena
+El sistema SHALL deducir un nombre de escena sugerido y editable para cada archivo de lote, eliminando la extensión, sufijos de duplicación del navegador `" (n)"` y dígitos numéricos finales, preservando el prefijo del personaje. Asimismo, el sistema SHALL agrupar en el mismo lote a todos los archivos que compartan la misma raíz de escena sugerida, independientemente de que posean marcas de tiempo `mtime` con diferencias mayores a la ventana temporal configurada.
+
+#### Scenario: Limpieza de nombre y deducción de escena sugerida
+- **WHEN** se procesa un archivo con sufijos como `lucie atendiendo (1).mp4`
+- **THEN** el sistema extrae como escena sugerida `lucie atendiendo`, editable en el panel web
+
+#### Scenario: Agrupación en lote por raíz común con distinta hora
+- **WHEN** existen dos archivos con la misma raíz de escena pero con marcas de tiempo alejadas (por ejemplo `lucie atendiendo.mp4` y `lucie atendiendo (1).mp4` con horas distintas)
+- **THEN** ambos archivos se agrupan en el mismo lote en lugar de fragmentarse en lotes separados
+
+### Requirement: Enrutamiento a sala de espera unificada sin subcarpetas de tipo
+Al ejecutar movimientos hacia el destino base (`ruta_destino_base`), el sistema SHALL ubicar videos e imágenes juntos en el directorio unificado `<destino>/<personaje>/<escena>/`, suprimiendo la creación de subcarpetas intermedias `"videos sin editar"` e `"imagenes"`. Las carpetas de escenas ya existentes en `~/Descargas` SHALL permanecer sin modificaciones.
+
+#### Scenario: Movimiento a sala de espera con formato plano
+- **WHEN** se confirma el movimiento de un lote mixto (videos e imágenes) hacia una nueva escena en el destino base
+- **THEN** todos los archivos se trasladan directamente a `<destino>/<personaje>/<escena>/` sin subcarpetas por tipo
+
+### Requirement: Filtro de patrones a ignorar y admisión de imágenes Gemini
+El sistema SHALL incorporar en `config_bandeja.json` la lista configurable `patrones_ignorar` (por defecto `["Screenshot_*", "Captura*"]`). Cualquier archivo cuyo nombre coincida con estos patrones SHALL ser descartado inmediatamente sin aparecer en la bandeja ni en "Sin identificar". Asimismo, el sistema SHALL admitir como candidatos de imágenes los archivos que coincidan con `Gemini_Generated_Image_*`.
+
+#### Scenario: Descarte automático de archivos que coinciden con patrones a ignorar
+- **WHEN** se descarga un archivo coincidente con `Screenshot_2026.png` o `Captura_1.jpg`
+- **THEN** el archivo es ignorado de forma inmediata y no se muestra en ninguna sección de la bandeja
+
+#### Scenario: Admisión de imágenes generadas por Gemini
+- **WHEN** se descarga una imagen que responde al patrón `Gemini_Generated_Image_*.png`
+- **THEN** el sistema la reconoce como candidata del proyecto
+
+
 

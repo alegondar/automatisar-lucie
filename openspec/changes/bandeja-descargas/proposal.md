@@ -54,9 +54,26 @@ Este cambio introduce y perfecciona la capacidad **`bandeja-descargas`**: un sis
   - El movimiento sigue registrado y disponible en la pestaña «Historial».
   - Si la ruta original está ocupada al pulsar «Deshacer», la acción se niega con el mensaje explicativo del servidor, sin pisar ni sufijar.
 
+- **Reconocimiento por nombre de personaje (Nuevo)**:
+  - Archivos multimedia cuyo nombre comience con un alias de `alias-personajes.json` (`lucie`, `luci`, `roli`, `laroli`, `magui`, `mailen`) se clasifican como candidatos directos del proyecto sin pasar por "Sin identificar".
+  - Preselección automática del personaje según el alias de inicio.
+  - Si el nombre contiene múltiples alias de personajes (ejemplos: `"lucieroligym"`, `"roliluciegym3"`), no se preselecciona personaje, se presenta el aviso `"Parece una escena con varios personajes"` y se permite la elección manual.
+  - Los archivos reconocidos solo se muestran en la bandeja; nunca se mueven de forma autónoma.
+
+- **Escena sugerida y agrupación por raíz (Nuevo)**:
+  - Generación de escena sugerida editable a partir del nombre del archivo, eliminando la extensión, sufijos duplicados de descarga (`" (n)"`) y dígitos finales, conservando el prefijo del personaje.
+  - Agrupación en el mismo lote de todos los archivos que comparten la misma raíz de escena sugerida, independientemente de diferencias en la marca de tiempo `mtime`.
+
+- **Sala de espera unificada (Nuevo)**:
+  - Organización de destino en `<destino>/<personaje>/<escena>/` con videos e imágenes juntos en la misma carpeta, suprimiendo las subcarpetas intermedias `"videos sin editar"` e `"imagenes"`.
+  - Escenas existentes en `~/Descargas`: se mantienen sin alteraciones.
+
+- **Patrones a ignorar y admisión de Gemini (Nuevo)**:
+  - Incorporación en `config_bandeja.json` de la lista configurable `"patrones_ignorar"` (por defecto `["Screenshot_*", "Captura*"]`) para que esos archivos nunca se listen en la bandeja.
+  - Incorporación de `"Gemini_Generated_Image_*"` en los patrones de imágenes candidatos del proyecto.
+
 - **Estructura de destino e integridad de movimiento**:
-  - Espejo de la jerarquía del pendrive: `<destino>/<personaje>/videos sin editar/<escena>/` para videos y `<destino>/<personaje>/<carpeta_imagenes>/<escena>/` para imágenes.
-  - Destino configurable (por defecto `~/Descargas/_lucie`).
+  - Destino configurable (por defecto `~/Descargas/_lucie/<personaje>/<escena>/`).
   - **Ámbito exclusivo**: Este módulo **únicamente mueve archivos dentro de `~/Descargas`**; no tiene acceso ni realiza operaciones sobre el pendrive.
   - Movimiento atómico mediante `os.rename` (mismo sistema de archivos), prohibiendo terminantemente `shutil.move` y `os.replace`.
   - Verificación previa de colisiones en destino: si el destino ya existe, se asigna un sufijo numérico incremental ` (1)`, ` (2)`.
