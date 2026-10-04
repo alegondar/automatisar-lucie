@@ -29,7 +29,7 @@
 - [x] 4.3 Implementar los endpoints REST en `bandeja_descargas.py` (`/api/lotes`, `/api/sin-identificar`, `/api/escenas`, `/api/personajes`, `/api/clasificar-sin-identificar`, `/api/simular-mover`, `/api/mover-lote`, `/api/deshacer`), verificando sus respuestas en JSON y códigos de estado.
 - [x] 4.4 Desarrollar la interfaz web SPA en tema oscuro con lista de lotes, miniaturas seguras, selectores de personaje y escena (existente o nueva con validación visual), preselección del último personaje utilizado, modal de simulación previa, botón "Mover lote" y pestaña "Sin identificar".
 
-## 5. Pruebas Unitarias, Seguridad AST y Validación
+## 5. Pruebas Unitarias Iniciales y Auditoría AST
 
 - [x] 5.1 Crear en `test_bandeja_descargas.py` pruebas unitarias en `/tmp` para la validación exhaustiva de nombres de escena (caracteres prohibidos, nombres reservados Windows, trailing dot/space, longitud > 100 y realpath confinada).
 - [x] 5.2 Crear en `test_bandeja_descargas.py` pruebas para la protección anti-CSRF, validación de cabeceras Host y Content-Type, verificando que solicitudes POST sin token o con Host foráneo respondan 403 Forbidden.
@@ -39,3 +39,30 @@
 - [x] 5.6 Crear en `test_bandeja_descargas.py` pruebas para la lista blanca, estabilidad de descargas (5s) y agrupación temporal de lotes.
 - [x] 5.7 Integrar `bandeja_descargas.py` en la auditoría estática AST anti-borrado de `seguridad_anti_borrado.py`, verificando que mantenga 0 violaciones de las 11 primitivas prohibidas.
 - [x] 5.8 Ejecutar la suite completa de pruebas del proyecto (`test_plan_limpieza.py`, `test_inventario.py`, `test_bandeja_descargas.py`) asegurando que pasen al 100%.
+
+## 6. Selección Granular de Archivos por Lote y Retención de Pendientes
+
+- [x] 6.1 Incorporar en la SPA casillas de verificación individuales para cada archivo en la cuadrícula de lotes (marcadas por defecto), tooltip de metadatos (nombre completo y fecha/hora exacta al pasar el cursor) y botones "Seleccionar todos" y "Ninguno", verificando su comportamiento en el navegador.
+- [x] 6.2 Actualizar dinámicamente el botón de acción a "Mover seleccionados (N)", deshabilitándolo con `disabled=true` cuando N = 0, y verificando que el modal de simulación previa reciba y muestre exclusivamente los archivos marcados con origen y destino exactos.
+- [x] 6.3 Ajustar la lógica del servidor y re-escaneo para que los archivos no seleccionados del lote permanezcan en `~/Descargas` y se muestren como lote pendiente conservando su ventana temporal y agrupación, verificando con prueba unitaria en `/tmp`.
+
+## 7. Pestaña Historial y Acciones de Reversión Visibles
+
+- [x] 7.1 Implementar en `HandlerServidorBandeja` el endpoint `GET /api/historial` para leer y procesar las últimas 50 entradas de `bitacora_bandeja.jsonl`, entregando fecha, archivo, origen anterior, destino nuevo y estado ("movido" o "deshecho"), verificando la respuesta JSON con test unitario.
+- [x] 7.2 Crear en la barra de navegación la pestaña "Historial" y renderizar una tabla reactiva con los últimos 50 movimientos, integrando un botón individual "Deshacer" en cada fila activa que invoque `/api/deshacer` enviando el token anti-CSRF, verificando la reversión en interfaz.
+- [x] 7.3 Implementar el botón "Deshacer último lote" en la cabecera de la pestaña Historial para revertir en un solo paso la última operación realizada, verificando la reversión en la bitácora.
+- [x] 7.4 Asegurar que si la ruta original está ocupada, la SPA capture la respuesta HTTP 409 y presente el mensaje de negativa descriptivo devuelto por el servidor ("No se puede deshacer: la ruta original ... ya se encuentra ocupada"), verificando con test unitario.
+
+## 8. Validación Anticipada y Mensajes en Línea para Nuevas Escenas
+
+- [x] 8.1 Implementar en la SPA la validación en tiempo real del campo `txt-nueva-escena-${loteId}` ante el evento input y al pulsar el botón de mover, mostrando un contenedor de error debajo del campo si está vacío o si contiene caracteres prohibidos o reservados.
+- [x] 8.2 Bloquear la apertura del modal de simulación previa si el nombre de escena es inválido o está vacío, verificando que no se emita la petición a `/api/simular-mover` hasta que el nombre sea corregido.
+
+## 9. Pruebas Unitarias de Regresión y Auditoría AST
+
+- [x] 9.1 Agregar en `test_bandeja_descargas.py` la prueba unitaria que verifique que mover un subconjunto de archivos de un lote deja el resto en la bandeja como lote pendiente sin perder su agrupación.
+- [x] 9.2 Agregar en `test_bandeja_descargas.py` la prueba unitaria del endpoint `GET /api/historial` comprobando que liste adecuadamente los últimos movimientos registrados en la bitácora `.jsonl`.
+- [x] 9.3 Agregar en `test_bandeja_descargas.py` la prueba que verifique que `/api/deshacer` responda 403 Forbidden si no se envía el token anti-CSRF o si el header Host no es local.
+- [x] 9.4 Agregar en `test_bandeja_descargas.py` la prueba de negativa de deshacer cuando la ruta original se encuentra ocupada, validando que no se sobrescriba ni se muten archivos.
+- [x] 9.5 Ejecutar `seguridad_anti_borrado.py` verificando que el total de violaciones de primitivas destructivas en el repositorio permanezca estrictamente en 0.
+- [x] 9.6 Ejecutar la suite completa de pruebas unitarias (`python3 -m unittest discover -s . -p "test_*.py"`) confirmando el 100% de éxito.

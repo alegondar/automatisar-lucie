@@ -109,8 +109,8 @@ El servidor SHALL generar un token aleatorio criptográficamente seguro al inici
 El sistema SHALL presentar una simulación previa obligatoria con las rutas exactas de origen y destino antes de ejecutar cualquier movimiento, realizándolo exclusivamente con `os.rename` dentro de `~/Descargas`, verificando que el destino no exista y agregando sufijo numérico ante colisiones.
 
 #### Scenario: Simulación previa antes de mover
-- **WHEN** el usuario hace clic en "Mover lote"
-- **THEN** el panel muestra una previsualización de cada archivo con su origen y destino final antes de solicitar la confirmación definitiva
+- **WHEN** el usuario hace clic en "Mover seleccionados"
+- **THEN** el panel muestra una previsualización de cada archivo seleccionado con su origen y destino final antes de solicitar la confirmación definitiva
 
 #### Scenario: Manejo de colisión en destino
 - **WHEN** el destino propuesto ya contiene un archivo con idéntico nombre
@@ -133,3 +133,56 @@ El sistema SHALL registrar cada operación de lote en un archivo de bitácora `.
 #### Scenario: Rechazo de deshacer por ruta original ocupada
 - **WHEN** se solicita deshacer un movimiento pero el archivo original en la ruta de origen fue recreado o ya existe otro archivo en dicha ubicación
 - **THEN** el sistema se niega a realizar la operación, emite un mensaje claro informando el conflicto y no modifica ningún archivo
+
+### Requirement: Selección granular de archivos dentro de un lote en el panel web
+El panel web SHALL proporcionar casillas de verificación individuales para cada archivo de un lote (marcadas por defecto), tooltip emergente con nombre completo y fecha/hora al pasar el cursor, botones "Seleccionar todos" y "Ninguno" por lote, y actualizar el botón a "Mover seleccionados (N)", deshabilitándolo si N=0. Los archivos no seleccionados SHALL permanecer en la bandeja como lote pendiente sin perder su agrupamiento.
+
+#### Scenario: Marcado por defecto y tooltip con metadatos
+- **WHEN** el usuario visualiza un lote detectado en el panel web
+- **THEN** todos los archivos del lote aparecen con su casilla marcada y al pasar el mouse sobre cada tarjeta se muestra un tooltip con el nombre completo y la fecha exacta
+
+#### Scenario: Alternancia de selección masiva en el lote
+- **WHEN** el usuario presiona "Ninguno" o "Seleccionar todos" en la cabecera del lote
+- **THEN** las casillas de todos los archivos del lote se desmarcan o marcan respectivamente, actualizando inmediatamente el contador en el botón de acción
+
+#### Scenario: Deshabilitación del botón de acción ante selección vacía
+- **WHEN** la cantidad N de archivos seleccionados en el lote es igual a cero
+- **THEN** el botón muestra "Mover seleccionados (0)" y permanece deshabilitado para evitar peticiones vacías
+
+#### Scenario: Simulación y movimiento exclusivo de archivos seleccionados
+- **WHEN** el usuario selecciona un subconjunto de N archivos y pulsa "Mover seleccionados (N)"
+- **THEN** la simulación previa y la posterior ejecución mueven únicamente los N archivos seleccionados a la escena elegida
+
+#### Scenario: Retención de archivos no seleccionados en lote pendiente
+- **WHEN** se mueve un subconjunto de archivos de un lote
+- **THEN** los archivos no seleccionados continúan en `~/Descargas` y se mantienen agrupados como lote pendiente en la bandeja para revisiones futuras
+
+### Requirement: Pestaña de historial y reversión visible en interfaz web
+El panel web SHALL incluir una pestaña "Historial" que consuma el endpoint `GET /api/historial` para mostrar los últimos 50 movimientos de `bitacora_bandeja.jsonl` (fecha, archivo, origen anterior, destino nuevo y estado movido/deshecho), disponiendo de un botón "Deshacer" por movimiento y un botón "Deshacer último lote" protegidos por token anti-CSRF, mostrando el mensaje de negativa si la ruta de origen está ocupada.
+
+#### Scenario: Visualización de los últimos 50 movimientos
+- **WHEN** el usuario hace clic en la pestaña "Historial"
+- **THEN** el panel carga y presenta en una tabla cronológica los últimos 50 movimientos registrados con sus rutas completas y estados
+
+#### Scenario: Reversión individual desde la pestaña de historial
+- **WHEN** el usuario presiona "Deshacer" en una fila del historial con estado movido
+- **THEN** el cliente web envía una petición POST a `/api/deshacer` con el token anti-CSRF y el identificador de operación, actualizando el estado de la fila al confirmarse
+
+#### Scenario: Reversión masiva del último lote procesado
+- **WHEN** el usuario presiona el botón "Deshacer último lote"
+- **THEN** el sistema localiza el último lote registrado con movimientos pendientes y ejecuta su reversión completa mediante `/api/deshacer` con token anti-CSRF
+
+#### Scenario: Visualización de error ante ruta original ocupada al deshacer
+- **WHEN** el servidor responde conflicto porque la ruta original de un archivo a deshacer se encuentra ocupada
+- **THEN** el panel web muestra en pantalla el mensaje explicativo de negativa devuelto por el servidor, sin alterar archivos
+
+### Requirement: Validación previa y mensajes de advertencia en línea para creación de escenas
+El panel web SHALL validar de forma anticipada el nombre ingresado al elegir "+ Crear nueva escena", mostrando un mensaje explicativo directamente debajo del campo de texto si está vacío o si contiene caracteres inválidos (<, >, :, ", /, \, |, ?, *, terminación en punto/espacio o nombres reservados), antes de abrir el modal de simulación previa.
+
+#### Scenario: Advertencia ante campo de nombre de escena vacío
+- **WHEN** el usuario selecciona "+ Crear nueva escena", deja el campo vacío y presiona el botón de mover
+- **THEN** el sistema muestra un mensaje de advertencia debajo del campo indicando que se requiere un nombre y no abre el modal de simulación
+
+#### Scenario: Advertencia ante caracteres prohibidos en nombre de escena
+- **WHEN** el usuario escribe un nombre con caracteres prohibidos como `escena/toma` o `toma?`
+- **THEN** el sistema visualiza debajo del campo el motivo del rechazo detallando los caracteres no permitidos e impide la apertura del modal

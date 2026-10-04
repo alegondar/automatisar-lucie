@@ -442,6 +442,69 @@ class TestGestorMovimientosYDeshacer(unittest.TestCase):
         self.assertIn("escena_video_previa", nombres_escenas)
         self.assertIn("escena_foto_previa", nombres_escenas)
 
+    def test_mover_subconjunto_deja_resto_como_lote_pendiente(self):
+        """Mover solo un subconjunto de archivos deja el resto como lote pendiente sin perder el agrupamiento."""
+        config = ConfiguracionBandeja()
+        config.ruta_descargas = self.descargas
+        config.ruta_destino_base = self.destino_base
+        config.ventana_lote_minutos = 10
+
+        vigilante = VigilanteBandeja(
+            config, self.db, FiltroListaBlanca(config), DetectorDescargasActivas(0.01), AgrupadorLotes(10)
+        )
+
+        # Crear 3 archivos en Descargas con mtime idéntico o muy cercano
+        ahora = time.time() - 10
+        archivos = []
+        for i in range(1, 4):
+            p = os.path.join(self.descargas, f"grok-video-sub-{i}.mp4")
+            with open(p, "wb") as f:
+                f.write(f"video sub {i}".encode("utf-8"))
+            os.utime(p, (ahora + i, ahora + i))
+            archivos.append(p)
+
+        # Primer escaneo registra tamaño en el detector; segundo tras la ventana los confirma estables
+        vigilante.escanear()
+        time.sleep(0.02)
+        vigilante.escanear()
+        estado_inicial = vigilante.obtener_estado()
+        self.assertEqual(len(estado_inicial["lotes"]), 1)
+        lote_inicial = estado_inicial["lotes"][0]
+        self.assertEqual(lote_inicial["total_archivos"], 3)
+
+        # Mover solo el primer archivo
+        archivo_elegido = lote_inicial["archivos"][0]
+        self.assertEqual(archivo_elegido["nombre"], "grok-video-sub-1.mp4")
+
+        sim = self.gestor.simular_movimiento_lote(
+            archivos=[archivo_elegido],
+            personaje="lucie",
+            nombre_escena="escena_parcial",
+            es_existente_descargas=False
+        )
+        self.assertEqual(len(sim["movimientos"]), 1)
+        res_mover = self.gestor.ejecutar_movimiento_lote(sim, lote_id=lote_inicial["lote_id"])
+        self.assertTrue(res_mover["exito"])
+
+        # Re-escanear
+        vigilante.escanear()
+        estado_posterior = vigilante.obtener_estado()
+        lotes_restantes = estado_posterior["lotes"]
+
+        self.assertEqual(len(lotes_restantes), 1)
+        lote_pendiente = lotes_restantes[0]
+        self.assertEqual(lote_pendiente["total_archivos"], 2)
+        nombres_pendientes = [a["nombre"] for a in lote_pendiente["archivos"]]
+        self.assertIn("grok-video-sub-2.mp4", nombres_pendientes)
+        self.assertIn("grok-video-sub-3.mp4", nombres_pendientes)
+        self.assertNotIn("grok-video-sub-1.mp4", nombres_pendientes)
+
+        # El archivo movido ya no está en Descargas
+        self.assertFalse(os.path.exists(archivos[0]))
+        # Los otros dos permanecen intactos en Descargas
+        self.assertTrue(os.path.exists(archivos[1]))
+        self.assertTrue(os.path.exists(archivos[2]))
+
 
 class TestServidorHTTPYSeguridad(unittest.TestCase):
     """Pruebas del servidor HTTP local, protección anti-CSRF, cabeceras y miniaturas seguras."""
@@ -564,6 +627,133 @@ class TestServidorHTTPYSeguridad(unittest.TestCase):
         status, _, raw = self._request("GET", f"/api/miniatura?id={archivo_id}")
         self.assertEqual(status, 200)
         self.assertEqual(raw[:4], b"\xff\xd8\xff\xe0")
+
+    def test_get_historial_api_y_estado_movimientos(self):
+        """El historial por API lista adecuadamente los movimientos y refleja reversiones."""
+        archivo_test = os.path.join(self.descargas, "grok-video-historial.mp4")
+        with open(archivo_test, "wb") as f:
+            f.write(b"video para bitacora historial")
+        self.vigilante.escanear()
+
+        headers_ok = {
+            "Host": f"127.0.0.1:{self.config.puerto_servidor}",
+            "Content-Type": "application/json",
+            "X-CSRF-Token": self.token_csrf
+        }
+
+        # Simular mover
+        body_sim = json.dumps({
+            "archivos": [{"ruta": archivo_test, "tamanio": 29, "hash": "h_historial"}],
+            "personaje": "lucie",
+            "escena": "escena_historial",
+            "es_existente_descargas": False
+        })
+        status, sim_data, _ = self._request("POST", "/api/simular-mover", headers=headers_ok, body=body_sim)
+        self.assertEqual(status, 200)
+
+        # Mover lote
+        body_mover = json.dumps({
+            "simulacion": sim_data,
+            "lote_id": "lote_historial_1"
+        })
+        status, res_mover, _ = self._request("POST", "/api/mover-lote", headers=headers_ok, body=body_mover)
+        self.assertEqual(status, 200)
+        id_op = res_mover["id_operacion"]
+
+        # Consultar GET /api/historial
+        status, hist_data, _ = self._request("GET", "/api/historial")
+        self.assertEqual(status, 200)
+        self.assertIn("historial", hist_data)
+        historial = hist_data["historial"]
+        self.assertTrue(len(historial) >= 1)
+
+        # Verificar campos requeridos en la entrada
+        entrada_op = next((item for item in historial if item["id_operacion"] == id_op), None)
+        self.assertIsNotNone(entrada_op)
+        self.assertEqual(entrada_op["archivo"], "grok-video-historial.mp4")
+        self.assertEqual(entrada_op["estado"], "movido")
+        self.assertIn("fecha", entrada_op)
+        self.assertIn("origen", entrada_op)
+        self.assertIn("destino", entrada_op)
+
+        # Deshacer la operación vía POST /api/deshacer
+        body_deshacer = json.dumps({"id_operacion": id_op})
+        status, res_deshacer, _ = self._request("POST", "/api/deshacer", headers=headers_ok, body=body_deshacer)
+        self.assertEqual(status, 200)
+        self.assertTrue(res_deshacer["exito"])
+
+        # Volver a consultar historial y verificar que el estado cambió a "deshecho"
+        status, hist_data_2, _ = self._request("GET", "/api/historial")
+        self.assertEqual(status, 200)
+        entrada_op_2 = next((item for item in hist_data_2["historial"] if item["id_operacion"] == id_op), None)
+        self.assertIsNotNone(entrada_op_2)
+        self.assertEqual(entrada_op_2["estado"], "deshecho")
+
+    def test_deshacer_api_sin_token_o_host_invalido_devuelve_403(self):
+        """/api/deshacer responde 403 Forbidden si no se envía token o si Host es inválido."""
+        # 1. Sin token
+        headers_sin_token = {
+            "Host": f"127.0.0.1:{self.config.puerto_servidor}",
+            "Content-Type": "application/json"
+        }
+        body = json.dumps({"id_operacion": "op_ficticia"})
+        status, _, _ = self._request("POST", "/api/deshacer", headers=headers_sin_token, body=body)
+        self.assertEqual(status, 403)
+
+        # 2. Host foráneo
+        headers_host_invalido = {
+            "Host": "evil-domain.com",
+            "Content-Type": "application/json",
+            "X-CSRF-Token": self.token_csrf
+        }
+        status, _, _ = self._request("POST", "/api/deshacer", headers=headers_host_invalido, body=body)
+        self.assertEqual(status, 403)
+
+    def test_deshacer_api_con_origen_ocupado_devuelve_409_sin_pisar(self):
+        """Reversión por API ante ruta original ocupada responde 409 y no pisa el archivo existente."""
+        archivo_test = os.path.join(self.descargas, "grok-video-conflicto.mp4")
+        with open(archivo_test, "wb") as f:
+            f.write(b"archivo original previo")
+        self.vigilante.escanear()
+
+        headers_ok = {
+            "Host": f"127.0.0.1:{self.config.puerto_servidor}",
+            "Content-Type": "application/json",
+            "X-CSRF-Token": self.token_csrf
+        }
+        body_sim = json.dumps({
+            "archivos": [{"ruta": archivo_test, "tamanio": 23, "hash": "h_conflicto"}],
+            "personaje": "lucie",
+            "escena": "escena_conflicto",
+            "es_existente_descargas": False
+        })
+        status, sim_data, _ = self._request("POST", "/api/simular-mover", headers=headers_ok, body=body_sim)
+        self.assertEqual(status, 200)
+
+        status, res_mover, _ = self._request(
+            "POST", "/api/mover-lote", headers=headers_ok,
+            body=json.dumps({"simulacion": sim_data, "lote_id": "lote_conflicto"})
+        )
+        self.assertEqual(status, 200)
+        id_op = res_mover["id_operacion"]
+
+        # Ocupar la ruta original con otro contenido
+        with open(archivo_test, "wb") as f:
+            f.write(b"ocupante no pisable")
+
+        # Intentar deshacer por API
+        status, res_err, _ = self._request(
+            "POST", "/api/deshacer", headers=headers_ok,
+            body=json.dumps({"id_operacion": id_op})
+        )
+        # Debe responder 409 Conflict con mensaje explicativo
+        self.assertEqual(status, 409)
+        self.assertIn("error", res_err)
+        self.assertIn("ya se encuentra ocupada", res_err["error"])
+
+        # Verificar que el ocupante no fue pisado
+        with open(archivo_test, "rb") as f:
+            self.assertEqual(f.read(), b"ocupante no pisable")
 
 
 class TestAuditoriaASTAntiBorrado(unittest.TestCase):

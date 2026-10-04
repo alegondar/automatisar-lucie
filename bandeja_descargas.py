@@ -437,6 +437,10 @@ class AgrupadorLotes:
             bytes_totales = sum(g["tamanio"] for g in grupo)
             lote_id = f"lote_{int(mtime_min)}_{idx}"
 
+            for arch in grupo:
+                if "fecha" not in arch and "mtime" in arch:
+                    arch["fecha"] = datetime.datetime.fromtimestamp(arch["mtime"]).strftime("%Y-%m-%d %H:%M:%S")
+
             resultado.append({
                 "lote_id": lote_id,
                 "numero": idx,
@@ -644,6 +648,10 @@ class GestorMovimientosBandeja:
             if not operacion_encontrada:
                 raise ErrorDeshacer(f"No se encontró la operación '{id_operacion}' en la bitácora.")
 
+            for op in todas_operaciones:
+                if op.get("evento") == "deshacer" and op.get("id_operacion_revertida") == id_operacion:
+                    raise ErrorDeshacer(f"La operación '{id_operacion}' ya fue deshecha previamente.")
+
             # Fase 1: Verificación preventiva integral
             for mov in operacion_encontrada["movimientos"]:
                 origen_anterior = mov["origen_anterior"]
@@ -693,6 +701,61 @@ class GestorMovimientosBandeja:
                 "id_operacion": id_operacion,
                 "total_revertidos": len(archivos_revertidos)
             }
+
+    def obtener_historial(self, limite: int = 50) -> List[Dict[str, Any]]:
+        """
+        Lee los últimos movimientos de la bitácora .jsonl (hasta el límite indicado),
+        correlacionando los eventos de reversión para determinar el estado de cada movimiento.
+        """
+        with self._lock:
+            if not os.path.exists(self.ruta_bitacora):
+                return []
+
+            entradas = []
+            try:
+                with open(self.ruta_bitacora, "r", encoding="utf-8") as f:
+                    for linea in f:
+                        linea = linea.strip()
+                        if linea:
+                            try:
+                                entradas.append(json.loads(linea))
+                            except Exception:
+                                pass
+            except Exception:
+                return []
+
+            revertidas = set()
+            for e in entradas:
+                if e.get("evento") == "deshacer" and e.get("id_operacion_revertida"):
+                    revertidas.add(e["id_operacion_revertida"])
+
+            movimientos_resultado = []
+            for e in reversed(entradas):
+                if e.get("evento") == "deshacer":
+                    continue
+                id_op = e.get("id_operacion", "")
+                fecha_op = e.get("fecha", "")
+                estado = "deshecho" if id_op in revertidas else "movido"
+
+                for mov in reversed(e.get("movimientos", [])):
+                    origen = mov.get("origen_anterior", "")
+                    destino = mov.get("destino_nuevo", "")
+                    nombre = os.path.basename(origen)
+                    movimientos_resultado.append({
+                        "id_operacion": id_op,
+                        "fecha": fecha_op,
+                        "archivo": nombre,
+                        "origen": origen,
+                        "destino": destino,
+                        "tamanio": mov.get("tamanio", 0),
+                        "hash": mov.get("hash", ""),
+                        "estado": estado
+                    })
+                    if len(movimientos_resultado) >= limite:
+                        return movimientos_resultado
+
+            return movimientos_resultado
+
 
 
 class GeneradorMiniaturas:
@@ -1038,6 +1101,9 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             })
         elif ruta == "/api/miniatura":
             self._servir_miniatura(parsed.query)
+        elif ruta == "/api/historial":
+            historial = self.movimientos.obtener_historial(50)
+            self._enviar_json({"historial": historial})
         else:
             self._enviar_error(HTTPStatus.NOT_FOUND, "Ruta no encontrada.")
 
@@ -1250,6 +1316,16 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       border-bottom: 1px solid var(--border);
       padding-bottom: 12px;
     }}
+    .lote-toolbar {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      padding: 6px 12px;
+      background: rgba(255,255,255,0.02);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }}
     .archivos-grid {{
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -1263,6 +1339,29 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       overflow: hidden;
       display: flex;
       flex-direction: column;
+      position: relative;
+      transition: border-color 0.2s;
+    }}
+    .archivo-item:hover {{
+      border-color: var(--accent);
+    }}
+    .chk-container {{
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      z-index: 10;
+      background: rgba(0, 0, 0, 0.75);
+      border-radius: 4px;
+      padding: 3px 6px;
+      display: flex;
+      align-items: center;
+      cursor: pointer;
+    }}
+    .chk-container input[type="checkbox"] {{
+      cursor: pointer;
+      width: 16px;
+      height: 16px;
+      accent-color: var(--accent);
     }}
     .miniatura-wrap {{
       width: 100%;
@@ -1299,6 +1398,16 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       padding: 12px;
       border-radius: 6px;
     }}
+    .campo-escena-wrap {{
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }}
+    .error-inline {{
+      color: var(--danger);
+      font-size: 0.8rem;
+      font-weight: 500;
+    }}
     label {{ font-size: 0.85rem; font-weight: 500; }}
     select, input[type="text"] {{
       background: #141414;
@@ -1317,8 +1426,51 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       font-weight: 600;
       cursor: pointer;
       margin-left: auto;
+      transition: background 0.2s, opacity 0.2s;
     }}
-    button.btn-accion:hover {{ background: var(--accent-hover); }}
+    button.btn-accion:hover:not(:disabled) {{ background: var(--accent-hover); }}
+    button.btn-accion:disabled {{
+      background: #333;
+      color: #777;
+      cursor: not-allowed;
+      opacity: 0.65;
+    }}
+    .btn-sm {{
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: background 0.2s, border-color 0.2s;
+    }}
+    .btn-sm:hover:not(:disabled) {{
+      background: rgba(255, 255, 255, 0.08);
+      border-color: var(--accent);
+    }}
+    .btn-sm:disabled {{
+      opacity: 0.5;
+      cursor: not-allowed;
+    }}
+    .badge-movido {{
+      background: rgba(3, 218, 198, 0.2);
+      color: var(--teal);
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+    }}
+    .badge-deshecho {{
+      background: rgba(207, 102, 121, 0.2);
+      color: var(--danger);
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+    }}
     /* Modal de Simulación */
     .modal-overlay {{
       display: none;
@@ -1386,9 +1538,10 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
   </header>
 
   <nav>
-    <button class="nav-btn active" onclick="mostrarPestana('lotes')">Lotes Detectados</button>
-    <button class="nav-btn" onclick="mostrarPestana('sin-identificar')">Sin Identificar</button>
-    <button class="nav-btn" onclick="cargarDatos()">Refrescar</button>
+    <button class="nav-btn active" id="nav-btn-lotes" onclick="mostrarPestana('lotes', event)">Lotes Detectados</button>
+    <button class="nav-btn" id="nav-btn-sin-identificar" onclick="mostrarPestana('sin-identificar', event)">Sin Identificar</button>
+    <button class="nav-btn" id="nav-btn-historial" onclick="mostrarPestana('historial', event)">Historial</button>
+    <button class="nav-btn" onclick="recargarVistaActual()">Refrescar</button>
   </nav>
 
   <main>
@@ -1405,6 +1558,19 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
           Archivos de media sin patrón conocido. Marcá si corresponden al proyecto o ignorar. La decisión se recuerda por hash.
         </p>
         <div id="contenedor-sin-identificar">Cargando...</div>
+      </div>
+    </section>
+
+    <section id="sec-historial" style="display:none;">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h2>Historial de movimientos</h2>
+            <small style="color:var(--text-muted)">Últimos 50 movimientos registrados en la bitácora</small>
+          </div>
+          <button class="btn-sm" id="btn-deshacer-ultimo-lote" onclick="deshacerUltimoLote()" style="background:var(--accent); color:#000; font-weight:600; padding:6px 14px;">Deshacer último lote</button>
+        </div>
+        <div id="contenedor-historial">Cargando historial...</div>
       </div>
     </section>
   </main>
@@ -1428,17 +1594,33 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     let datosEstado = {{ lotes: [], sin_identificar: [], escenas: [], personajes: [], ultimo_personaje: "lucie" }};
     let simulacionActiva = null;
     let loteActivoId = null;
+    let pestanaActual = 'lotes';
+    let historialActual = [];
 
-    function mostrarPestana(pestana) {{
+    function mostrarPestana(pestana, ev) {{
+      pestanaActual = pestana;
       document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-      if (pestana === 'lotes') {{
-        document.getElementById('sec-lotes').style.display = 'block';
-        document.getElementById('sec-sin-identificar').style.display = 'none';
-        event.target.classList.add('active');
+      if (ev && ev.target) {{
+        ev.target.classList.add('active');
       }} else {{
-        document.getElementById('sec-lotes').style.display = 'none';
-        document.getElementById('sec-sin-identificar').style.display = 'block';
-        event.target.classList.add('active');
+        const btn = document.getElementById(`nav-btn-${{pestana}}`);
+        if (btn) btn.classList.add('active');
+      }}
+
+      document.getElementById('sec-lotes').style.display = (pestana === 'lotes') ? 'block' : 'none';
+      document.getElementById('sec-sin-identificar').style.display = (pestana === 'sin-identificar') ? 'block' : 'none';
+      document.getElementById('sec-historial').style.display = (pestana === 'historial') ? 'block' : 'none';
+
+      if (pestana === 'historial') {{
+        cargarHistorial();
+      }}
+    }}
+
+    async function recargarVistaActual() {{
+      if (pestanaActual === 'historial') {{
+        await cargarHistorial();
+      }} else {{
+        await cargarDatos();
       }}
     }}
 
@@ -1504,9 +1686,19 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
               <h3>Lote #${{lote.numero}} (${{lote.total_archivos}} archivos &bull; ${{formatearBytes(lote.total_bytes)}})</h3>
               <span style="color:var(--text-muted);font-size:0.85rem">${{lote.fecha}}</span>
             </div>
+            <div class="lote-toolbar">
+              <span id="lbl-sel-${{lote.lote_id}}" style="font-size:0.85rem; color:var(--text-muted);">${{lote.archivos.length}} seleccionados</span>
+              <div style="display:flex; gap:8px;">
+                <button type="button" class="btn-sm" onclick="seleccionarTodosLote('${{lote.lote_id}}', true)">Seleccionar todos</button>
+                <button type="button" class="btn-sm" onclick="seleccionarTodosLote('${{lote.lote_id}}', false)">Ninguno</button>
+              </div>
+            </div>
             <div class="archivos-grid">
               ${{lote.archivos.map(a => `
-                <div class="archivo-item">
+                <div class="archivo-item" title="Archivo: ${{a.nombre}}&#10;Fecha: ${{a.fecha || lote.fecha || ''}}&#10;Tamaño: ${{formatearBytes(a.tamanio)}}">
+                  <div class="chk-container">
+                    <input type="checkbox" class="chk-archivo chk-lote-${{lote.lote_id}}" data-id="${{a.id_db}}" checked onchange="actualizarSeleccionLote('${{lote.lote_id}}')">
+                  </div>
                   <div class="miniatura-wrap">
                     <img src="/api/miniatura?id=${{a.id_db}}" alt="${{a.nombre}}" onerror="this.onerror=null;this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22><rect width=%22100%%22 height=%22100%%22 fill=%22%23222%22/><text x=%2250%%22 y=%2250%%22 fill=%22%23888%22 text-anchor=%22middle%22 dy=%22.3em%22>Media</text></svg>';">
                   </div>
@@ -1525,17 +1717,104 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
                   ${{escenasOptions}}
                 </select>
               </label>
-              <input type="text" id="txt-nueva-escena-${{lote.lote_id}}" placeholder="Nombre de escena nueva" style="max-width:200px;">
-              <button class="btn-accion" onclick="iniciarMover('${{lote.lote_id}}')">Mover Lote</button>
+              <div class="campo-escena-wrap">
+                <input type="text" id="txt-nueva-escena-${{lote.lote_id}}" placeholder="Nombre de escena nueva" style="max-width:200px;" oninput="validarInputEscena('${{lote.lote_id}}')">
+                <span id="error-escena-${{lote.lote_id}}" class="error-inline" style="display:none;"></span>
+              </div>
+              <button class="btn-accion" id="btn-mover-${{lote.lote_id}}" onclick="iniciarMover('${{lote.lote_id}}')">Mover seleccionados (${{lote.archivos.length}})</button>
             </div>
           </div>
         `;
       }}).join('');
     }}
 
+    function seleccionarTodosLote(loteId, marcar) {{
+      const checkboxes = document.querySelectorAll(`.chk-lote-${{loteId}}`);
+      checkboxes.forEach(cb => {{ cb.checked = marcar; }});
+      actualizarSeleccionLote(loteId);
+    }}
+
+    function actualizarSeleccionLote(loteId) {{
+      const checkboxes = document.querySelectorAll(`.chk-lote-${{loteId}}`);
+      let marcados = 0;
+      checkboxes.forEach(cb => {{ if (cb.checked) marcados++; }});
+
+      const lbl = document.getElementById(`lbl-sel-${{loteId}}`);
+      if (lbl) {{
+        lbl.innerText = `${{marcados}} seleccionados`;
+      }}
+
+      const btn = document.getElementById(`btn-mover-${{loteId}}`);
+      if (btn) {{
+        btn.innerText = `Mover seleccionados (${{marcados}})`;
+        btn.disabled = (marcados === 0);
+      }}
+    }}
+
+    function validarNombreEscena(nombre) {{
+      if (!nombre || !nombre.trim()) {{
+        return "El nombre de la escena no puede estar vacío.";
+      }}
+      const trim = nombre.trim();
+      if (trim.length > 100) {{
+        return "El nombre no puede exceder 100 caracteres.";
+      }}
+      if (trim.endsWith('.') || trim.endsWith(' ')) {{
+        return "El nombre no puede terminar en punto ni en espacio.";
+      }}
+      if (trim.includes('..') || trim.includes('/') || trim.includes('\\\\')) {{
+        return "El nombre no puede contener '/', '\\\\' ni '..'.";
+      }}
+      if (/[<>:"|?*\\x00-\\x1F]/.test(trim)) {{
+        return "Contiene caracteres inválidos (< > : \\\" | ? * o de control).";
+      }}
+      const reservados = ["CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"];
+      const baseNombre = trim.split('.')[0].toUpperCase();
+      if (reservados.includes(trim.toUpperCase()) || reservados.includes(baseNombre)) {{
+        return `\\"${{trim}}\\" es un nombre reservado del sistema.`;
+      }}
+      return null;
+    }}
+
+    function validarInputEscena(loteId) {{
+      const input = document.getElementById(`txt-nueva-escena-${{loteId}}`);
+      const errSpan = document.getElementById(`error-escena-${{loteId}}`);
+      if (!input || !errSpan) return true;
+
+      const selEscena = document.getElementById(`sel-escena-${{loteId}}`).value;
+      if (selEscena !== '__nueva__') {{
+        errSpan.style.display = 'none';
+        errSpan.innerText = '';
+        return true;
+      }}
+
+      const error = validarNombreEscena(input.value);
+      if (error) {{
+        errSpan.innerText = error;
+        errSpan.style.display = 'block';
+        return false;
+      }} else {{
+        errSpan.style.display = 'none';
+        errSpan.innerText = '';
+        return true;
+      }}
+    }}
+
     function toggleNuevaEscena(loteId, valor) {{
       const txt = document.getElementById(`txt-nueva-escena-${{loteId}}`);
-      txt.style.display = valor === '__nueva__' ? 'inline-block' : 'none';
+      const errSpan = document.getElementById(`error-escena-${{loteId}}`);
+      if (valor === '__nueva__') {{
+        txt.style.display = 'inline-block';
+        validarInputEscena(loteId);
+      }} else {{
+        txt.style.display = 'none';
+        if (errSpan) {{
+          errSpan.style.display = 'none';
+          errSpan.innerText = '';
+        }}
+      }}
     }}
 
     function renderSinIdentificar() {{
@@ -1577,9 +1856,112 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       }}
     }}
 
+    async function cargarHistorial() {{
+      const cont = document.getElementById('contenedor-historial');
+      cont.innerHTML = '<p style="color:var(--text-muted)">Cargando historial...</p>';
+      try {{
+        const res = await apiFetch('/api/historial');
+        historialActual = res.historial || [];
+        renderHistorial();
+      }} catch (e) {{
+        cont.innerHTML = '<p style="color:var(--danger)">Error al cargar historial.</p>';
+        mostrarError(e.message);
+      }}
+    }}
+
+    function renderHistorial() {{
+      const cont = document.getElementById('contenedor-historial');
+      const btnUltimo = document.getElementById('btn-deshacer-ultimo-lote');
+
+      if (!historialActual.length) {{
+        cont.innerHTML = '<p style="color:var(--text-muted)">No hay movimientos registrados en la bitácora aún.</p>';
+        if (btnUltimo) btnUltimo.disabled = true;
+        return;
+      }}
+
+      const primerMovido = historialActual.find(m => m.estado === 'movido');
+      if (btnUltimo) {{
+        btnUltimo.disabled = !primerMovido;
+      }}
+
+      cont.innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>Fecha</th>
+              <th>Archivo</th>
+              <th>Origen</th>
+              <th>Destino</th>
+              <th>Estado</th>
+              <th>Acción</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${{historialActual.map(m => `
+              <tr>
+                <td><small>${{m.fecha}}</small></td>
+                <td><strong>${{m.archivo}}</strong></td>
+                <td><small title="${{m.origen}}">${{m.origen}}</small></td>
+                <td><small style="color:var(--teal)" title="${{m.destino}}">${{m.destino}}</small></td>
+                <td>
+                  <span class="${{m.estado === 'movido' ? 'badge-movido' : 'badge-deshecho'}}">
+                    ${{m.estado}}
+                  </span>
+                </td>
+                <td>
+                  ${{m.estado === 'movido' ? `
+                    <button class="btn-sm" onclick="deshacerMovimiento('${{m.id_operacion}}')">
+                      Deshacer
+                    </button>
+                  ` : `
+                    <span style="color:var(--text-muted)">-</span>
+                  `}}
+                </td>
+              </tr>
+            `).join('')}}
+          </tbody>
+        </table>
+      `;
+    }}
+
+    async function deshacerMovimiento(idOperacion) {{
+      if (!idOperacion) return;
+      if (!confirm("¿Confirmás deshacer esta operación? Los archivos serán restaurados a su ubicación original.")) {{
+        return;
+      }}
+      try {{
+        const res = await apiFetch('/api/deshacer', {{
+          method: 'POST',
+          body: JSON.stringify({{ id_operacion: idOperacion }})
+        }});
+        await cargarHistorial();
+        await cargarDatos();
+      }} catch (e) {{
+        mostrarError(e.message);
+      }}
+    }}
+
+    async function deshacerUltimoLote() {{
+      const primerMovido = historialActual.find(m => m.estado === 'movido');
+      if (!primerMovido) {{
+        mostrarError("No hay operaciones pendientes de deshacer en el historial.");
+        return;
+      }}
+      await deshacerMovimiento(primerMovido.id_operacion);
+    }}
+
     async function iniciarMover(loteId) {{
       const lote = datosEstado.lotes.find(l => l.lote_id === loteId);
       if (!lote) return;
+
+      const checkboxes = document.querySelectorAll(`.chk-lote-${{loteId}}:checked`);
+      const idsSeleccionados = new Set(Array.from(checkboxes).map(cb => cb.getAttribute('data-id')));
+      const archivosSeleccionados = lote.archivos.filter(a => idsSeleccionados.has(String(a.id_db)));
+
+      if (!archivosSeleccionados.length) {{
+        mostrarError("Debés seleccionar al menos un archivo para mover.");
+        return;
+      }}
 
       const selPers = document.getElementById(`sel-pers-${{loteId}}`).value;
       const selEscena = document.getElementById(`sel-escena-${{loteId}}`).value;
@@ -1587,11 +1969,12 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       let esExistenteDescargas = false;
 
       if (selEscena === '__nueva__') {{
-        nombreEscena = document.getElementById(`txt-nueva-escena-${{loteId}}`).value.trim();
-        if (!nombreEscena) {{
-          mostrarError('Ingresá un nombre para la escena nueva.');
+        if (!validarInputEscena(loteId)) {{
+          const txt = document.getElementById(`txt-nueva-escena-${{loteId}}`);
+          if (txt) txt.focus();
           return;
         }}
+        nombreEscena = document.getElementById(`txt-nueva-escena-${{loteId}}`).value.trim();
       }} else {{
         const opt = document.querySelector(`#sel-escena-${{loteId}} option[value="${{selEscena}}"]`);
         if (opt && opt.getAttribute('data-tipo') === 'descargas_alias') {{
@@ -1603,7 +1986,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         const sim = await apiFetch('/api/simular-mover', {{
           method: 'POST',
           body: JSON.stringify({{
-            archivos: lote.archivos,
+            archivos: archivosSeleccionados,
             personaje: selPers,
             escena: nombreEscena,
             es_existente_descargas: esExistenteDescargas
