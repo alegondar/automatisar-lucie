@@ -74,3 +74,13 @@
 - [x] 10.3 Gestionar la persistencia del aviso (visible hasta cierre manual o reemplazo por un nuevo lote) y el ocultamiento tras reversión exitosa, manteniendo la disponibilidad en la pestaña Historial.
 - [x] 10.4 Agregar en `test_bandeja_descargas.py` las pruebas unitarias que verifiquen la generación del aviso con la cantidad correcta de archivos y destino tras mover un lote, y la reversión completa de todos los archivos al deshacer desde el aviso.
 - [x] 10.5 Verificar que la auditoría AST anti-borrado (`seguridad_anti_borrado.py`) mantenga 0 violaciones y que toda la suite de pruebas unitarias pase al 100%.
+
+## 11. Modal de Simulación Ampliado, Rutas Relativas y Resaltado de Segmentos
+
+- [x] 11.1 Ensanchar el modal de simulación previa en la SPA hasta 90% del ancho de pantalla (90vw, máximo 1200px) y altura máxima de 85vh con desplazamiento vertical.
+- [x] 11.2 Configurar el ajuste de texto en celdas de rutas mediante `word-break: break-word` y `overflow-wrap: anywhere` para evitar desbordes y barras de desplazamiento horizontal.
+- [x] 11.3 Mostrar el destino relativo a la carpeta destino base (`<personaje>/<subcarpeta_tipo>/<escena>/<archivo>`) y conservar la ruta absoluta completa en el atributo `title` (tooltip) y `data-destino`.
+- [x] 11.4 Resaltar visualmente con etiquetas estilizadas (`tag-tipo`, `tag-video`, `tag-imagen`) los segmentos de tipo ("imagenes" o "videos sin editar") en la columna de destino.
+- [x] 11.5 Implementar `generar_html_simulacion` en el servidor con renderizado seguro y fallback reactivo en el cliente.
+- [x] 11.6 Añadir pruebas unitarias en `test_bandeja_descargas.py` que comprueben la inclusión de la ruta completa en el tooltip del HTML de simulación, las rutas relativas y el resaltado de tipo.
+- [x] 11.7 Verificar la auditoría AST anti-borrado (0 violaciones) y la ejecución exitosa de toda la suite de pruebas del proyecto.

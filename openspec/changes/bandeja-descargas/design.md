@@ -84,6 +84,14 @@ El presente ajuste técnico complementa la arquitectura inicial con mejoras del 
   - La bitácora y la pestaña "Historial" siguen conteniendo el registro del movimiento de forma transparente.
   - Si al pulsar "Deshacer" desde el banner el servidor responde HTTP 409 (porque la ruta original está ocupada), la advertencia de error se presenta sin cerrar el banner ni sobrescribir archivos.
 
+### 6. Modal de Simulación Previa: Ensanchamiento, Rutas Relativas y Resaltado de Segmentos
+- **Decisión**:
+  - Ampliar el modal a `width: 90vw; max-width: 1200px; max-height: 85vh;` para otorgar suficiente visibilidad a las rutas en pantallas modernas.
+  - Aplicar `word-break: break-word` y `overflow-wrap: anywhere` en las celdas de rutas (`.ruta-celda`) para evitar que se corten las rutas o fuercen barras de desplazamiento horizontal.
+  - Mostrar la ruta de destino relativa al directorio base (`<personaje>/<subcarpeta_tipo>/<escena>/<archivo>`), y preservar la ruta absoluta completa en el atributo `title` (tooltip nativo) y `data-destino` de cada archivo.
+  - Resaltar visualmente el segmento de tipo ("imagenes" con badge `.tag-imagen` o "videos sin editar" con badge `.tag-video`) en el destino relativo para diferenciarlos a simple vista.
+  - Implementar la función `generar_html_simulacion` en el servidor devuelta en `/api/simular-mover` y consumida directamente por la SPA con fallback reactivo en JavaScript.
+
 ## Risks / Trade-offs
 
 - **[Riesgo: Selección parcial genera dispersión de archivos de una misma toma]** → **Mitigación**: Los archivos no seleccionados permanecen en el lote pendiente con su marca temporal original, permitiendo que el usuario los mueva más tarde a la misma escena o a otra diferente según su criterio sin perder la agrupación.

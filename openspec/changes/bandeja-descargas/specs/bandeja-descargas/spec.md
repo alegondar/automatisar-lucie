@@ -206,3 +206,15 @@ Tras confirmar la operación "Mover seleccionados", el panel web SHALL mostrar u
 - **WHEN** el usuario pulsa "Deshacer" desde el aviso pero la ruta original de algún archivo fue ocupada externamente
 - **THEN** el servidor responde 409 Conflict y el panel muestra el mensaje explicativo de negativa sin sobrescribir ni mutar ningún archivo
 
+### Requirement: Modal de simulación previa ampliado, rutas relativas y resaltado de tipo
+La ventana modal de "Simulación previa de movimientos" SHALL tener dimensiones ampliadas de hasta el 90% del ancho de pantalla (máximo 1200px) y altura máxima de 85vh con desplazamiento vertical. Las celdas de rutas SHALL utilizar `word-break: break-word` y `overflow-wrap: anywhere` para garantizar que las rutas no queden ocultas ni generen barras de desplazamiento horizontal. La columna de destino SHALL mostrar la ruta relativa a la carpeta destino base (`<personaje>/<subcarpeta_tipo>/<escena>/<archivo>`), resaltar visualmente con etiquetas de color el segmento de tipo ("imagenes" o "videos sin editar"), y mantener la ruta de destino absoluta completa en el atributo `title` (tooltip) y `data-destino` de cada archivo.
+
+#### Scenario: Visualización ensanchada y ajuste de rutas en simulación
+- **WHEN** el usuario solicita simular el movimiento de un lote
+- **THEN** la ventana modal se abre con ancho ampliado de hasta 90vw (máximo 1200px) y las rutas largas se ajustan al contenedor sin desborde horizontal ni corte
+
+#### Scenario: Presentación de destino relativo con resaltado de tipo y tooltip completo
+- **WHEN** se listan los movimientos a realizar en la simulación
+- **THEN** la columna destino muestra la ruta relativa destacando las subcarpetas "videos sin editar" o "imagenes" con badges diferenciados, y al posicionar el cursor sobre la celda se visualiza la ruta absoluta completa en el tooltip
+
+

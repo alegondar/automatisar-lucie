@@ -20,6 +20,7 @@ import datetime
 import fnmatch
 import hashlib
 import hmac
+import html
 import json
 import os
 import re
@@ -455,6 +456,71 @@ class AgrupadorLotes:
         return resultado
 
 
+def generar_html_simulacion(simulacion: Dict[str, Any]) -> str:
+    """
+    Genera el marcado HTML para el modal de simulación previa.
+    Muestra el destino relativo al directorio base resaltando el segmento de tipo
+    ("videos sin editar" o "imagenes") y manteniendo la ruta de destino completa
+    en el tooltip (atributo title) de cada archivo.
+    """
+    personaje = html.escape(str(simulacion.get("personaje", "")))
+    escena = html.escape(str(simulacion.get("escena", "")))
+    es_descargas = simulacion.get("es_existente_descargas", False)
+    descargas_tag = " (En Descargas)" if es_descargas else ""
+
+    filas = []
+    for m in simulacion.get("movimientos", []):
+        origen = m.get("origen", "")
+        destino_completo = m.get("destino", "")
+        destino_relativo = m.get("destino_relativo") or destino_completo
+        subcarpeta_tipo = m.get("subcarpeta_tipo", "")
+        nombre_archivo = os.path.basename(origen)
+
+        # Formatear segmentos del destino relativo
+        partes = [p for p in destino_relativo.replace("\\", "/").split("/") if p]
+        partes_formateadas = []
+        for p in partes:
+            p_lower = p.lower()
+            if p_lower == "videos sin editar":
+                partes_formateadas.append(f'<span class="tag-tipo tag-video">{html.escape(p)}</span>')
+            elif p_lower == "imagenes" or (subcarpeta_tipo and p_lower == subcarpeta_tipo.lower()):
+                partes_formateadas.append(f'<span class="tag-tipo tag-imagen">{html.escape(p)}</span>')
+            else:
+                partes_formateadas.append(html.escape(p))
+
+        destino_resaltado = " / ".join(partes_formateadas)
+
+        origen_esc = html.escape(origen)
+        destino_esc = html.escape(destino_completo)
+        nombre_esc = html.escape(nombre_archivo)
+
+        fila = (
+            f'<tr>'
+            f'<td><strong>{nombre_esc}</strong></td>'
+            f'<td class="ruta-celda" title="{origen_esc}"><small style="color:var(--text-muted)">{origen_esc}</small></td>'
+            f'<td class="ruta-celda destino-celda" title="{destino_esc}" data-destino="{destino_esc}">{destino_resaltado}</td>'
+            f'</tr>'
+        )
+        filas.append(fila)
+
+    filas_html = "\n".join(filas)
+    return (
+        f'<p><strong>Personaje:</strong> {personaje} | <strong>Escena:</strong> {escena}{descargas_tag}</p>\n'
+        f'<table class="modal-tabla">\n'
+        f'  <thead>\n'
+        f'    <tr>\n'
+        f'      <th style="width:25%;">Archivo</th>\n'
+        f'      <th style="width:30%;">Origen</th>\n'
+        f'      <th style="width:45%;">Destino (relativo)</th>\n'
+        f'    </tr>\n'
+        f'  </thead>\n'
+        f'  <tbody>\n'
+        f'    {filas_html}\n'
+        f'  </tbody>\n'
+        f'</table>'
+    )
+
+
 class GestorMovimientosBandeja:
     """
     Ejecuta simulaciones, movimientos con os.rename, resolución de colisiones,
@@ -517,10 +583,12 @@ class GestorMovimientosBandeja:
         for arch in archivos:
             origen = os.path.realpath(arch["ruta"])
             self._validar_confinamiento(origen)
-
             nombre_archivo = os.path.basename(origen)
+
             if es_existente_descargas:
                 carpeta_destino = os.path.join(self.ruta_descargas, nombre_escena)
+                subcarpeta_tipo = ""
+                base_rel = self.ruta_descargas
             else:
                 _, ext = os.path.splitext(nombre_archivo.lower())
                 if ext in EXTENSIONES_IMAGENES_DEFECTO:
@@ -528,6 +596,7 @@ class GestorMovimientosBandeja:
                 else:
                     subcarpeta_tipo = "videos sin editar"
                 carpeta_destino = os.path.join(self.ruta_destino_base, personaje, subcarpeta_tipo, nombre_escena)
+                base_rel = self.ruta_destino_base
 
             self._validar_confinamiento(carpeta_destino)
             destino_inicial = os.path.join(carpeta_destino, nombre_archivo)
@@ -540,15 +609,19 @@ class GestorMovimientosBandeja:
                 destino_final = self.resolver_destino_sin_colision(destino_final)
             destinos_vistos.add(destino_final)
 
+            destino_relativo = os.path.relpath(destino_final, base_rel).replace("\\", "/")
+
             movimientos_simulados.append({
                 "id_db": arch.get("id_db"),
                 "origen": origen,
                 "destino": destino_final,
+                "destino_relativo": destino_relativo,
+                "subcarpeta_tipo": subcarpeta_tipo,
                 "tamanio": arch.get("tamanio", 0),
                 "hash": arch.get("hash", "")
             })
 
-        return {
+        resultado_sim = {
             "valido": True,
             "personaje": personaje,
             "escena": nombre_escena,
@@ -556,6 +629,8 @@ class GestorMovimientosBandeja:
             "total_archivos": len(movimientos_simulados),
             "movimientos": movimientos_simulados
         }
+        resultado_sim["html"] = generar_html_simulacion(resultado_sim)
+        return resultado_sim
 
     def ejecutar_movimiento_lote(self, simulacion: Dict[str, Any], lote_id: str) -> Dict[str, Any]:
         """Ejecuta los movimientos atómicos con os.rename y los asienta en la bitácora .jsonl."""
@@ -1494,9 +1569,9 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       background: var(--card-bg);
       border: 1px solid var(--border);
       border-radius: 8px;
-      width: 100%;
-      max-width: 800px;
-      max-height: 80vh;
+      width: 90vw;
+      max-width: 1200px;
+      max-height: 85vh;
       overflow-y: auto;
       padding: 24px;
     }}
@@ -1534,6 +1609,53 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     table {{ width: 100%; border-collapse: collapse; font-size: 0.85rem; margin: 12px 0; }}
     th, td {{ border: 1px solid var(--border); padding: 8px; text-align: left; }}
     th {{ background: var(--card-alt); }}
+    .modal-tabla {{
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+      margin: 14px 0;
+      table-layout: fixed;
+    }}
+    .modal-tabla th, .modal-tabla td {{
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      text-align: left;
+      vertical-align: middle;
+    }}
+    .modal-tabla th {{
+      background: var(--card-alt);
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }}
+    .ruta-celda {{
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      white-space: normal;
+      font-size: 0.85rem;
+      line-height: 1.4;
+    }}
+    .destino-celda {{
+      color: var(--text);
+    }}
+    .tag-tipo {{
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      margin: 0 2px;
+      vertical-align: middle;
+    }}
+    .tag-video {{
+      background: rgba(168, 85, 247, 0.2);
+      color: #c084fc;
+      border: 1px solid rgba(168, 85, 247, 0.4);
+    }}
+    .tag-imagen {{
+      background: rgba(14, 165, 233, 0.2);
+      color: #38bdf8;
+      border: 1px solid rgba(14, 165, 233, 0.4);
+    }}
     .banner-aviso {{
       background: #14352b;
       border-bottom: 2px solid var(--teal);
@@ -1668,6 +1790,16 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     let pestanaActual = 'lotes';
     let historialActual = [];
     let operacionAvisoActual = null;
+
+    function escapeHTML(str) {{
+      return String(str || '').replace(/[&<>'"]/g, tag => ({{
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        "'": '&#39;',
+        '"': '&quot;'
+      }}[tag] || tag));
+    }}
 
     function mostrarAvisoMover(totalMovidos, personaje, escena, idOperacion) {{
       operacionAvisoActual = idOperacion;
@@ -2111,23 +2243,48 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       }}
     }}
 
+    function formatearDestinoCliente(m) {{
+      const rel = (m.destino_relativo || m.destino || '').replace(/\\\\/g, '/');
+      const partes = rel.split('/').filter(Boolean);
+      const partesHTML = partes.map(p => {{
+        const pl = p.toLowerCase();
+        if (pl === 'videos sin editar') {{
+          return `<span class="tag-tipo tag-video">${{escapeHTML(p)}}</span>`;
+        }} else if (pl === 'imagenes' || (m.subcarpeta_tipo && pl === m.subcarpeta_tipo.toLowerCase())) {{
+          return `<span class="tag-tipo tag-imagen">${{escapeHTML(p)}}</span>`;
+        }}
+        return escapeHTML(p);
+      }});
+      return partesHTML.join(' / ');
+    }}
+
     function mostrarModalSimulacion(sim) {{
       const cont = document.getElementById('simulacion-contenido');
-      cont.innerHTML = `
-        <p><strong>Personaje:</strong> ${{sim.personaje}} | <strong>Escena:</strong> ${{sim.escena}} ${{sim.es_existente_descargas ? '(En Descargas)' : ''}}</p>
-        <table>
-          <thead><tr><th>Archivo</th><th>Origen</th><th>Destino Exacto</th></tr></thead>
-          <tbody>
-            ${{sim.movimientos.map(m => `
+      if (sim.html) {{
+        cont.innerHTML = sim.html;
+      }} else {{
+        cont.innerHTML = `
+          <p><strong>Personaje:</strong> ${{escapeHTML(sim.personaje || '')}} | <strong>Escena:</strong> ${{escapeHTML(sim.escena || '')}} ${{sim.es_existente_descargas ? '(En Descargas)' : ''}}</p>
+          <table class="modal-tabla">
+            <thead>
               <tr>
-                <td>${{m.origen.split('/').pop()}}</td>
-                <td><small>${{m.origen}}</small></td>
-                <td style="color:var(--teal)"><small>${{m.destino}}</small></td>
+                <th style="width:25%;">Archivo</th>
+                <th style="width:30%;">Origen</th>
+                <th style="width:45%;">Destino (relativo)</th>
               </tr>
-            `).join('')}}
-          </tbody>
-        </table>
-      `;
+            </thead>
+            <tbody>
+              ${{sim.movimientos.map(m => `
+                <tr>
+                  <td><strong>${{escapeHTML(m.origen.split('/').pop())}}</strong></td>
+                  <td class="ruta-celda" title="${{escapeHTML(m.origen)}}"><small style="color:var(--text-muted)">${{escapeHTML(m.origen)}}</small></td>
+                  <td class="ruta-celda destino-celda" title="${{escapeHTML(m.destino)}}" data-destino="${{escapeHTML(m.destino)}}">${{formatearDestinoCliente(m)}}</td>
+                </tr>
+              `).join('')}}
+            </tbody>
+          </table>
+        `;
+      }}
       document.getElementById('modal-simulacion').style.display = 'flex';
       document.getElementById('btn-ejecutar-mover').onclick = ejecutarMoverLote;
     }}

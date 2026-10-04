@@ -42,7 +42,8 @@ from bandeja_descargas import (
     ErrorValidacionEscena,
     ErrorSeguridadBandeja,
     ErrorDeshacer,
-    calcular_sha256
+    calcular_sha256,
+    generar_html_simulacion
 )
 from seguridad_anti_borrado import analizar_ast_archivo
 
@@ -866,6 +867,74 @@ class TestServidorHTTPYSeguridad(unittest.TestCase):
         self.assertTrue(os.path.exists(arch2))
         self.assertFalse(os.path.exists(dest1))
         self.assertFalse(os.path.exists(dest2))
+
+    def test_html_simulacion_incluye_ruta_destino_completa_y_segmentos_resaltados(self):
+        """
+        Verifica que:
+        1. La simulación previa genera HTML con la ruta de destino completa de cada archivo en el tooltip (title).
+        2. Muestra la ruta relativa a la carpeta destino.
+        3. Resalta los segmentos de tipo ("imagenes" o "videos sin editar") con tags específicos.
+        4. El marcado servido por el panel web incluye el ancho ampliado (hasta 90vw, máx 1200px) y reglas word-break.
+        """
+        arch_video = os.path.join(self.descargas, "grok_sim_vid_01.mp4")
+        arch_img = os.path.join(self.descargas, "grok_sim_img_01.png")
+        with open(arch_video, "wb") as f:
+            f.write(b"video contenido sim")
+        with open(arch_img, "wb") as f:
+            f.write(b"imagen contenido sim")
+        self.vigilante.escanear()
+
+        headers_ok = {
+            "Host": f"127.0.0.1:{self.config.puerto_servidor}",
+            "Content-Type": "application/json",
+            "X-CSRF-Token": self.token_csrf
+        }
+
+        body_sim = json.dumps({
+            "archivos": [
+                {"ruta": arch_video, "tamanio": 19, "hash": "h_sim_vid"},
+                {"ruta": arch_img, "tamanio": 20, "hash": "h_sim_img"}
+            ],
+            "personaje": "lucie",
+            "escena": "prueba_bandeja",
+            "es_existente_descargas": False
+        })
+        status, sim_data, _ = self._request("POST", "/api/simular-mover", headers=headers_ok, body=body_sim)
+        self.assertEqual(status, 200)
+        self.assertIn("html", sim_data)
+        html_sim = sim_data["html"]
+
+        # 1. El HTML de la simulación incluye la ruta de destino completa de cada archivo
+        for m in sim_data["movimientos"]:
+            destino_completo = m["destino"]
+            # Debe estar presente en el HTML
+            self.assertIn(destino_completo, html_sim)
+            # En particular en el tooltip (title) de la celda de destino
+            self.assertIn(f'title="{destino_completo}"', html_sim)
+            self.assertIn(f'data-destino="{destino_completo}"', html_sim)
+            # Y la ruta relativa debe reflejar el personaje y la escena
+            self.assertIn("lucie", m["destino_relativo"])
+            self.assertIn("prueba_bandeja", m["destino_relativo"])
+
+        # 2. Resalta el segmento de tipo ("imagenes" o "videos sin editar")
+        self.assertIn('<span class="tag-tipo tag-video">videos sin editar</span>', html_sim)
+        self.assertIn('<span class="tag-tipo tag-imagen">imagenes</span>', html_sim)
+
+        # 3. La función generar_html_simulacion produce el mismo marcado coherente
+        html_directo = generar_html_simulacion(sim_data)
+        self.assertEqual(html_sim, html_directo)
+
+        # 4. El panel SPA servido tiene estilos de ensanchamiento y word-break sin desborde
+        status_page, _, page_raw = self._request("GET", "/", headers={"Host": f"127.0.0.1:{self.config.puerto_servidor}"})
+        self.assertEqual(status_page, 200)
+        page_html = page_raw.decode("utf-8")
+        self.assertIn("90vw", page_html)
+        self.assertIn("1200px", page_html)
+        self.assertIn("word-break: break-word", page_html)
+        self.assertIn("overflow-wrap: anywhere", page_html)
+        self.assertIn(".tag-tipo", page_html)
+        self.assertIn(".tag-video", page_html)
+        self.assertIn(".tag-imagen", page_html)
 
 
 class TestAuditoriaASTAntiBorrado(unittest.TestCase):
