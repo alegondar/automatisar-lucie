@@ -410,11 +410,11 @@ class TestGestorMovimientosYDeshacer(unittest.TestCase):
 
         self.assertEqual(
             dest_vid,
-            os.path.join(self.destino_base, "lucie", "parque_primavera", "lucieparque_primavera1.mp4")
+            os.path.join(self.destino_base, "lucie", "parque_primavera", "videos", "lucieparque_primavera1.mp4")
         )
         self.assertEqual(
             dest_img,
-            os.path.join(self.destino_base, "lucie", "parque_primavera", "lucieparque_primavera1.png")
+            os.path.join(self.destino_base, "lucie", "parque_primavera", "fotos", "lucieparque_primavera1.png")
         )
 
         # Ejecutar movimiento
@@ -438,7 +438,7 @@ class TestGestorMovimientosYDeshacer(unittest.TestCase):
             ruta_destino_base=self.destino_base,
             db=self.db,
             ruta_bitacora=os.path.join(self.tmp_dir, "bitacora_custom.jsonl"),
-            carpeta_imagenes="fotos_sesion"
+            subcarpeta_fotos="fotos_sesion"
         )
         foto_arch = os.path.join(self.descargas, "toma_20261003140000.webp")
         with open(foto_arch, "wb") as f:
@@ -454,7 +454,7 @@ class TestGestorMovimientosYDeshacer(unittest.TestCase):
         dest_img = sim["movimientos"][0]["destino"]
         self.assertEqual(
             dest_img,
-            os.path.join(self.destino_base, "mailen", "estudio", "mailenestudio1.webp")
+            os.path.join(self.destino_base, "mailen", "estudio", "fotos_sesion", "mailenestudio1.webp")
         )
 
         res = gestor_custom.ejecutar_movimiento_lote(sim, lote_id="lote_custom")
@@ -1218,8 +1218,8 @@ class TestCapituloActivoYReconocimientoNombres(unittest.TestCase):
             id_op_b = data_mov["resultados"][1]["id_operacion"]
             self.assertNotEqual(id_op_a, id_op_b, "Cada lote debe conservar su propio id_operacion")
 
-            dest_a = os.path.join(self.destino, "lucie", "escena_lucie", "lucieescena_lucie1.mp4")
-            dest_b = os.path.join(self.destino, "roli", "escena_roli", "roliescena_roli1.jpg")
+            dest_a = os.path.join(self.destino, "lucie", "escena_lucie", "videos", "lucieescena_lucie1.mp4")
+            dest_b = os.path.join(self.destino, "roli", "escena_roli", "fotos", "roliescena_roli1.jpg")
             self.assertTrue(os.path.exists(dest_a))
             self.assertTrue(os.path.exists(dest_b))
             self.assertFalse(os.path.exists(arch_a))
@@ -1717,7 +1717,7 @@ class TestRenombradoAlMover(unittest.TestCase):
         self.assertTrue(res["exito"])
         # Ambos archivos existen intactos
         self.assertTrue(os.path.exists(archivo_existente))
-        self.assertTrue(os.path.exists(os.path.join(carpeta_destino, "lucietrapitos2.jpg")))
+        self.assertTrue(os.path.exists(os.path.join(carpeta_destino, "fotos", "lucietrapitos2.jpg")))
 
     def test_multi_lote_sin_nombres_repetidos_misma_escena(self):
         """Dos lotes destinados a la misma escena en una solicitud multi-lote no repiten nombres."""
@@ -2766,8 +2766,8 @@ class TestAjustesEscenaCapituloYAnteriores(unittest.TestCase):
         res = self.movimientos.ejecutar_movimiento_lote(sim, "lote_capitulo")
         self.assertTrue(res["exito"])
 
-        dest_f1 = os.path.join(self.destino, "lucie", "playa", "lucieplaya1.jpg")
-        dest_f2 = os.path.join(self.destino, "lucie", "playa", "lucieplaya2.png")
+        dest_f1 = os.path.join(self.destino, "lucie", "playa", "fotos", "lucieplaya1.jpg")
+        dest_f2 = os.path.join(self.destino, "lucie", "playa", "fotos", "lucieplaya2.png")
         self.assertTrue(os.path.exists(dest_f1))
         self.assertTrue(os.path.exists(dest_f2))
         self.assertFalse(os.path.exists(f1))
@@ -4014,6 +4014,357 @@ class TestRefrescoAutomaticoPanel(unittest.TestCase):
         proc = subprocess.run(["node", "-e", js_test], capture_output=True, text=True)
         self.assertEqual(proc.returncode, 0, f"Fallo en pruebas Node.js: {proc.stderr}")
         self.assertIn("TESTS_NODE_OK", proc.stdout)
+
+
+class TestSubcarpetasFotosVideos(unittest.TestCase):
+    """
+    Pruebas unitarias completas para el cambio subcarpetas-fotos-videos.
+    Cubre:
+    - Foto y video del mismo lote van a fotos/ y videos/ con contadores separados.
+    - Se renombra un archivo con nombre propio (lucierascadapatalon.mp4) y no se conserva su nombre.
+    - Subcarpeta se crea solo al primer archivo de ese tipo.
+    - Numeración continúa considerando archivos sueltos en la raíz y en la subcarpeta, sin repetir números.
+    - Colisión case-insensitive.
+    - Extensión desconocida va a la raíz con aviso y sin perder el nombre.
+    - Deshacer devuelve el nombre original y deja la subcarpeta vacía sin borrarla.
+    - Descartar capítulo mueve todo el árbol con hashes iguales y simulación recursiva.
+    - Balance recursivo de Movidos y aviso de carpeta existente.
+    - fotos y videos no aparecen como escenas en el desplegable.
+    """
+
+    def setUp(self):
+        self.tmp_dir_obj = tempfile.TemporaryDirectory(prefix="test_subcarpetas_")
+        self.tmp_dir = self.tmp_dir_obj.name
+        self.descargas = os.path.join(self.tmp_dir, "Descargas")
+        self.destino_base = os.path.join(self.descargas, "_lucie")
+        os.makedirs(self.descargas, exist_ok=True)
+        os.makedirs(self.destino_base, exist_ok=True)
+
+        self.db_path = os.path.join(self.tmp_dir, "bandeja_test.sqlite")
+        self.bitacora_path = os.path.join(self.tmp_dir, "bitacora_test.jsonl")
+        self.db = GestorBaseDatosBandeja(self.db_path, ruta_destino_base=self.destino_base, ruta_descargas=self.descargas)
+        self.gestor = GestorMovimientosBandeja(
+            ruta_descargas=self.descargas,
+            ruta_destino_base=self.destino_base,
+            db=self.db,
+            ruta_bitacora=self.bitacora_path,
+            subcarpeta_fotos="fotos",
+            subcarpeta_videos="videos"
+        )
+
+    def tearDown(self):
+        self.tmp_dir_obj.cleanup()
+
+    def test_foto_y_video_mismo_lote_van_a_subcarpetas_con_contadores_separados(self):
+        """Foto y video del mismo lote van a fotos/ y videos/ con contadores independientes."""
+        foto = os.path.join(self.descargas, "grok-image-1.jpg")
+        video = os.path.join(self.descargas, "grok-video-1.mp4")
+        with open(foto, "wb") as f:
+            f.write(b"foto_content")
+        with open(video, "wb") as f:
+            f.write(b"video_content")
+
+        sim = self.gestor.simular_movimiento_lote(
+            archivos=[
+                {"ruta": foto, "tamanio": 12, "hash": "h_f1"},
+                {"ruta": video, "tamanio": 13, "hash": "h_v1"}
+            ],
+            personaje="lucie",
+            nombre_escena="trapitos",
+            es_existente_descargas=False
+        )
+
+        self.assertEqual(len(sim["movimientos"]), 2)
+        mov_foto = next(m for m in sim["movimientos"] if m["nombre_original"] == "grok-image-1.jpg")
+        mov_video = next(m for m in sim["movimientos"] if m["nombre_original"] == "grok-video-1.mp4")
+
+        self.assertEqual(mov_foto["nombre_nuevo"], "lucietrapitos1.jpg")
+        self.assertEqual(mov_foto["subcarpeta_tipo"], "fotos")
+        self.assertEqual(mov_foto["destino_relativo"], "lucie/trapitos/fotos/lucietrapitos1.jpg")
+
+        self.assertEqual(mov_video["nombre_nuevo"], "lucietrapitos1.mp4")
+        self.assertEqual(mov_video["subcarpeta_tipo"], "videos")
+        self.assertEqual(mov_video["destino_relativo"], "lucie/trapitos/videos/lucietrapitos1.mp4")
+
+        res = self.gestor.ejecutar_movimiento_lote(sim, lote_id="lote_sep")
+        self.assertTrue(res["exito"])
+        self.assertTrue(os.path.exists(os.path.join(self.destino_base, "lucie", "trapitos", "fotos", "lucietrapitos1.jpg")))
+        self.assertTrue(os.path.exists(os.path.join(self.destino_base, "lucie", "trapitos", "videos", "lucietrapitos1.mp4")))
+
+    def test_renombrado_total_elimina_excepciones_nombres_personalizados(self):
+        """Se renombra un archivo con nombre propio (ej. lucierascadapatalon.mp4) sin conservar su nombre."""
+        archivo = os.path.join(self.descargas, "lucierascadapatalon.mp4")
+        with open(archivo, "wb") as f:
+            f.write(b"video con nombre propio")
+
+        sim = self.gestor.simular_movimiento_lote(
+            archivos=[{"ruta": archivo, "tamanio": 23, "hash": "h_patalon"}],
+            personaje="lucie",
+            nombre_escena="patalon",
+            es_existente_descargas=False
+        )
+
+        mov = sim["movimientos"][0]
+        self.assertEqual(mov["nombre_nuevo"], "luciepatalon1.mp4")
+        self.assertNotEqual(mov["nombre_nuevo"], "lucierascadapatalon.mp4")
+        self.assertEqual(mov["subcarpeta_tipo"], "videos")
+
+        res = self.gestor.ejecutar_movimiento_lote(sim, lote_id="lote_ren")
+        self.assertTrue(res["exito"])
+        dest_final = os.path.join(self.destino_base, "lucie", "patalon", "videos", "luciepatalon1.mp4")
+        self.assertTrue(os.path.exists(dest_final))
+        self.assertFalse(os.path.exists(archivo))
+
+    def test_creacion_perezosa_subcarpeta(self):
+        """La subcarpeta se crea únicamente al mover el primer archivo de ese tipo."""
+        video = os.path.join(self.descargas, "grok-video-solo.mp4")
+        with open(video, "wb") as f:
+            f.write(b"solo video")
+
+        sim = self.gestor.simular_movimiento_lote(
+            archivos=[{"ruta": video, "tamanio": 10, "hash": "h_solo"}],
+            personaje="lucie",
+            nombre_escena="baile",
+            es_existente_descargas=False
+        )
+
+        carpeta_escena = os.path.join(self.destino_base, "lucie", "baile")
+        carpeta_fotos = os.path.join(carpeta_escena, "fotos")
+        carpeta_videos = os.path.join(carpeta_escena, "videos")
+
+        # Antes de ejecutar, no deben existir ni fotos ni videos
+        self.assertFalse(os.path.exists(carpeta_fotos))
+        self.assertFalse(os.path.exists(carpeta_videos))
+
+        res = self.gestor.ejecutar_movimiento_lote(sim, lote_id="lote_perezoso")
+        self.assertTrue(res["exito"])
+
+        # Solo videos fue creada; fotos NO fue creada vacía de antemano
+        self.assertTrue(os.path.exists(carpeta_videos))
+        self.assertFalse(os.path.exists(carpeta_fotos))
+
+    def test_numeracion_continua_considerando_sueltos_en_raiz_y_en_subcarpeta(self):
+        """Numeración continúa desde max_existente considerando archivos en raíz y subcarpetas."""
+        carpeta_escena = os.path.join(self.destino_base, "lucie", "paseo")
+        os.makedirs(os.path.join(carpeta_escena, "fotos"), exist_ok=True)
+        os.makedirs(os.path.join(carpeta_escena, "videos"), exist_ok=True)
+
+        # Archivo suelto en raíz
+        with open(os.path.join(carpeta_escena, "luciepaseo1.png"), "wb") as f:
+            f.write(b"f1")
+        # Archivo en subcarpeta fotos
+        with open(os.path.join(carpeta_escena, "fotos", "luciepaseo2.png"), "wb") as f:
+            f.write(b"f2")
+
+        # Video suelto en raíz
+        with open(os.path.join(carpeta_escena, "luciepaseo1.mp4"), "wb") as f:
+            f.write(b"v1")
+        # Video en subcarpeta videos con número 4
+        with open(os.path.join(carpeta_escena, "videos", "luciepaseo4.mp4"), "wb") as f:
+            f.write(b"v4")
+
+        nueva_foto = os.path.join(self.descargas, "grok-img-nueva.jpg")
+        nuevo_video = os.path.join(self.descargas, "grok-vid-nuevo.mp4")
+        with open(nueva_foto, "wb") as f:
+            f.write(b"fn")
+        with open(nuevo_video, "wb") as f:
+            f.write(b"vn")
+
+        sim = self.gestor.simular_movimiento_lote(
+            archivos=[
+                {"ruta": nueva_foto, "tamanio": 2, "hash": "h_fn"},
+                {"ruta": nuevo_video, "tamanio": 2, "hash": "h_vn"}
+            ],
+            personaje="lucie",
+            nombre_escena="paseo",
+            es_existente_descargas=False
+        )
+
+        mov_foto = next(m for m in sim["movimientos"] if m["nombre_original"] == "grok-img-nueva.jpg")
+        mov_video = next(m for m in sim["movimientos"] if m["nombre_original"] == "grok-vid-nuevo.mp4")
+
+        # La foto debe ser 3 (max entre 1 en raíz y 2 en fotos)
+        self.assertEqual(mov_foto["nombre_nuevo"], "luciepaseo3.jpg")
+        self.assertEqual(mov_foto["destino_relativo"], "lucie/paseo/fotos/luciepaseo3.jpg")
+
+        # El video debe ser 5 (max entre 1 en raíz y 4 en videos)
+        self.assertEqual(mov_video["nombre_nuevo"], "luciepaseo5.mp4")
+        self.assertEqual(mov_video["destino_relativo"], "lucie/paseo/videos/luciepaseo5.mp4")
+
+        res = self.gestor.ejecutar_movimiento_lote(sim, lote_id="lote_cont")
+        self.assertTrue(res["exito"])
+        self.assertTrue(os.path.exists(os.path.join(carpeta_escena, "fotos", "luciepaseo3.jpg")))
+        self.assertTrue(os.path.exists(os.path.join(carpeta_escena, "videos", "luciepaseo5.mp4")))
+
+    def test_colision_case_insensitive(self):
+        """Comparación case-insensitive de nombres en subcarpeta para no colisionar."""
+        carpeta_fotos = os.path.join(self.destino_base, "roli", "parque", "fotos")
+        os.makedirs(carpeta_fotos, exist_ok=True)
+        # Archivo existente con mayúsculas
+        with open(os.path.join(carpeta_fotos, "Roliparque1.PNG"), "wb") as f:
+            f.write(b"existente en mayus")
+
+        nueva_foto = os.path.join(self.descargas, "grok-img-ci.png")
+        with open(nueva_foto, "wb") as f:
+            f.write(b"nueva foto")
+
+        sim = self.gestor.simular_movimiento_lote(
+            archivos=[{"ruta": nueva_foto, "tamanio": 10, "hash": "h_ci_test"}],
+            personaje="roli",
+            nombre_escena="parque",
+            es_existente_descargas=False
+        )
+
+        self.assertEqual(sim["movimientos"][0]["nombre_nuevo"], "roliparque2.png")
+        res = self.gestor.ejecutar_movimiento_lote(sim, lote_id="lote_ci_test")
+        self.assertTrue(res["exito"])
+        self.assertTrue(os.path.exists(os.path.join(carpeta_fotos, "Roliparque1.PNG")))
+        self.assertTrue(os.path.exists(os.path.join(carpeta_fotos, "roliparque2.png")))
+
+    def test_extension_desconocida_va_a_raiz_con_aviso_y_sin_perder_nombre(self):
+        """Extensión desconocida se traslada a la raíz de la escena con advertencia y nombre original."""
+        archivo_txt = os.path.join(self.descargas, "notas_produccion.txt")
+        with open(archivo_txt, "wb") as f:
+            f.write(b"guion y notas")
+
+        sim = self.gestor.simular_movimiento_lote(
+            archivos=[{"ruta": archivo_txt, "tamanio": 13, "hash": "h_txt"}],
+            personaje="lucie",
+            nombre_escena="estudio",
+            es_existente_descargas=False
+        )
+
+        self.assertTrue(sim["hay_otro_tipo"])
+        mov = sim["movimientos"][0]
+        self.assertTrue(mov["es_otro_tipo"])
+        self.assertEqual(mov["nombre_nuevo"], "notas_produccion.txt")
+        self.assertEqual(mov["subcarpeta_tipo"], "")
+        self.assertEqual(mov["destino_relativo"], "lucie/estudio/notas_produccion.txt")
+        self.assertIn("no multimedia", mov["advertencia"])
+        self.assertIn("⚠️ Archivo no multimedia detectado", sim["html"])
+
+        res = self.gestor.ejecutar_movimiento_lote(sim, lote_id="lote_otro")
+        self.assertTrue(res["exito"])
+        destino_final = os.path.join(self.destino_base, "lucie", "estudio", "notas_produccion.txt")
+        self.assertTrue(os.path.exists(destino_final))
+        with open(destino_final, "rb") as f:
+            self.assertEqual(f.read(), b"guion y notas")
+
+    def test_deshacer_devuelve_nombre_original_y_deja_subcarpeta_vacia_sin_borrarla(self):
+        """Deshacer restaura el nombre original y deja la subcarpeta vacía sin eliminarla."""
+        foto = os.path.join(self.descargas, "captura_origen.jpg")
+        with open(foto, "wb") as f:
+            f.write(b"foto para deshacer")
+
+        sim = self.gestor.simular_movimiento_lote(
+            archivos=[{"ruta": foto, "tamanio": 18, "hash": "h_undo"}],
+            personaje="lucie",
+            nombre_escena="recuerdos",
+            es_existente_descargas=False
+        )
+
+        res_mov = self.gestor.ejecutar_movimiento_lote(sim, lote_id="lote_undo_test")
+        self.assertTrue(res_mov["exito"])
+        sub_fotos = os.path.join(self.destino_base, "lucie", "recuerdos", "fotos")
+        self.assertTrue(os.path.exists(sub_fotos))
+        self.assertFalse(os.path.exists(foto))
+
+        res_undo = self.gestor.deshacer_operacion(res_mov["id_operacion"])
+        self.assertTrue(res_undo["exito"])
+        # Volvió a origen
+        self.assertTrue(os.path.exists(foto))
+        # La subcarpeta destino quedó vacía pero NO fue eliminada
+        self.assertTrue(os.path.exists(sub_fotos))
+        self.assertTrue(os.path.isdir(sub_fotos))
+        self.assertEqual(len(os.listdir(sub_fotos)), 0)
+
+    def test_descartar_capitulo_arbol_completo_con_hashes_iguales_y_simulacion_recursiva(self):
+        """Descartar capítulo traslada todo el árbol recursivamente con verificación de hashes."""
+        res_cap = self.db.empezar_capitulo("lucie", "aventura", ruta_destino_base=self.destino_base, ruta_descargas=self.descargas)
+        cap_id = res_cap["id"] if "id" in res_cap else 1
+        carpeta_cap = os.path.join(self.destino_base, "lucie", "aventura")
+        os.makedirs(os.path.join(carpeta_cap, "fotos"), exist_ok=True)
+        os.makedirs(os.path.join(carpeta_cap, "videos"), exist_ok=True)
+
+        with open(os.path.join(carpeta_cap, "notas.txt"), "wb") as f:
+            f.write(b"texto raiz")
+        with open(os.path.join(carpeta_cap, "fotos", "lucieaventura1.png"), "wb") as f:
+            f.write(b"foto png en subcarpeta")
+        with open(os.path.join(carpeta_cap, "videos", "lucieaventura1.mp4"), "wb") as f:
+            f.write(b"video mp4 en subcarpeta")
+
+        sim_desc = self.gestor.simular_descartar_capitulo(cap_id)
+        self.assertEqual(sim_desc["total_archivos"], 3)
+        self.assertTrue(sim_desc["peso_total"] > 0)
+        archivos_sim = {a["ruta_relativa"].replace("\\", "/") for a in sim_desc["archivos"]}
+        self.assertIn("notas.txt", archivos_sim)
+        self.assertIn("fotos/lucieaventura1.png", archivos_sim)
+        self.assertIn("videos/lucieaventura1.mp4", archivos_sim)
+
+        res_desc = self.gestor.ejecutar_descartar_capitulo(sim_desc, nombre_confirmacion="aventura")
+        self.assertTrue(res_desc["exito"])
+
+        destino_carpeta = sim_desc["destino_carpeta"]
+        self.assertTrue(os.path.exists(destino_carpeta))
+        self.assertTrue(os.path.exists(os.path.join(destino_carpeta, "fotos", "lucieaventura1.png")))
+        self.assertTrue(os.path.exists(os.path.join(destino_carpeta, "videos", "lucieaventura1.mp4")))
+        self.assertTrue(os.path.exists(os.path.join(destino_carpeta, "notas.txt")))
+
+    def test_balance_recursivo_y_aviso_carpeta_existente(self):
+        """asegurar_carpeta_capitulo y calcular_balance_capitulo cuentan de forma recursiva."""
+        carpeta_cap = os.path.join(self.destino_base, "lucie", "serie_vintage")
+        os.makedirs(os.path.join(carpeta_cap, "fotos"), exist_ok=True)
+        os.makedirs(os.path.join(carpeta_cap, "videos"), exist_ok=True)
+
+        with open(os.path.join(carpeta_cap, "suelto.jpg"), "wb") as f:
+            f.write(b"suelto")
+        with open(os.path.join(carpeta_cap, "fotos", "f1.png"), "wb") as f:
+            f.write(b"f1")
+        with open(os.path.join(carpeta_cap, "fotos", "f2.png"), "wb") as f:
+            f.write(b"f2")
+        with open(os.path.join(carpeta_cap, "videos", "v1.mp4"), "wb") as f:
+            f.write(b"v1")
+
+        info_asegurar = asegurar_carpeta_capitulo("lucie", "serie_vintage", self.destino_base, self.descargas)
+        self.assertTrue(info_asegurar["ya_existia"])
+        self.assertEqual(info_asegurar["total_archivos"], 4)
+        self.assertIn("4 archivos", info_asegurar["mensaje"])
+
+        balance = self.db.calcular_balance_capitulo("lucie", "serie_vintage", verificar_disco=True)
+        self.assertEqual(balance["movidos"], 4)
+
+    def test_fotos_y_videos_no_aparecen_como_escenas(self):
+        """Las carpetas 'fotos' y 'videos' están excluidas de la detección de escenas y validación."""
+        os.makedirs(os.path.join(self.destino_base, "lucie", "fotos"), exist_ok=True)
+        os.makedirs(os.path.join(self.destino_base, "lucie", "videos"), exist_ok=True)
+        os.makedirs(os.path.join(self.destino_base, "lucie", "escena_real"), exist_ok=True)
+
+        config = ConfiguracionBandeja()
+        config.ruta_descargas = self.descargas
+        config.ruta_destino_base = self.destino_base
+
+        vigilante = VigilanteBandeja(
+            config, self.db, FiltroListaBlanca(config), DetectorDescargasActivas(0.1), AgrupadorLotes(10)
+        )
+        vigilante.escanear()
+        estado = vigilante.obtener_estado()
+        nombres_escenas = [e["nombre"] for e in estado["escenas"]]
+
+        self.assertIn("escena_real", nombres_escenas)
+        self.assertNotIn("fotos", nombres_escenas)
+        self.assertNotIn("videos", nombres_escenas)
+
+        filtro = FiltroListaBlanca(config)
+        self.assertFalse(filtro.es_carpeta_escena_existente("fotos"))
+        self.assertFalse(filtro.es_carpeta_escena_existente("videos"))
+
+        valido_f, msg_f = ValidadorEscenas.validar_nombre_escena("fotos", self.destino_base, self.descargas)
+        self.assertFalse(valido_f)
+        self.assertIn("reservada", msg_f)
+
+        valido_v, msg_v = ValidadorEscenas.validar_nombre_escena("videos", self.destino_base, self.descargas)
+        self.assertFalse(valido_v)
+        self.assertIn("reservada", msg_v)
 
 
 class TestAuditoriaASTAntiBorrado(unittest.TestCase):

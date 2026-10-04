@@ -139,6 +139,8 @@ class ConfiguracionBandeja:
         self.minutos_antes_inicio_capitulo = 0
         self.horas_material_reciente = 0.0
         self.refresco_panel_segundos = 4
+        self.subcarpeta_fotos = "fotos"
+        self.subcarpeta_videos = "videos"
         self.cargar()
 
     def cargar(self):
@@ -167,6 +169,14 @@ class ConfiguracionBandeja:
                     self.refresco_panel_segundos = max(0, int(datos["refresco_panel_segundos"]))
                 except (ValueError, TypeError):
                     self.refresco_panel_segundos = 4
+            if "subcarpeta_fotos" in datos:
+                val = str(datos["subcarpeta_fotos"]).strip()
+                if val:
+                    self.subcarpeta_fotos = val
+            if "subcarpeta_videos" in datos:
+                val = str(datos["subcarpeta_videos"]).strip()
+                if val:
+                    self.subcarpeta_videos = val
             if "intervalo_sondeo_segundos" in datos:
                 self.intervalo_sondeo_segundos = max(1, int(datos["intervalo_sondeo_segundos"]))
             if "ventana_lote_minutos" in datos:
@@ -755,9 +765,16 @@ class GestorBaseDatosBandeja:
             """, (personaje, nombre))
             mov_arch = cur.fetchone()["c"]
 
+            mov_disco = 0
+            if verificar_disco and self.ruta_destino_base:
+                carpeta_cap = os.path.join(self.ruta_destino_base, personaje, nombre)
+                if os.path.exists(carpeta_cap) and os.path.isdir(carpeta_cap):
+                    for _, _, files in os.walk(carpeta_cap):
+                        mov_disco += len(files)
+
             return {
                 "pendientes": pendientes,
-                "movidos": max(mov_cap, mov_arch)
+                "movidos": max(mov_cap, mov_arch, mov_disco)
             }
 
     def es_capitulo_olvidado(self, horas_limite: float = 12.0, ahora: Optional[datetime.datetime] = None) -> bool:
@@ -843,7 +860,9 @@ class FiltroListaBlanca:
     def es_carpeta_escena_existente(self, nombre_carpeta: str) -> bool:
         """Verifica si una carpeta de Descargas comienza con un alias de personaje."""
         nombre_lower = nombre_carpeta.strip().lower()
-        if nombre_lower.startswith("_") or "_descartados" in nombre_lower:
+        if (nombre_lower.startswith("_") or 
+            "_descartados" in nombre_lower or 
+            nombre_lower in ("fotos", "videos")):
             return False
         for al in self.alias_personajes:
             if nombre_lower == al or nombre_lower.startswith(al + " ") or nombre_lower.startswith(al + "_") or nombre_lower.startswith(al + "-"):
@@ -990,8 +1009,9 @@ class ValidadorEscenas:
             return False, "El nombre de la escena no puede contener separadores de ruta ('/', '\\') ni '..'."
 
         nombre_lower = nombre.strip().lower()
-        if nombre_lower in ("_descartados", "_lucie", "_a_revisar", "_enviados") or "_descartados" in nombre_lower:
-            return False, "El nombre de la escena no puede contener ni llamarse '_descartados'."
+        if (nombre_lower in ("_descartados", "_lucie", "_a_revisar", "_enviados", "fotos", "videos") or 
+            "_descartados" in nombre_lower):
+            return False, f"El nombre de la escena '{nombre}' es una palabra reservada del sistema o contiene '_descartados'."
 
         if nombre.endswith(".") or nombre.endswith(" "):
             return False, "El nombre de la escena no puede finalizar con un punto o espacio."
@@ -1278,6 +1298,15 @@ def generar_html_simulacion(simulacion: Dict[str, Any]) -> str:
             f'</div>\n'
         )
 
+    alerta_otro_tipo = ""
+    if simulacion.get("hay_otro_tipo"):
+        alerta_otro_tipo = (
+            f'<div style="margin:8px 0 14px 0; padding:10px 14px; background:rgba(234, 179, 8, 0.15); border:1px solid #eab308; border-radius:6px; color:#fde047; font-size:0.9rem;">'
+            f'<strong>⚠️ Archivo no multimedia detectado:</strong> Contiene archivos con extensión distinta a fotos o videos. '
+            f'Se moverán a la raíz de la escena conservando su nombre original sin sobreescritura.'
+            f'</div>\n'
+        )
+
     filas = []
     for m in simulacion.get("movimientos", []):
         origen = m.get("origen", "")
@@ -1294,9 +1323,14 @@ def generar_html_simulacion(simulacion: Dict[str, Any]) -> str:
         nombre_nuev_esc = html.escape(nombre_nuevo)
         destino_limpio_esc = html.escape(destino_limpio)
 
+        if m.get("es_otro_tipo"):
+            badge_span = f'<span class="badge-renombrado" style="color:var(--text-warning, #f59e0b); font-weight:600;">{nombre_nuev_esc} (sin renombrar)</span>'
+        else:
+            badge_span = f'<span class="badge-renombrado" style="color:var(--accent-primary, #60a5fa); font-weight:600;">{nombre_nuev_esc}</span>'
+
         fila = (
             f'<tr>'
-            f'<td><strong>{nombre_orig_esc}</strong> &rarr; <span class="badge-renombrado" style="color:var(--accent-primary, #60a5fa); font-weight:600;">{nombre_nuev_esc}</span></td>'
+            f'<td><strong>{nombre_orig_esc}</strong> &rarr; {badge_span}</td>'
             f'<td class="ruta-celda" title="{origen_esc}"><small style="color:var(--text-muted)">{origen_esc}</small></td>'
             f'<td class="ruta-celda destino-celda" title="{destino_esc}" data-destino="{destino_esc}">{destino_limpio_esc}</td>'
             f'</tr>'
@@ -1306,6 +1340,7 @@ def generar_html_simulacion(simulacion: Dict[str, Any]) -> str:
     filas_html = "\n".join(filas)
     return (
         f'{alerta_personaje}'
+        f'{alerta_otro_tipo}'
         f'<p><strong>Personaje:</strong> {personaje} | <strong>Escena:</strong> {escena}{descargas_tag}</p>\n'
         f'<table class="modal-tabla">\n'
         f'  <thead>\n'
@@ -1334,13 +1369,16 @@ class GestorMovimientosBandeja:
 
     def __init__(self, ruta_descargas: str, ruta_destino_base: str, db: GestorBaseDatosBandeja,
                  ruta_bitacora: str = "bitacora_bandeja.jsonl", ruta_alias: str = "alias-personajes.json",
+                 subcarpeta_fotos: str = "fotos", subcarpeta_videos: str = "videos",
                  **kwargs):
         self.ruta_descargas = os.path.realpath(ruta_descargas)
         self.ruta_destino_base = os.path.realpath(ruta_destino_base)
         self.db = db
         self.ruta_bitacora = ruta_bitacora
-        self.ruta_alias = ruta_alias
-        self.alias_map = self._cargar_alias(ruta_alias)
+        self.ruta_alias = kwargs.get("archivo_alias_personajes") or ruta_alias
+        self.subcarpeta_fotos = str(kwargs.get("subcarpeta_fotos") or subcarpeta_fotos or "fotos").strip() or "fotos"
+        self.subcarpeta_videos = str(kwargs.get("subcarpeta_videos") or subcarpeta_videos or "videos").strip() or "videos"
+        self.alias_map = self._cargar_alias(self.ruta_alias)
         self._lock = threading.Lock()
 
     def asegurar_carpeta_capitulo(self, personaje: str, nombre: str) -> Dict[str, Any]:
@@ -1445,8 +1483,9 @@ class GestorMovimientosBandeja:
 
     def obtener_contadores_carpeta_destino(self, carpeta_destino: str, base: str) -> Dict[str, int]:
         """
-        Inspecciona la carpeta destino buscando archivos existentes que coincidan con la base
-        mediante regex case-insensitive ^<base>(\\d+)(?:\\s*\\(\\d+\\))?\\.<ext>$.
+        Inspecciona la carpeta destino y todas sus subcarpetas (raíz, fotos/, videos/, etc.)
+        buscando archivos existentes que coincidan con la base mediante regex case-insensitive
+        ^<base>(\\d+)(?:\\s*\\(\\d+\\))?\\.<ext>$.
         Retorna el número inicial a usar para cada tipo: max_existente + 1.
         """
         max_foto = 0
@@ -1456,21 +1495,22 @@ class GestorMovimientosBandeja:
         if os.path.exists(carpeta_destino) and os.path.isdir(carpeta_destino):
             patron = re.compile(rf"^{re.escape(base)}(\d+)(?:\s*\(\d+\))?\.([a-zA-Z0-9]+)$", re.IGNORECASE)
             try:
-                for f in os.listdir(carpeta_destino):
-                    m = patron.match(f)
-                    if m:
-                        num = int(m.group(1))
-                        ext = "." + m.group(2).lower()
-                        familia = self.clasificar_familia_medio(ext)
-                        if familia == "foto":
-                            if num > max_foto:
-                                max_foto = num
-                        elif familia == "video":
-                            if num > max_video:
-                                max_video = num
-                        else:
-                            if num > max_otro:
-                                max_otro = num
+                for _, _, files in os.walk(carpeta_destino):
+                    for f in files:
+                        m = patron.match(f)
+                        if m:
+                            num = int(m.group(1))
+                            ext = "." + m.group(2).lower()
+                            familia = self.clasificar_familia_medio(ext)
+                            if familia == "foto":
+                                if num > max_foto:
+                                    max_foto = num
+                            elif familia == "video":
+                                if num > max_video:
+                                    max_video = num
+                            else:
+                                if num > max_otro:
+                                    max_otro = num
             except OSError:
                 pass
 
@@ -1526,16 +1566,8 @@ class GestorMovimientosBandeja:
 
         self._validar_confinamiento(carpeta_destino)
 
-        # Contadores iniciales según archivos existentes en la carpeta de destino
+        # Contadores iniciales según archivos existentes en la carpeta de destino (raíz + subcarpetas)
         contadores = self.obtener_contadores_carpeta_destino(carpeta_destino, base)
-
-        # Archivos existentes en disco (case-insensitive para FAT32/exFAT)
-        archivos_disco_lower: Set[str] = set()
-        if os.path.exists(carpeta_destino) and os.path.isdir(carpeta_destino):
-            try:
-                archivos_disco_lower = {f.lower() for f in os.listdir(carpeta_destino)}
-            except OSError:
-                pass
 
         # Conjunto de rutas destino reservadas (en minúsculas)
         destinos_vistos: Set[str] = set()
@@ -1563,20 +1595,64 @@ class GestorMovimientosBandeja:
             ext_lower = ext_raw.lower()
             familia = self.clasificar_familia_medio(ext_lower)
 
-            # Asignar siguiente número correlativo disponible sin colisiones
-            while True:
-                num = contadores[familia]
-                nombre_candidato = f"{base}{num}{ext_lower}"
-                ruta_candidata = os.path.join(carpeta_destino, nombre_candidato)
-                nombre_candidato_lower = nombre_candidato.lower()
-                ruta_candidata_lower = ruta_candidata.lower()
-                contadores[familia] += 1
+            if not es_existente_descargas:
+                if familia == "foto":
+                    subcarpeta = self.subcarpeta_fotos
+                elif familia == "video":
+                    subcarpeta = self.subcarpeta_videos
+                else:
+                    subcarpeta = ""
+            else:
+                subcarpeta = ""
 
-                if nombre_candidato_lower not in archivos_disco_lower and ruta_candidata_lower not in destinos_vistos:
-                    destinos_vistos.add(ruta_candidata_lower)
-                    destino_final = ruta_candidata
-                    nombre_nuevo = nombre_candidato
-                    break
+            carpeta_target = os.path.join(carpeta_destino, subcarpeta) if subcarpeta else carpeta_destino
+
+            # Archivos existentes en disco en carpeta_target (case-insensitive para FAT32/exFAT)
+            archivos_target_lower: Set[str] = set()
+            if os.path.exists(carpeta_target) and os.path.isdir(carpeta_target):
+                try:
+                    archivos_target_lower = {f.lower() for f in os.listdir(carpeta_target)}
+                except OSError:
+                    pass
+
+            es_otro = (familia == "otro")
+            advertencia = ""
+
+            if es_otro:
+                # Regla 2: Extensión de otro tipo no se mueve a ciegas:
+                # la simulación la muestra con aviso y va a la raíz conservando su nombre original
+                advertencia = "Extensión no multimedia: se moverá a la raíz de la escena con su nombre original."
+                nombre_base_orig, ext_orig = os.path.splitext(nombre_archivo_original)
+                candidato_nombre = nombre_archivo_original
+                candidato_ruta = os.path.join(carpeta_target, candidato_nombre)
+                sufijo_idx = 1
+                while (candidato_nombre.lower() in archivos_target_lower or
+                       candidato_ruta.lower() in destinos_vistos or
+                       os.path.exists(candidato_ruta)):
+                    candidato_nombre = f"{nombre_base_orig} ({sufijo_idx}){ext_orig}"
+                    candidato_ruta = os.path.join(carpeta_target, candidato_nombre)
+                    sufijo_idx += 1
+
+                destinos_vistos.add(candidato_ruta.lower())
+                destino_final = candidato_ruta
+                nombre_nuevo = candidato_nombre
+            else:
+                # Regla 4: Renombrado total universal forzoso (<base><n>.<ext>) sin excepciones
+                while True:
+                    num = contadores[familia]
+                    nombre_candidato = f"{base}{num}{ext_lower}"
+                    ruta_candidata = os.path.join(carpeta_target, nombre_candidato)
+                    nombre_candidato_lower = nombre_candidato.lower()
+                    ruta_candidata_lower = ruta_candidata.lower()
+                    contadores[familia] += 1
+
+                    if (nombre_candidato_lower not in archivos_target_lower and
+                        ruta_candidata_lower not in destinos_vistos and
+                        not os.path.exists(ruta_candidata)):
+                        destinos_vistos.add(ruta_candidata_lower)
+                        destino_final = ruta_candidata
+                        nombre_nuevo = nombre_candidato
+                        break
 
             destino_relativo = os.path.relpath(destino_final, base_rel).replace("\\", "/")
 
@@ -1587,7 +1663,9 @@ class GestorMovimientosBandeja:
                 "destino_relativo": destino_relativo,
                 "nombre_original": nombre_archivo_original,
                 "nombre_nuevo": nombre_nuevo,
-                "subcarpeta_tipo": "",
+                "subcarpeta_tipo": subcarpeta,
+                "es_otro_tipo": es_otro,
+                "advertencia": advertencia,
                 "tamanio": arch.get("tamanio", 0),
                 "hash": arch.get("hash", "")
             })
@@ -1611,6 +1689,7 @@ class GestorMovimientosBandeja:
             "base": base,
             "es_existente_descargas": es_existente_descargas,
             "total_archivos": len(movimientos_simulados),
+            "hay_otro_tipo": any(m.get("es_otro_tipo") for m in movimientos_simulados),
             "movimientos": movimientos_simulados,
             "diferente_personaje_capitulo": diferente_personaje_capitulo,
             "personaje_capitulo": personaje_capitulo
@@ -1634,8 +1713,13 @@ class GestorMovimientosBandeja:
                 if not os.path.exists(origen):
                     raise FileNotFoundError(f"El archivo de origen '{origen}' ya no existe.")
 
-                # Crear carpeta de destino
-                os.makedirs(os.path.dirname(destino), exist_ok=True)
+                # Crear carpeta de destino (creación perezosa al mover el primer archivo)
+                dir_destino = os.path.dirname(destino)
+                if not simulacion.get("es_existente_descargas"):
+                    self._validar_confinamiento_destino_base(dir_destino)
+                else:
+                    self._validar_confinamiento(dir_destino)
+                os.makedirs(dir_destino, exist_ok=True)
 
                 # Red de seguridad final para garantizar inexistencia previa
                 destino_final = self.resolver_destino_sin_colision(destino)
@@ -1819,15 +1903,33 @@ class GestorMovimientosBandeja:
             self._validar_confinamiento_destino_base(destino_carpeta)
 
             movio_carpeta = False
+            hashes_antes = {}
             if carpeta_existe:
                 if not os.path.exists(origen_carpeta):
                     raise ErrorMovimiento(f"La carpeta origen '{origen_carpeta}' ya no existe.")
                 if os.path.exists(destino_carpeta):
                     raise ErrorMovimiento(f"El destino '{destino_carpeta}' ya existe.")
 
+                # Calcular hashes antes del movimiento para verificar todo el árbol recursivamente
+                for root, _, files in os.walk(origen_carpeta):
+                    for f in files:
+                        p_orig = os.path.join(root, f)
+                        rel = os.path.relpath(p_orig, origen_carpeta)
+                        hashes_antes[rel] = calcular_sha256(p_orig)
+
                 os.makedirs(os.path.dirname(destino_carpeta), exist_ok=True)
                 os.rename(origen_carpeta, destino_carpeta)
                 movio_carpeta = True
+
+                # Verificar que los hashes post-movimiento coincidan exactamente en todo el árbol
+                for rel, h_esperado in hashes_antes.items():
+                    p_dest = os.path.join(destino_carpeta, rel)
+                    h_post = calcular_sha256(p_dest)
+                    if h_post != h_esperado:
+                        raise ErrorMovimiento(
+                            f"Fallo de integridad post-descarte: el hash de '{rel}' no coincide en '{p_dest}'."
+                        )
+
                 self.db.actualizar_rutas_archivos_descarte(origen_carpeta, destino_carpeta, es_reversion=False)
 
             # Verificar si era el capítulo activo antes de marcarlo como descartado
@@ -1855,6 +1957,7 @@ class GestorMovimientosBandeja:
                 "destino_carpeta": destino_carpeta if movio_carpeta else "",
                 "total_archivos": simulacion.get("total_archivos", 0),
                 "peso_total": simulacion.get("peso_total", 0),
+                "hashes_verificados": len(hashes_antes),
                 "fecha": fecha_iso
             }
             with open(self.ruta_bitacora, "a", encoding="utf-8") as f:
@@ -2405,10 +2508,15 @@ class VigilanteBandeja:
                 for pers in ("lucie", "roli", "mailen"):
                     # Sala de espera plana: <destino>/<personaje>/<escena>
                     carpeta_pers = os.path.join(self.config.ruta_destino_base, pers)
+                    sub_fotos = getattr(self.config, "subcarpeta_fotos", "fotos").lower()
+                    sub_videos = getattr(self.config, "subcarpeta_videos", "videos").lower()
                     if os.path.isdir(carpeta_pers):
                         for sub in os.listdir(carpeta_pers):
                             ruta_sub = os.path.join(carpeta_pers, sub)
-                            if os.path.isdir(ruta_sub) and sub not in ("videos sin editar", "imagenes", "_descartados") and not sub.startswith("_"):
+                            sub_lower = sub.lower()
+                            if (os.path.isdir(ruta_sub) and 
+                                sub_lower not in ("videos sin editar", "imagenes", "_descartados", "fotos", "videos", sub_fotos, sub_videos) and 
+                                not sub.startswith("_")):
                                 if not any(e["nombre"] == sub and e["personaje"] == pers for e in escenas_existentes):
                                     escenas_existentes.append({
                                         "nombre": sub,
@@ -2423,7 +2531,10 @@ class VigilanteBandeja:
                         if os.path.isdir(carpeta_tipo):
                             for sub in os.listdir(carpeta_tipo):
                                 ruta_sub = os.path.join(carpeta_tipo, sub)
-                                if os.path.isdir(ruta_sub) and not sub.startswith("_"):
+                                sub_lower = sub.lower()
+                                if (os.path.isdir(ruta_sub) and 
+                                    not sub.startswith("_") and 
+                                    sub_lower not in ("fotos", "videos", sub_fotos, sub_videos)):
                                     if not any(e["nombre"] == sub and e["personaje"] == pers for e in escenas_existentes):
                                         escenas_existentes.append({
                                             "nombre": sub,
@@ -5715,7 +5826,13 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       if (sim.html) {{
         cont.innerHTML = sim.html;
       }} else {{
+        const alertaOtro = sim.hay_otro_tipo ? `
+          <div style="margin:8px 0 14px 0; padding:10px 14px; background:rgba(234, 179, 8, 0.15); border:1px solid #eab308; border-radius:6px; color:#fde047; font-size:0.9rem;">
+            <strong>⚠️ Archivo no multimedia detectado:</strong> Contiene archivos con extensión distinta a fotos o videos. Se moverán a la raíz de la escena conservando su nombre original sin sobreescritura.
+          </div>
+        ` : '';
         cont.innerHTML = `
+          ${{alertaOtro}}
           <p><strong>Personaje:</strong> ${{escapeHTML(sim.personaje || '')}} | <strong>Escena:</strong> ${{escapeHTML(sim.escena || '')}} ${{sim.es_existente_descargas ? '(En Descargas)' : ''}}</p>
           <table class="modal-tabla">
             <thead>
@@ -5728,7 +5845,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             <tbody>
               ${{sim.movimientos.map(m => `
                 <tr>
-                  <td><strong>${{escapeHTML(m.nombre_original || m.origen.split('/').pop())}}</strong> &rarr; <span class="badge-renombrado" style="color:var(--accent-primary, #60a5fa); font-weight:600;">${{escapeHTML(m.nombre_nuevo || m.destino.split('/').pop())}}</span></td>
+                  <td><strong>${{escapeHTML(m.nombre_original || m.origen.split('/').pop())}}</strong> &rarr; <span class="badge-renombrado" style="color:${{m.es_otro_tipo ? 'var(--text-warning, #f59e0b)' : 'var(--accent-primary, #60a5fa)'}}; font-weight:600;">${{escapeHTML(m.nombre_nuevo || m.destino.split('/').pop())}}${{m.es_otro_tipo ? ' (sin renombrar)' : ''}}</span></td>
                   <td class="ruta-celda" title="${{escapeHTML(m.origen)}}"><small style="color:var(--text-muted)">${{escapeHTML(m.origen)}}</small></td>
                   <td class="ruta-celda destino-celda" title="${{escapeHTML(m.destino)}}" data-destino="${{escapeHTML(m.destino)}}">${{formatearDestinoCliente(m)}}</td>
                 </tr>
@@ -5869,7 +5986,8 @@ def main():
     detector = DetectorDescargasActivas()
     agrupador = AgrupadorLotes(config.ventana_lote_minutos)
     movimientos = GestorMovimientosBandeja(
-        config.ruta_descargas, config.ruta_destino_base, db
+        config.ruta_descargas, config.ruta_destino_base, db,
+        subcarpeta_fotos=config.subcarpeta_fotos, subcarpeta_videos=config.subcarpeta_videos
     )
     miniaturas = GeneradorMiniaturas(db)
 

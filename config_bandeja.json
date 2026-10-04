@@ -9,6 +9,8 @@
   "refresco_panel_segundos": 4,
   "intervalo_sondeo_segundos": 5,
   "ventana_lote_minutos": 10,
+  "subcarpeta_fotos": "fotos",
+  "subcarpeta_videos": "videos",
   "extensiones_media": [
     ".mp4",
     ".mov",
