@@ -616,10 +616,18 @@ class GestorMovimientosBandeja:
             with open(self.ruta_bitacora, "a", encoding="utf-8") as f:
                 f.write(json.dumps(registro_bitacora, ensure_ascii=False) + "\n")
 
+            personaje = simulacion.get("personaje", "")
+            escena = simulacion.get("escena", "")
+            total_movidos = len(movimientos_realizados)
+            mensaje_aviso = f"Se movieron {total_movidos} archivos a {personaje}/{escena}"
+
             return {
                 "exito": True,
                 "id_operacion": id_operacion,
-                "total_movidos": len(movimientos_realizados)
+                "total_movidos": total_movidos,
+                "personaje": personaje,
+                "escena": escena,
+                "mensaje_aviso": mensaje_aviso
             }
 
     def deshacer_operacion(self, id_operacion: str) -> Dict[str, Any]:
@@ -1526,6 +1534,58 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     table {{ width: 100%; border-collapse: collapse; font-size: 0.85rem; margin: 12px 0; }}
     th, td {{ border: 1px solid var(--border); padding: 8px; text-align: left; }}
     th {{ background: var(--card-alt); }}
+    .banner-aviso {{
+      background: #14352b;
+      border-bottom: 2px solid var(--teal);
+      color: #e0f2f1;
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 61px;
+      z-index: 95;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+    }}
+    .banner-aviso-texto {{
+      font-size: 0.95rem;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }}
+    .banner-aviso-acciones {{
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }}
+    .btn-deshacer-aviso {{
+      background: var(--teal);
+      color: #000;
+      border: none;
+      padding: 6px 16px;
+      border-radius: 4px;
+      font-weight: 600;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: background 0.2s;
+    }}
+    .btn-deshacer-aviso:hover {{
+      background: #04bfae;
+    }}
+    .btn-cerrar-aviso {{
+      background: transparent;
+      border: none;
+      color: #aaa;
+      font-size: 1.35rem;
+      cursor: pointer;
+      line-height: 1;
+      padding: 2px 6px;
+      transition: color 0.2s;
+    }}
+    .btn-cerrar-aviso:hover {{
+      color: #fff;
+    }}
   </style>
 </head>
 <body>
@@ -1536,6 +1596,17 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     </div>
     <span class="badge">127.0.0.1:{self.config.puerto_servidor}</span>
   </header>
+
+  <div id="banner-aviso" class="banner-aviso" style="display:none;">
+    <div class="banner-aviso-texto">
+      <span style="color:var(--teal); font-weight:bold;">&#10003;</span>
+      <span id="banner-aviso-msg"></span>
+    </div>
+    <div class="banner-aviso-acciones">
+      <button class="btn-deshacer-aviso" id="btn-banner-deshacer" onclick="deshacerDesdeAviso()">Deshacer</button>
+      <button class="btn-cerrar-aviso" id="btn-banner-cerrar" onclick="cerrarAviso()" title="Cerrar aviso">&times;</button>
+    </div>
+  </div>
 
   <nav>
     <button class="nav-btn active" id="nav-btn-lotes" onclick="mostrarPestana('lotes', event)">Lotes Detectados</button>
@@ -1596,6 +1667,42 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     let loteActivoId = null;
     let pestanaActual = 'lotes';
     let historialActual = [];
+    let operacionAvisoActual = null;
+
+    function mostrarAvisoMover(totalMovidos, personaje, escena, idOperacion) {{
+      operacionAvisoActual = idOperacion;
+      const banner = document.getElementById('banner-aviso');
+      const msg = document.getElementById('banner-aviso-msg');
+      msg.innerText = `Se movieron ${{totalMovidos}} archivos a ${{personaje}}/${{escena}}`;
+      banner.style.display = 'flex';
+    }}
+
+    function cerrarAviso() {{
+      const banner = document.getElementById('banner-aviso');
+      banner.style.display = 'none';
+      operacionAvisoActual = null;
+    }}
+
+    async function deshacerDesdeAviso() {{
+      if (!operacionAvisoActual) return;
+      const idOp = operacionAvisoActual;
+      if (!confirm("¿Confirmás deshacer este lote completo? Los archivos regresarán a sus rutas originales.")) {{
+        return;
+      }}
+      try {{
+        const res = await apiFetch('/api/deshacer', {{
+          method: 'POST',
+          body: JSON.stringify({{ id_operacion: idOp }})
+        }});
+        cerrarAviso();
+        await cargarDatos();
+        if (pestanaActual === 'historial') {{
+          await cargarHistorial();
+        }}
+      }} catch (e) {{
+        mostrarError(e.message);
+      }}
+    }}
 
     function mostrarPestana(pestana, ev) {{
       pestanaActual = pestana;
@@ -1934,6 +2041,9 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
           method: 'POST',
           body: JSON.stringify({{ id_operacion: idOperacion }})
         }});
+        if (operacionAvisoActual === idOperacion) {{
+          cerrarAviso();
+        }}
         await cargarHistorial();
         await cargarDatos();
       }} catch (e) {{
@@ -2036,7 +2146,16 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
           body: JSON.stringify({{ simulacion: simulacionActiva, lote_id: loteActivoId }})
         }});
         cerrarModal();
+        mostrarAvisoMover(
+          res.total_movidos,
+          res.personaje || simulacionActiva.personaje,
+          res.escena || simulacionActiva.escena,
+          res.id_operacion
+        );
         await cargarDatos();
+        if (pestanaActual === 'historial') {{
+          await cargarHistorial();
+        }}
       }} catch (e) {{
         mostrarError(e.message);
       }}

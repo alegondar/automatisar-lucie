@@ -66,3 +66,11 @@
 - [x] 9.4 Agregar en `test_bandeja_descargas.py` la prueba de negativa de deshacer cuando la ruta original se encuentra ocupada, validando que no se sobrescriba ni se muten archivos.
 - [x] 9.5 Ejecutar `seguridad_anti_borrado.py` verificando que el total de violaciones de primitivas destructivas en el repositorio permanezca estrictamente en 0.
 - [x] 9.6 Ejecutar la suite completa de pruebas unitarias (`python3 -m unittest discover -s . -p "test_*.py"`) confirmando el 100% de éxito.
+
+## 10. Aviso Fijo Superior tras Mover Lote y Deshacer Inmediato
+
+- [x] 10.1 Actualizar `ejecutar_movimiento_lote` en `bandeja_descargas.py` para devolver `personaje`, `escena` y `total_movidos` en el resultado JSON de `/api/mover-lote`.
+- [x] 10.2 Añadir en la SPA el componente de aviso fijo superior `#banner-aviso` con estilos CSS, texto `"Se movieron N archivos a <personaje>/<escena>"`, botón "Deshacer" con token anti-CSRF y botón de cierre "×".
+- [x] 10.3 Gestionar la persistencia del aviso (visible hasta cierre manual o reemplazo por un nuevo lote) y el ocultamiento tras reversión exitosa, manteniendo la disponibilidad en la pestaña Historial.
+- [x] 10.4 Agregar en `test_bandeja_descargas.py` las pruebas unitarias que verifiquen la generación del aviso con la cantidad correcta de archivos y destino tras mover un lote, y la reversión completa de todos los archivos al deshacer desde el aviso.
+- [x] 10.5 Verificar que la auditoría AST anti-borrado (`seguridad_anti_borrado.py`) mantenga 0 violaciones y que toda la suite de pruebas unitarias pase al 100%.

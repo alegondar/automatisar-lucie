@@ -47,6 +47,13 @@ Este cambio introduce y perfecciona la capacidad **`bandeja-descargas`**: un sis
   - Si el usuario selecciona "+ Crear nueva escena", la validación se dispara localmente en tiempo real.
   - Si el nombre está vacío o contiene caracteres inválidos / prohibidos, se visualiza un mensaje de advertencia específico directamente debajo del campo de texto, impidiendo la apertura del modal de simulación hasta que se subsane.
 
+- **Aviso fijo superior con botón Deshacer tras mover (Nuevo)**:
+  - Tras confirmar y ejecutar «Mover seleccionados», se despliega un banner de aviso fijo en la parte superior del panel web: `"Se movieron N archivos a <personaje>/<escena>"`.
+  - Incluye un botón interactivo «Deshacer» que revierte ese lote completo de inmediato invocando `/api/deshacer` con el token anti-CSRF.
+  - El aviso permanece visible hasta que el usuario lo cierre manualmente (botón «×») o hasta que mueva otro lote.
+  - El movimiento sigue registrado y disponible en la pestaña «Historial».
+  - Si la ruta original está ocupada al pulsar «Deshacer», la acción se niega con el mensaje explicativo del servidor, sin pisar ni sufijar.
+
 - **Estructura de destino e integridad de movimiento**:
   - Espejo de la jerarquía del pendrive: `<destino>/<personaje>/videos sin editar/<escena>/` para videos y `<destino>/<personaje>/<carpeta_imagenes>/<escena>/` para imágenes.
   - Destino configurable (por defecto `~/Descargas/_lucie`).

@@ -345,6 +345,42 @@ class TestGestorMovimientosYDeshacer(unittest.TestCase):
         with open(arch, "rb") as f:
             self.assertEqual(f.read(), b"archivo nuevo en el mismo lugar")
 
+    def test_ejecutar_movimiento_genera_aviso_y_deshacer_revierte_todos(self):
+        """ejecutar_movimiento_lote devuelve mensaje de aviso con cantidad y destino, y deshacer revierte todo."""
+        archivos = []
+        for i in range(1, 4):
+            p = os.path.join(self.descargas, f"grok-video-aviso-gestor-{i}.mp4")
+            with open(p, "wb") as f:
+                f.write(f"contenido {i}".encode("utf-8"))
+            archivos.append(p)
+
+        sim = self.gestor.simular_movimiento_lote(
+            archivos=[{"ruta": p, "tamanio": 11, "hash": f"h_g_{i}"} for i, p in enumerate(archivos, 1)],
+            personaje="mailen",
+            nombre_escena="toma_aviso",
+            es_existente_descargas=False
+        )
+
+        res = self.gestor.ejecutar_movimiento_lote(sim, lote_id="lote_gestor_aviso")
+        self.assertTrue(res["exito"])
+        self.assertEqual(res["total_movidos"], 3)
+        self.assertEqual(res["personaje"], "mailen")
+        self.assertEqual(res["escena"], "toma_aviso")
+        self.assertEqual(res["mensaje_aviso"], "Se movieron 3 archivos a mailen/toma_aviso")
+
+        # Verificar que se movieron los 3 archivos
+        for p in archivos:
+            self.assertFalse(os.path.exists(p))
+
+        # Deshacer lote completo
+        res_deshacer = self.gestor.deshacer_operacion(res["id_operacion"])
+        self.assertTrue(res_deshacer["exito"])
+        self.assertEqual(res_deshacer["total_revertidos"], 3)
+
+        # Verificar que regresaron todos al origen
+        for p in archivos:
+            self.assertTrue(os.path.exists(p))
+
     def test_movimiento_lote_mixto_videos_e_imagenes(self):
         """Un lote mixto reparte videos a 'videos sin editar' e imágenes a 'carpeta_imagenes'."""
         video_arch = os.path.join(self.descargas, "grok-video-mixto.mp4")
@@ -754,6 +790,82 @@ class TestServidorHTTPYSeguridad(unittest.TestCase):
         # Verificar que el ocupante no fue pisado
         with open(archivo_test, "rb") as f:
             self.assertEqual(f.read(), b"ocupante no pisable")
+
+    def test_aviso_fijo_y_deshacer_completo_desde_aviso(self):
+        """El aviso se genera con la cantidad y destino correctos tras mover un lote, y deshacer revierte todos los archivos."""
+        # 1. Verificar presencia de componentes en el HTML de la SPA
+        status, _, raw_html = self._request("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn(b'id="banner-aviso"', raw_html)
+        self.assertIn(b'id="btn-banner-deshacer"', raw_html)
+        self.assertIn(b'id="btn-banner-cerrar"', raw_html)
+        self.assertIn(b'id="banner-aviso-msg"', raw_html)
+
+        # 2. Crear 2 archivos en Descargas para el lote
+        arch1 = os.path.join(self.descargas, "grok-video-aviso-1.mp4")
+        arch2 = os.path.join(self.descargas, "grok-video-aviso-2.mp4")
+        with open(arch1, "wb") as f:
+            f.write(b"contenido video aviso 1")
+        with open(arch2, "wb") as f:
+            f.write(b"contenido video aviso 2")
+        self.vigilante.escanear()
+
+        headers_ok = {
+            "Host": f"127.0.0.1:{self.config.puerto_servidor}",
+            "Content-Type": "application/json",
+            "X-CSRF-Token": self.token_csrf
+        }
+
+        # Simular movimiento
+        body_sim = json.dumps({
+            "archivos": [
+                {"ruta": arch1, "tamanio": 24, "hash": "h_aviso_1"},
+                {"ruta": arch2, "tamanio": 24, "hash": "h_aviso_2"}
+            ],
+            "personaje": "lucie",
+            "escena": "escena_banner",
+            "es_existente_descargas": False
+        })
+        status, sim_data, _ = self._request("POST", "/api/simular-mover", headers=headers_ok, body=body_sim)
+        self.assertEqual(status, 200)
+        self.assertEqual(sim_data["total_archivos"], 2)
+
+        # Ejecutar movimiento de lote
+        body_mover = json.dumps({
+            "simulacion": sim_data,
+            "lote_id": "lote_aviso_test"
+        })
+        status, res_mover, _ = self._request("POST", "/api/mover-lote", headers=headers_ok, body=body_mover)
+        self.assertEqual(status, 200)
+
+        # Verificar datos del aviso devueltos
+        self.assertTrue(res_mover["exito"])
+        self.assertEqual(res_mover["total_movidos"], 2)
+        self.assertEqual(res_mover["personaje"], "lucie")
+        self.assertEqual(res_mover["escena"], "escena_banner")
+        self.assertEqual(res_mover["mensaje_aviso"], "Se movieron 2 archivos a lucie/escena_banner")
+        id_op = res_mover["id_operacion"]
+
+        # Confirmar que los archivos ya no están en origen y están en destino
+        self.assertFalse(os.path.exists(arch1))
+        self.assertFalse(os.path.exists(arch2))
+        dest1 = sim_data["movimientos"][0]["destino"]
+        dest2 = sim_data["movimientos"][1]["destino"]
+        self.assertTrue(os.path.exists(dest1))
+        self.assertTrue(os.path.exists(dest2))
+
+        # 3. Deshacer la operación completa usando el id_operacion del aviso
+        body_deshacer = json.dumps({"id_operacion": id_op})
+        status, res_deshacer, _ = self._request("POST", "/api/deshacer", headers=headers_ok, body=body_deshacer)
+        self.assertEqual(status, 200)
+        self.assertTrue(res_deshacer["exito"])
+        self.assertEqual(res_deshacer["total_revertidos"], 2)
+
+        # Confirmar que TODOS los archivos del lote regresaron al origen y no están en destino
+        self.assertTrue(os.path.exists(arch1))
+        self.assertTrue(os.path.exists(arch2))
+        self.assertFalse(os.path.exists(dest1))
+        self.assertFalse(os.path.exists(dest2))
 
 
 class TestAuditoriaASTAntiBorrado(unittest.TestCase):

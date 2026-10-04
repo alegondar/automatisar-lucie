@@ -186,3 +186,23 @@ El panel web SHALL validar de forma anticipada el nombre ingresado al elegir "+ 
 #### Scenario: Advertencia ante caracteres prohibidos en nombre de escena
 - **WHEN** el usuario escribe un nombre con caracteres prohibidos como `escena/toma` o `toma?`
 - **THEN** el sistema visualiza debajo del campo el motivo del rechazo detallando los caracteres no permitidos e impide la apertura del modal
+
+### Requirement: Aviso fijo superior tras mover lote con acción de reversión inmediata
+Tras confirmar la operación "Mover seleccionados", el panel web SHALL mostrar un aviso fijo en la parte superior con el texto "Se movieron N archivos a <personaje>/<escena>", un botón "Deshacer" para revertir el lote completo inmediatamente y un botón de cierre. El aviso SHALL permanecer visible hasta que el usuario lo cierre manualmente o mueva otro lote. El movimiento revertido o activo SHALL mantenerse disponible en la pestaña Historial. La reversión SHALL usar el endpoint `/api/deshacer` con token anti-CSRF y, si la ruta original está ocupada, se negará con el mensaje del servidor sin pisar ni sufijar.
+
+#### Scenario: Generación del aviso fijo tras mover lote
+- **WHEN** el usuario confirma y ejecuta el movimiento de N archivos hacia una escena
+- **THEN** se despliega en la parte superior de la página el banner con el mensaje "Se movieron N archivos a <personaje>/<escena>", el botón "Deshacer" y el botón para cerrar
+
+#### Scenario: Reversión completa desde el botón del aviso
+- **WHEN** el usuario pulsa el botón "Deshacer" en el aviso fijo
+- **THEN** el sistema envía una petición POST a `/api/deshacer` con el token anti-CSRF y el `id_operacion` correspondiente, restaurando todos los archivos del lote a sus ubicaciones originales y refrescando la vista
+
+#### Scenario: Persistencia del aviso y reemplazo por nuevo lote
+- **WHEN** el aviso está visible en pantalla
+- **THEN** permanece en su posición hasta que el usuario hace clic en cerrar o hasta que se ejecuta el movimiento de un lote posterior, que reemplaza el aviso con los nuevos datos
+
+#### Scenario: Negativa ante colisión al deshacer desde el aviso
+- **WHEN** el usuario pulsa "Deshacer" desde el aviso pero la ruta original de algún archivo fue ocupada externamente
+- **THEN** el servidor responde 409 Conflict y el panel muestra el mensaje explicativo de negativa sin sobrescribir ni mutar ningún archivo
+

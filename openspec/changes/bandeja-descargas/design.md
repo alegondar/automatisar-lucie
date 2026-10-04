@@ -69,6 +69,21 @@ El presente ajuste técnico complementa la arquitectura inicial con mejoras del 
   - El mensaje se renderiza en un contenedor `<div class="error-escena-inline">` directamente debajo del input, con texto en color de peligro (`--danger`).
   - Si hay un error de validación, la función cancela la ejecución antes de llamar a `/api/simular-mover`, evitando abrir el modal de simulación con datos erróneos.
 
+### 5. Banner de Aviso Fijo Superior con Deshacer Inmediato
+- **Decisión**:
+  - En la respuesta de `/api/mover-lote` y en la ejecución de movimientos, incluir explícitamente:
+    `"personaje"`, `"escena"`, `"total_movidos"`, y `"id_operacion"`.
+  - En la SPA, incorporar un componente fijado en la parte superior: `<div id="banner-aviso" class="banner-aviso" style="display:none;">`.
+  - Al completar exitosamente `ejecutarMoverLote()`, poblar el banner con el texto:
+    `"Se movieron ${res.total_movidos} archivos a ${res.personaje}/${res.escena}"`.
+  - El banner incluye un botón interactivo `Deshacer` que llama a `deshacerMovimiento(res.id_operacion)` enviando el token anti-CSRF, y un botón `×` para cerrarlo.
+  - El aviso queda visible de forma persistente hasta que:
+    1. El usuario lo cierre manualmente pulsando `×`.
+    2. Se mueva otro lote, en cuyo caso se actualiza con la nueva información.
+    3. Se pulse "Deshacer", en cuyo caso tras la reversión exitosa el banner se oculta y se recargan los lotes y el historial.
+  - La bitácora y la pestaña "Historial" siguen conteniendo el registro del movimiento de forma transparente.
+  - Si al pulsar "Deshacer" desde el banner el servidor responde HTTP 409 (porque la ruta original está ocupada), la advertencia de error se presenta sin cerrar el banner ni sobrescribir archivos.
+
 ## Risks / Trade-offs
 
 - **[Riesgo: Selección parcial genera dispersión de archivos de una misma toma]** → **Mitigación**: Los archivos no seleccionados permanecen en el lote pendiente con su marca temporal original, permitiendo que el usuario los mueva más tarde a la misma escena o a otra diferente según su criterio sin perder la agrupación.
