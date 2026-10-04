@@ -17,6 +17,7 @@ Verifica:
 10. Auditoría estática AST anti-borrado (0 violaciones de las 11 primitivas prohibidas).
 """
 
+import datetime
 import http.client
 import json
 import os
@@ -1291,6 +1292,185 @@ class TestCapituloActivoYReconocimientoNombres(unittest.TestCase):
         finally:
             servidor.shutdown()
             servidor.server_close()
+
+
+class TestCicloVidaCapitulos(unittest.TestCase):
+    """Pruebas exhaustivas para el ciclo de vida completo de capítulos."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp(prefix="test_ciclo_capitulos_")
+        self.descargas = os.path.join(self.tmp_dir, "Descargas")
+        self.destino = os.path.join(self.descargas, "_lucie")
+        os.makedirs(self.descargas, exist_ok=True)
+        os.makedirs(self.destino, exist_ok=True)
+
+        self.cfg_file = os.path.join(self.tmp_dir, "config.json")
+        self.alias_file = os.path.join(self.tmp_dir, "alias.json")
+        self.db_file = os.path.join(self.tmp_dir, "bandeja.db")
+
+        with open(self.alias_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "lucie": ["lucie", "luci"],
+                "roli": ["roli", "laroli", "magui"],
+                "mailen": ["mailen"]
+            }, f)
+
+        cfg_data = {
+            "ruta_descargas": self.descargas,
+            "ruta_destino_base": self.destino,
+            "archivo_alias_personajes": self.alias_file,
+            "horas_alerta_capitulo_olvidado": 12,
+            "ventana_lote_minutos": 10,
+            "intervalo_sondeo_segundos": 1,
+            "patrones_ignorar": ["Screenshot_*", "Captura*"],
+            "patrones_candidatos": {
+                "grok_video": "grok-video-*"
+            }
+        }
+        with open(self.cfg_file, "w", encoding="utf-8") as f:
+            json.dump(cfg_data, f)
+
+        self.config = ConfiguracionBandeja(ruta_config=self.cfg_file)
+        self.db = GestorBaseDatosBandeja(ruta_db=self.db_file)
+        self.filtro = FiltroListaBlanca(self.config)
+        self.detector = DetectorDescargasActivas(0.0)
+        self.agrupador = AgrupadorLotes(10)
+        self.vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _crear_archivo(self, nombre: str, contenido: bytes = b"datos de prueba") -> str:
+        ruta = os.path.join(self.descargas, nombre)
+        with open(ruta, "wb") as f:
+            f.write(contenido)
+        return ruta
+
+    def test_5_1_terminar_capitulo_cierra_asignacion_y_posteriores_no_se_asignan(self):
+        # 1. Empezar capítulo activo
+        self.db.empezar_capitulo("lucie", "paseo_parque")
+        self.assertTrue(self.db.obtener_capitulo_activo()["habilitado"])
+
+        # 2. Arriba primer archivo durante el capítulo activo
+        self._crear_archivo("lucie_arbol.mp4", b"toma 1")
+        self.vigilante.escanear()
+        self.vigilante.escanear()
+
+        estado1 = self.vigilante.obtener_estado()
+        self.assertEqual(len(estado1["lotes"]), 1)
+        self.assertEqual(estado1["lotes"][0]["personaje_sugerido"], "lucie")
+        self.assertEqual(estado1["lotes"][0]["escena_sugerida"], "paseo_parque")
+
+        # 3. Terminar capítulo
+        terminado = self.db.terminar_capitulo()
+        self.assertTrue(terminado)
+        self.assertFalse(self.db.obtener_capitulo_activo()["habilitado"])
+
+        # 4. Arriba segundo archivo con el capítulo ya cerrado
+        self._crear_archivo("roli_baile.mp4", b"toma 2 posterior")
+        self.vigilante.escanear()
+        self.vigilante.escanear()
+
+        estado2 = self.vigilante.obtener_estado()
+        lote_f1 = next((l for l in estado2["lotes"] if any(a["nombre"] == "lucie_arbol.mp4" for a in l["archivos"])), None)
+        lote_f2 = next((l for l in estado2["lotes"] if any(a["nombre"] == "roli_baile.mp4" for a in l["archivos"])), None)
+        self.assertIsNotNone(lote_f1)
+        self.assertIsNotNone(lote_f2)
+        self.assertEqual(lote_f1["escena_sugerida"], "paseo_parque")
+        self.assertEqual(lote_f2["personaje_sugerido"], "roli")
+        self.assertNotEqual(lote_f2["escena_sugerida"], "paseo_parque")
+
+    def test_5_2_reabrir_capitulo_permite_asignar_de_nuevo(self):
+        # 1. Empezar y luego terminar
+        cap_inicial = self.db.empezar_capitulo("roli", "gimnasio")
+        cap_id = cap_inicial["id"]
+        self.db.terminar_capitulo()
+        self.assertFalse(self.db.obtener_capitulo_activo()["habilitado"])
+
+        # 2. Reabrir capítulo cerrado
+        reabierto = self.db.reabrir_capitulo(cap_id)
+        self.assertTrue(reabierto["habilitado"])
+        self.assertEqual(reabierto["nombre"], "gimnasio")
+        self.assertTrue(self.db.obtener_capitulo_activo()["habilitado"])
+
+        # 3. Arriba nuevo archivo tras reabrir
+        self._crear_archivo("mailen_pesas.mp4", b"video tras reabrir")
+        self.vigilante.escanear()
+        self.vigilante.escanear()
+
+        estado = self.vigilante.obtener_estado()
+        lote = next(l for l in estado["lotes"] if any(a["nombre"] == "mailen_pesas.mp4" for a in l["archivos"]))
+        self.assertEqual(lote["personaje_sugerido"], "roli")
+        self.assertEqual(lote["escena_sugerida"], "gimnasio")
+
+    def test_5_3_aviso_capitulo_olvidado_a_las_12_horas_con_reloj_simulado(self):
+        t0 = datetime.datetime(2026, 10, 1, 8, 0, 0)
+        self.db.empezar_capitulo("lucie", "jornada_larga", fecha_inicio=t0.isoformat())
+
+        # Antes de las 12 horas (ej: 11 horas) -> No debe haber alerta
+        t_11h = t0 + datetime.timedelta(hours=11)
+        self.assertFalse(self.db.es_capitulo_olvidado(horas_limite=12.0, ahora=t_11h))
+
+        # A las 12 horas exactas o posteriores -> Debe saltar alerta
+        t_12h = t0 + datetime.timedelta(hours=12, seconds=1)
+        self.assertTrue(self.db.es_capitulo_olvidado(horas_limite=12.0, ahora=t_12h))
+
+        # Posponer alerta (usuario pulsa 'Seguir')
+        self.db.posponer_alerta_capitulo(nueva_fecha=t_12h.isoformat())
+        # Justo después de posponer -> Alerta inactiva
+        t_13h = t_12h + datetime.timedelta(hours=1)
+        self.assertFalse(self.db.es_capitulo_olvidado(horas_limite=12.0, ahora=t_13h))
+
+        # 12 horas después del pospuesto -> Alerta activa nuevamente
+        t_24h = t_12h + datetime.timedelta(hours=12, seconds=1)
+        self.assertTrue(self.db.es_capitulo_olvidado(horas_limite=12.0, ahora=t_24h))
+
+    def test_5_4_resumen_y_computo_balance_pendientes_y_movidos(self):
+        self.db.empezar_capitulo("lucie", "cumpleanios")
+
+        # Registrar 3 pendientes
+        for i in range(1, 4):
+            self.db.registrar_o_actualizar(
+                hash_val=f"hash_pend_{i}",
+                ruta_actual=os.path.join(self.descargas, f"pend_{i}.mp4"),
+                estado="detectado",
+                personaje="lucie",
+                escena="cumpleanios"
+            )
+
+        # Registrar 2 movidos
+        for i in range(1, 3):
+            self.db.registrar_o_actualizar(
+                hash_val=f"hash_mov_{i}",
+                ruta_actual=os.path.join(self.destino, "lucie", "cumpleanios", f"mov_{i}.mp4"),
+                estado="movido",
+                personaje="lucie",
+                escena="cumpleanios"
+            )
+        self.db.incrementar_movidos_capitulo("lucie", "cumpleanios", 2)
+
+        balance = self.db.calcular_balance_capitulo("lucie", "cumpleanios")
+        self.assertEqual(balance["pendientes"], 3)
+        self.assertEqual(balance["movidos"], 2)
+
+    def test_5_5_capitulo_personaje_roli_recibe_archivo_lucie(self):
+        # Capítulo activo con personaje "roli"
+        self.db.empezar_capitulo("roli", "taller_mecanico")
+
+        # Archivo con prefijo "lucie"
+        self._crear_archivo("lucie_en_el_taller.mp4", b"video cruzado")
+        self.vigilante.escanear()
+        self.vigilante.escanear()
+
+        estado = self.vigilante.obtener_estado()
+        self.assertEqual(len(estado["lotes"]), 1)
+        lote = estado["lotes"][0]
+        self.assertEqual(lote["personaje_sugerido"], "roli")
+        self.assertEqual(lote["escena_sugerida"], "taller_mecanico")
+        self.assertEqual(len(lote["archivos"]), 1)
+        self.assertEqual(lote["archivos"][0]["nombre"], "lucie_en_el_taller.mp4")
+        self.assertEqual(lote["archivos"][0]["personaje"], "roli")
+        self.assertEqual(lote["archivos"][0]["escena"], "taller_mecanico")
 
 
 class TestAuditoriaASTAntiBorrado(unittest.TestCase):

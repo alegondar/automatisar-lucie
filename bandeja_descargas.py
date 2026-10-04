@@ -97,6 +97,7 @@ class ConfiguracionBandeja:
             "flow": ""
         }
         self.patrones_ignorar = ["Screenshot_*", "Captura*"]
+        self.horas_alerta_capitulo_olvidado = 12
         self.cargar()
 
     def cargar(self):
@@ -113,6 +114,8 @@ class ConfiguracionBandeja:
                 self.puerto_servidor = int(datos["puerto_servidor"])
             if "host_servidor" in datos:
                 self.host_servidor = str(datos["host_servidor"])
+            if "horas_alerta_capitulo_olvidado" in datos:
+                self.horas_alerta_capitulo_olvidado = max(1, int(datos["horas_alerta_capitulo_olvidado"]))
             if "intervalo_sondeo_segundos" in datos:
                 self.intervalo_sondeo_segundos = max(1, int(datos["intervalo_sondeo_segundos"]))
             if "ventana_lote_minutos" in datos:
@@ -164,6 +167,22 @@ class GestorBaseDatosBandeja:
                 clave TEXT PRIMARY KEY,
                 valor TEXT NOT NULL
             );
+            """)
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS bandeja_capitulos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                personaje TEXT NOT NULL,
+                nombre TEXT NOT NULL,
+                estado TEXT NOT NULL CHECK(estado IN ('activo', 'cerrado')),
+                fecha_inicio TEXT NOT NULL,
+                fecha_fin TEXT,
+                fecha_ultimo_aviso TEXT,
+                archivos_movidos INTEGER DEFAULT 0
+            );
+            """)
+            cur.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_capitulo_unico_activo
+            ON bandeja_capitulos(estado) WHERE estado = 'activo';
             """)
             con.commit()
 
@@ -228,27 +247,83 @@ class GestorBaseDatosBandeja:
             """, (personaje,))
             con.commit()
 
+    def empezar_capitulo(self, personaje: str, nombre: str, fecha_inicio: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Inicia un nuevo capítulo activo. Falla si ya existe otro capítulo activo.
+        """
+        nombre_limpio = (nombre or "").strip()
+        personaje_limpio = (personaje or "").strip() or "lucie"
+        if not nombre_limpio:
+            raise ValueError("El nombre del capítulo no puede estar vacío.")
+
+        fecha_ini = fecha_inicio or datetime.datetime.now().isoformat()
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            cur.execute("SELECT id, personaje, nombre FROM bandeja_capitulos WHERE estado = 'activo' LIMIT 1")
+            act = cur.fetchone()
+            if act:
+                raise ValueError(f"Ya existe un capítulo activo ('{act['personaje']}/{act['nombre']}'). Debe terminarlo antes de empezar uno nuevo.")
+
+            cur.execute("""
+            INSERT INTO bandeja_capitulos (personaje, nombre, estado, fecha_inicio, fecha_ultimo_aviso, archivos_movidos)
+            VALUES (?, ?, 'activo', ?, ?, 0)
+            """, (personaje_limpio, nombre_limpio, fecha_ini, fecha_ini))
+            con.commit()
+            cap_id = cur.lastrowid
+            cur.execute("SELECT * FROM bandeja_capitulos WHERE id = ?", (cap_id,))
+            row = cur.fetchone()
+
+        self.guardar_capitulo_activo(personaje_limpio, nombre_limpio, True)
+        d = dict(row)
+        d["habilitado"] = True
+        return d
+
     def obtener_capitulo_activo(self) -> Dict[str, Any]:
         """
-        Consulta en bandeja_estado las claves 'capitulo_activo_habilitado',
-        'capitulo_activo_personaje' y 'capitulo_activo_nombre'.
+        Retorna el capítulo activo actual desde bandeja_capitulos.
+        Si no existe, retorna diccionario con habilitado=False.
         """
         with self._lock, self._conectar() as con:
             cur = con.cursor()
-            cur.execute("SELECT clave, valor FROM bandeja_estado WHERE clave IN ('capitulo_activo_habilitado', 'capitulo_activo_personaje', 'capitulo_activo_nombre')")
-            filas = {row["clave"]: row["valor"] for row in cur.fetchall()}
-            habilitado = (filas.get("capitulo_activo_habilitado") == "1")
-            personaje = filas.get("capitulo_activo_personaje", "lucie")
-            nombre = filas.get("capitulo_activo_nombre", "")
-            return {
-                "habilitado": habilitado,
-                "personaje": personaje,
-                "nombre": nombre
-            }
+            cur.execute("SELECT * FROM bandeja_capitulos WHERE estado = 'activo' LIMIT 1")
+            row = cur.fetchone()
+            if row:
+                d = dict(row)
+                d["habilitado"] = True
+                return d
+            else:
+                # Comprobar estado previo legado en bandeja_estado para compatibilidad
+                cur.execute("SELECT clave, valor FROM bandeja_estado WHERE clave IN ('capitulo_activo_habilitado', 'capitulo_activo_personaje', 'capitulo_activo_nombre')")
+                filas = {r["clave"]: r["valor"] for r in cur.fetchall()}
+                if filas.get("capitulo_activo_habilitado") == "1" and filas.get("capitulo_activo_nombre"):
+                    pers = filas.get("capitulo_activo_personaje", "lucie")
+                    nom = filas.get("capitulo_activo_nombre", "")
+                    now_iso = datetime.datetime.now().isoformat()
+                    cur.execute("""
+                    INSERT INTO bandeja_capitulos (personaje, nombre, estado, fecha_inicio, fecha_ultimo_aviso, archivos_movidos)
+                    VALUES (?, ?, 'activo', ?, ?, 0)
+                    """, (pers, nom, now_iso, now_iso))
+                    con.commit()
+                    cap_id = cur.lastrowid
+                    cur.execute("SELECT * FROM bandeja_capitulos WHERE id = ?", (cap_id,))
+                    d = dict(cur.fetchone())
+                    d["habilitado"] = True
+                    return d
+
+                return {
+                    "habilitado": False,
+                    "id": None,
+                    "personaje": None,
+                    "nombre": "",
+                    "estado": "cerrado",
+                    "fecha_inicio": None,
+                    "fecha_ultimo_aviso": None,
+                    "archivos_movidos": 0
+                }
 
     def guardar_capitulo_activo(self, personaje: str, nombre: str, habilitado: bool):
         """
-        Persiste el capítulo activo en la tabla bandeja_estado de SQLite.
+        Mantiene sincronizado el estado básico en bandeja_estado.
         """
         with self._lock, self._conectar() as con:
             cur = con.cursor()
@@ -265,6 +340,161 @@ class GestorBaseDatosBandeja:
             ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor;
             """, (nombre.strip() if nombre else "",))
             con.commit()
+
+    def terminar_capitulo(self, id_capitulo: Optional[int] = None, fecha_fin: Optional[str] = None) -> bool:
+        """
+        Cierra el capítulo activo (o el especificado por id). Retorna True si se cerró.
+        """
+        fin_iso = fecha_fin or datetime.datetime.now().isoformat()
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            if id_capitulo:
+                cur.execute("""
+                UPDATE bandeja_capitulos SET estado = 'cerrado', fecha_fin = ?
+                WHERE id = ? AND estado = 'activo'
+                """, (fin_iso, id_capitulo))
+            else:
+                cur.execute("""
+                UPDATE bandeja_capitulos SET estado = 'cerrado', fecha_fin = ?
+                WHERE estado = 'activo'
+                """, (fin_iso,))
+            con.commit()
+            afectados = cur.rowcount > 0
+
+        if afectados:
+            self.guardar_capitulo_activo("", "", False)
+        return afectados
+
+    def reabrir_capitulo(self, id_capitulo: int) -> Dict[str, Any]:
+        """
+        Reabre un capítulo cerrado como activo. Falla si ya hay otro capítulo activo.
+        """
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            cur.execute("SELECT id, personaje, nombre FROM bandeja_capitulos WHERE estado = 'activo' LIMIT 1")
+            act = cur.fetchone()
+            if act:
+                raise ValueError(f"Ya existe un capítulo activo ('{act['personaje']}/{act['nombre']}'). Debe terminarlo antes de reabrir otro.")
+
+            cur.execute("SELECT * FROM bandeja_capitulos WHERE id = ?", (id_capitulo,))
+            row = cur.fetchone()
+            if not row:
+                raise ValueError("Capítulo no encontrado.")
+            if row["estado"] == "activo":
+                d = dict(row)
+                d["habilitado"] = True
+                return d
+
+            now_iso = datetime.datetime.now().isoformat()
+            cur.execute("""
+            UPDATE bandeja_capitulos
+            SET estado = 'activo', fecha_fin = NULL, fecha_ultimo_aviso = ?
+            WHERE id = ?
+            """, (now_iso, id_capitulo))
+            con.commit()
+
+            cur.execute("SELECT * FROM bandeja_capitulos WHERE id = ?", (id_capitulo,))
+            updated = dict(cur.fetchone())
+
+        self.guardar_capitulo_activo(updated["personaje"], updated["nombre"], True)
+        updated["habilitado"] = True
+        return updated
+
+    def listar_capitulos_cerrados(self) -> List[Dict[str, Any]]:
+        """
+        Retorna la lista de capítulos con estado 'cerrado', ordenados cronológicamente inverso.
+        """
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            cur.execute("SELECT * FROM bandeja_capitulos WHERE estado = 'cerrado' ORDER BY id DESC")
+            return [dict(r) for r in cur.fetchall()]
+
+    def posponer_alerta_capitulo(self, id_capitulo: Optional[int] = None, nueva_fecha: Optional[str] = None) -> bool:
+        """
+        Actualiza fecha_ultimo_aviso para postergar el aviso de capítulo olvidado.
+        """
+        fecha_aviso = nueva_fecha or datetime.datetime.now().isoformat()
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            if id_capitulo:
+                cur.execute("""
+                UPDATE bandeja_capitulos SET fecha_ultimo_aviso = ? WHERE id = ? AND estado = 'activo'
+                """, (fecha_aviso, id_capitulo))
+            else:
+                cur.execute("""
+                UPDATE bandeja_capitulos SET fecha_ultimo_aviso = ? WHERE estado = 'activo'
+                """, (fecha_aviso,))
+            con.commit()
+            return cur.rowcount > 0
+
+    def incrementar_movidos_capitulo(self, personaje: str, escena: str, cantidad: int = 1):
+        """
+        Incrementa el contador de archivos movidos para el capítulo correspondiente.
+        """
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            cur.execute("""
+            UPDATE bandeja_capitulos
+            SET archivos_movidos = archivos_movidos + ?
+            WHERE personaje = ? AND nombre = ?
+            """, (cantidad, personaje, escena))
+            con.commit()
+
+    def calcular_balance_capitulo(self, personaje: str, nombre: str, verificar_disco: bool = False) -> Dict[str, int]:
+        """
+        Calcula la cantidad de archivos pendientes y ya movidos para un personaje y capítulo.
+        """
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            cur.execute("""
+            SELECT ruta_actual FROM bandeja_archivos
+            WHERE personaje = ? AND escena = ? AND estado IN ('detectado', 'clasificado')
+            """, (personaje, nombre))
+            filas = cur.fetchall()
+            if verificar_disco:
+                pendientes = sum(1 for f in filas if os.path.exists(f["ruta_actual"]))
+            else:
+                pendientes = len(filas)
+
+            cur.execute("""
+            SELECT archivos_movidos FROM bandeja_capitulos
+            WHERE personaje = ? AND nombre = ?
+            ORDER BY id DESC LIMIT 1
+            """, (personaje, nombre))
+            row_cap = cur.fetchone()
+            mov_cap = row_cap["archivos_movidos"] if row_cap and row_cap["archivos_movidos"] is not None else 0
+
+            cur.execute("""
+            SELECT COUNT(*) as c FROM bandeja_archivos
+            WHERE personaje = ? AND escena = ? AND estado = 'movido'
+            """, (personaje, nombre))
+            mov_arch = cur.fetchone()["c"]
+
+            return {
+                "pendientes": pendientes,
+                "movidos": max(mov_cap, mov_arch)
+            }
+
+    def es_capitulo_olvidado(self, horas_limite: float = 12.0, ahora: Optional[datetime.datetime] = None) -> bool:
+        """
+        Determina si el capítulo activo excede las horas límite configuradas.
+        """
+        cap = self.obtener_capitulo_activo()
+        if not cap or not cap.get("habilitado") or cap.get("estado") != "activo":
+            return False
+
+        fecha_ref_str = cap.get("fecha_ultimo_aviso") or cap.get("fecha_inicio")
+        if not fecha_ref_str:
+            return False
+
+        try:
+            fecha_ref = datetime.datetime.fromisoformat(fecha_ref_str)
+        except (ValueError, TypeError):
+            return False
+
+        ahora_dt = ahora or datetime.datetime.now()
+        diferencia_horas = (ahora_dt - fecha_ref).total_seconds() / 3600.0
+        return diferencia_horas >= horas_limite
 
 
 class FiltroListaBlanca:
@@ -828,6 +1058,8 @@ class GestorMovimientosBandeja:
 
             # Guardar último personaje usado
             self.db.guardar_ultimo_personaje(simulacion["personaje"])
+            # Incrementar contador de movidos para el capítulo si corresponde
+            self.db.incrementar_movidos_capitulo(simulacion["personaje"], simulacion["escena"], len(movimientos_realizados))
 
             # Escribir en la bitácora reversible .jsonl
             registro_bitacora = {
@@ -1393,11 +1625,39 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         elif ruta == "/api/historial":
             historial = self.movimientos.obtener_historial(50)
             self._enviar_json({"historial": historial})
+        elif ruta == "/api/capitulos/estado":
+            self._handle_capitulos_estado()
+        elif ruta == "/api/capitulos/cerrados":
+            self._handle_capitulos_cerrados()
         elif ruta == "/api/capitulo-activo":
             cap_activo = self.db.obtener_capitulo_activo()
             self._enviar_json({"capitulo_activo": cap_activo})
         else:
             self._enviar_error(HTTPStatus.NOT_FOUND, "Ruta no encontrada.")
+
+    def _handle_capitulos_estado(self):
+        cap = self.db.obtener_capitulo_activo()
+        es_activo = cap.get("habilitado", False)
+        limite = float(self.config.horas_alerta_capitulo_olvidado)
+        alerta = self.db.es_capitulo_olvidado(horas_limite=limite)
+
+        balance = {"pendientes": 0, "movidos": 0}
+        if es_activo and cap.get("personaje") and cap.get("nombre"):
+            balance = self.db.calcular_balance_capitulo(
+                cap["personaje"], cap["nombre"], verificar_disco=True
+            )
+
+        self._enviar_json({
+            "activo": es_activo,
+            "capitulo": cap,
+            "alerta_olvidado": alerta,
+            "horas_limite": self.config.horas_alerta_capitulo_olvidado,
+            "balance": balance
+        })
+
+    def _handle_capitulos_cerrados(self):
+        cerrados = self.db.listar_capitulos_cerrados()
+        self._enviar_json({"cerrados": cerrados})
 
     def _servir_miniatura(self, query_string: str):
         params = parse_qs(query_string)
@@ -1433,6 +1693,14 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
         if ruta == "/api/clasificar-sin-identificar":
             self._handle_clasificar_sin_identificar(body)
+        elif ruta == "/api/capitulos/empezar":
+            self._handle_capitulos_empezar(body)
+        elif ruta == "/api/capitulos/terminar":
+            self._handle_capitulos_terminar(body)
+        elif ruta == "/api/capitulos/reabrir":
+            self._handle_capitulos_reabrir(body)
+        elif ruta == "/api/capitulos/posponer_alerta":
+            self._handle_capitulos_posponer_alerta(body)
         elif ruta == "/api/capitulo-activo":
             self._handle_guardar_capitulo_activo(body)
         elif ruta == "/api/simular-mover":
@@ -1443,6 +1711,83 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._handle_deshacer(body)
         else:
             self._enviar_error(HTTPStatus.NOT_FOUND, "Endpoint POST no encontrado.")
+
+    def _handle_capitulos_empezar(self, body: Dict[str, Any]):
+        personaje = str(body.get("personaje", "lucie")).strip().lower()
+        nombre = str(body.get("nombre", "")).strip()
+
+        if personaje not in ("lucie", "roli", "mailen"):
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "Personaje inválido. Debe ser 'lucie', 'roli' o 'mailen'.")
+            return
+
+        if not nombre:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "El nombre del capítulo no puede estar vacío.")
+            return
+
+        valido, motivo = ValidadorEscenas.validar_nombre_escena(
+            nombre, self.config.ruta_destino_base, self.config.ruta_descargas,
+            es_existente_descargas=False, personaje=personaje,
+            carpeta_imagenes=self.config.carpeta_imagenes
+        )
+        if not valido:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, f"Nombre de capítulo inválido: {motivo}")
+            return
+
+        try:
+            cap = self.db.empezar_capitulo(personaje, nombre)
+            self.vigilante.escanear()
+            self._enviar_json({
+                "exito": True,
+                "mensaje": f"Capítulo '{personaje}/{nombre}' iniciado con éxito.",
+                "capitulo": cap
+            })
+        except ValueError as e:
+            self._enviar_error(HTTPStatus.CONFLICT, str(e))
+        except Exception as e:
+            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al empezar capítulo: {str(e)}")
+
+    def _handle_capitulos_terminar(self, body: Dict[str, Any]):
+        id_cap = body.get("id")
+        accion = body.get("accion", "sin_mover")
+
+        cerrado = self.db.terminar_capitulo(id_capitulo=int(id_cap) if id_cap else None)
+        if not cerrado:
+            self._enviar_error(HTTPStatus.NOT_FOUND, "No hay ningún capítulo activo para terminar.")
+            return
+
+        self.vigilante.escanear()
+        self._enviar_json({
+            "exito": True,
+            "mensaje": "Capítulo terminado y cerrado correctamente.",
+            "accion": accion
+        })
+
+    def _handle_capitulos_reabrir(self, body: Dict[str, Any]):
+        id_cap = body.get("id")
+        if not id_cap:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "Campo 'id' de capítulo requerido.")
+            return
+
+        try:
+            cap = self.db.reabrir_capitulo(int(id_cap))
+            self.vigilante.escanear()
+            self._enviar_json({
+                "exito": True,
+                "mensaje": f"Capítulo '{cap['personaje']}/{cap['nombre']}' reabierto como activo.",
+                "capitulo": cap
+            })
+        except ValueError as e:
+            self._enviar_error(HTTPStatus.CONFLICT, str(e))
+        except Exception as e:
+            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al reabrir capítulo: {str(e)}")
+
+    def _handle_capitulos_posponer_alerta(self, body: Dict[str, Any]):
+        id_cap = body.get("id")
+        self.db.posponer_alerta_capitulo(id_capitulo=int(id_cap) if id_cap else None)
+        self._enviar_json({
+            "exito": True,
+            "mensaje": "Alerta de capítulo pospuesta exitosamente."
+        })
 
     def _handle_guardar_capitulo_activo(self, body: Dict[str, Any]):
         habilitado = bool(body.get("habilitado", False))
@@ -2048,6 +2393,29 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       font-weight: bold;
       text-transform: uppercase;
     }}
+    .banner-capitulo-activo {{
+      background: #1e1b4b;
+      border: 1px solid #6366f1;
+      border-radius: 8px;
+      padding: 14px 20px;
+      margin-bottom: 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+    }}
+    .banner-capitulo-olvidado {{
+      background: #451a03;
+      border: 1px solid #f59e0b;
+      color: #fef3c7;
+      border-radius: 8px;
+      padding: 12px 18px;
+      margin-bottom: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    }}
     .banner-aviso {{
       background: #14352b;
       border-bottom: 2px solid var(--teal);
@@ -2125,19 +2493,50 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
   <nav>
     <button class="nav-btn active" id="nav-btn-lotes" onclick="mostrarPestana('lotes', event)">Lotes Detectados</button>
     <button class="nav-btn" id="nav-btn-sin-identificar" onclick="mostrarPestana('sin-identificar', event)">Sin Identificar</button>
+    <button class="nav-btn" id="nav-btn-capitulos-cerrados" onclick="mostrarPestana('capitulos-cerrados', event)">Capítulos Cerrados</button>
     <button class="nav-btn" id="nav-btn-historial" onclick="mostrarPestana('historial', event)">Historial</button>
     <button class="nav-btn" onclick="recargarVistaActual()">Refrescar</button>
   </nav>
 
   <main>
-    <div id="card-capitulo-activo" class="card-capitulo">
+    <!-- Alerta de capítulo olvidado (>12h) -->
+    <div id="banner-capitulo-olvidado" class="banner-capitulo-olvidado" style="display:none;">
+      <div id="banner-olvidado-texto" style="font-weight:600; font-size:0.95rem;">
+        ⚠️ ¿Sigue activo este capítulo?
+      </div>
+      <div style="display:flex; gap:10px; align-items:center;">
+        <button class="btn-sm" onclick="posponerAlertaCapitulo()" style="background:#f59e0b; color:#000; font-weight:600; padding:6px 14px;">Seguir</button>
+        <button class="btn-sm" onclick="abrirModalTerminarCapitulo()" style="background:var(--error); color:#fff; font-weight:600; padding:6px 14px;">Terminar</button>
+      </div>
+    </div>
+
+    <!-- Banner superior permanente cuando el capítulo está activo -->
+    <div id="banner-capitulo-activo" class="banner-capitulo-activo" style="display:none;">
+      <div>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span class="badge-capitulo-activo">Activo</span>
+          <span id="banner-capitulo-titulo" style="font-weight:700; font-size:1.1rem; color:#e0e7ff;">Capítulo activo:</span>
+        </div>
+        <div id="banner-capitulo-subtitulo" style="font-size:0.85rem; color:#a5b4fc; margin-top:4px;">
+          Cargando detalles...
+        </div>
+      </div>
+      <div>
+        <button class="btn-sm" id="btn-terminar-capitulo" onclick="abrirModalTerminarCapitulo()" style="background:#ef4444; color:#fff; font-weight:600; padding:8px 16px; border:none; border-radius:4px; cursor:pointer;">
+          Terminar capítulo
+        </button>
+      </div>
+    </div>
+
+    <!-- Controles para Empezar Capítulo (cuando no hay capítulo activo) -->
+    <div id="card-empezar-capitulo" class="card-capitulo" style="display:none;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
         <div style="display:flex; align-items:center; gap:8px;">
-          <span style="font-weight:600; font-size:0.95rem;">Capítulo Actual:</span>
-          <span id="badge-capitulo-estado" class="badge-capitulo-inactivo">Inactivo</span>
+          <span style="font-weight:600; font-size:0.95rem;">Empezar Capítulo:</span>
+          <span class="badge-capitulo-inactivo">Sin capítulo activo</span>
         </div>
-        <div id="banner-capitulo-desc" style="font-size:0.8rem; color:var(--text-muted);">
-          Sin capítulo activo (Modo respaldo: se asignará por alias al inicio del nombre).
+        <div style="font-size:0.8rem; color:var(--text-muted);">
+          Modo de respaldo activo (se asignará por alias al inicio del nombre).
         </div>
       </div>
       <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
@@ -2148,9 +2547,10 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             <option value="mailen">Mailen</option>
           </select>
         </label>
-        <input type="text" id="txt-capitulo-nombre" placeholder="Nombre del capítulo actual" style="min-width:240px;">
-        <button class="btn-sm" id="btn-activar-capitulo" onclick="guardarCapituloActivo(true)" style="background:var(--accent); color:#000; font-weight:600;">Activar</button>
-        <button class="btn-sm" id="btn-desactivar-capitulo" onclick="guardarCapituloActivo(false)">Desactivar</button>
+        <input type="text" id="txt-capitulo-nombre" placeholder="Nombre del nuevo capítulo" style="min-width:240px;">
+        <button class="btn-sm" id="btn-empezar-capitulo" onclick="empezarCapitulo()" style="background:var(--accent); color:#000; font-weight:600; padding:6px 16px;">
+          Empezar capítulo
+        </button>
         <span id="error-capitulo-activo" class="error-inline" style="display:none;"></span>
       </div>
     </div>
@@ -2177,6 +2577,19 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       </div>
     </section>
 
+    <section id="sec-capitulos-cerrados" style="display:none;">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h2>Capítulos Cerrados</h2>
+            <small style="color:var(--text-muted)">Historial de capítulos finalizados. Podés reabrir cualquiera para seguir agregando archivos.</small>
+          </div>
+          <button class="btn-sm" onclick="cargarCapitulosCerrados()">Actualizar</button>
+        </div>
+        <div id="contenedor-capitulos-cerrados">Cargando capítulos...</div>
+      </div>
+    </section>
+
     <section id="sec-historial" style="display:none;">
       <div class="card">
         <div class="card-header">
@@ -2190,6 +2603,21 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       </div>
     </section>
   </main>
+
+  <!-- Modal para Terminar Capítulo con Resumen de Balance -->
+  <div id="modal-terminar-capitulo" class="modal-overlay">
+    <div class="modal-content" style="max-width:550px;">
+      <h2>Terminar Capítulo</h2>
+      <div id="modal-terminar-resumen" style="margin:16px 0; font-size:1rem; line-height:1.6;">
+        Cargando resumen...
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:20px; flex-wrap:wrap;">
+        <button class="btn-sm" onclick="cerrarModalTerminarCapitulo()">Cancelar</button>
+        <button class="btn-sm" id="btn-terminar-sin-mover" onclick="ejecutarTerminarCapitulo(false)" style="background:var(--card-alt); color:var(--text); border:1px solid var(--border);">Terminar sin mover</button>
+        <button class="btn-sm" id="btn-mover-y-terminar" onclick="ejecutarMoverYTerminar()" style="background:var(--accent); color:#000; font-weight:600;">Mover pendientes y terminar</button>
+      </div>
+    </div>
+  </div>
 
   <div id="modal-simulacion" class="modal-overlay">
     <div class="modal-content">
@@ -2207,9 +2635,10 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
   <script>
     const CSRF_TOKEN = "{self.token_csrf}";
-    let datosEstado = {{ lotes: [], sin_identificar: [], escenas: [], personajes: [], ultimo_personaje: "lucie", capitulo_activo: null }};
+    let datosEstado = {{ lotes: [], sin_identificar: [], escenas: [], personajes: [], ultimo_personaje: "lucie", capitulo_activo: null, alerta_olvidado: false, horas_limite: 12, balance_capitulo: {{ pendientes: 0, movidos: 0 }} }};
     let simulacionActiva = null;
     let loteActivoId = null;
+    let terminarCapituloTrasMover = false;
     let pestanaActual = 'lotes';
     let historialActual = [];
     let operacionAvisoActual = null;
@@ -2275,16 +2704,21 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
       document.getElementById('sec-lotes').style.display = (pestana === 'lotes') ? 'block' : 'none';
       document.getElementById('sec-sin-identificar').style.display = (pestana === 'sin-identificar') ? 'block' : 'none';
+      document.getElementById('sec-capitulos-cerrados').style.display = (pestana === 'capitulos-cerrados') ? 'block' : 'none';
       document.getElementById('sec-historial').style.display = (pestana === 'historial') ? 'block' : 'none';
 
       if (pestana === 'historial') {{
         cargarHistorial();
+      }} else if (pestana === 'capitulos-cerrados') {{
+        cargarCapitulosCerrados();
       }}
     }}
 
     async function recargarVistaActual() {{
       if (pestanaActual === 'historial') {{
         await cargarHistorial();
+      }} else if (pestanaActual === 'capitulos-cerrados') {{
+        await cargarCapitulosCerrados();
       }} else {{
         await cargarDatos();
       }}
@@ -2318,14 +2752,17 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
           apiFetch('/api/sin-identificar'),
           apiFetch('/api/escenas'),
           apiFetch('/api/personajes'),
-          apiFetch('/api/capitulo-activo')
+          apiFetch('/api/capitulos/estado')
         ]);
         datosEstado.lotes = lotesRes.lotes;
         datosEstado.sin_identificar = sinIdRes.sin_identificar;
         datosEstado.escenas = escenasRes.escenas;
         datosEstado.personajes = persRes.personajes;
         datosEstado.ultimo_personaje = persRes.ultimo_personaje;
-        datosEstado.capitulo_activo = capRes.capitulo_activo;
+        datosEstado.capitulo_activo = capRes.capitulo;
+        datosEstado.alerta_olvidado = capRes.alerta_olvidado;
+        datosEstado.horas_limite = capRes.horas_limite;
+        datosEstado.balance_capitulo = capRes.balance;
         renderCapituloActivo();
         renderLotes();
         renderSinIdentificar();
@@ -2335,30 +2772,216 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     }}
 
     function renderCapituloActivo() {{
-      const badge = document.getElementById('badge-capitulo-estado');
-      const desc = document.getElementById('banner-capitulo-desc');
-      const selPers = document.getElementById('sel-capitulo-personaje');
-      const txtNombre = document.getElementById('txt-capitulo-nombre');
+      const bannerActivo = document.getElementById('banner-capitulo-activo');
+      const cardEmpezar = document.getElementById('card-empezar-capitulo');
+      const bannerOlvidado = document.getElementById('banner-capitulo-olvidado');
       const errSpan = document.getElementById('error-capitulo-activo');
-
       if (errSpan) {{
         errSpan.style.display = 'none';
         errSpan.innerText = '';
       }}
 
       const cap = datosEstado.capitulo_activo;
-      if (cap && cap.habilitado && cap.nombre) {{
-        badge.className = 'badge-capitulo-activo';
-        badge.innerText = `Activo: ${{cap.personaje}}/${{cap.nombre}}`;
-        desc.innerText = `Todos los archivos detectados se asignan automáticamente a ${{cap.personaje}}/${{cap.nombre}}.`;
-        if (selPers) selPers.value = cap.personaje || 'lucie';
-        if (txtNombre) txtNombre.value = cap.nombre || '';
+      const esActivo = cap && cap.habilitado && cap.nombre;
+
+      if (esActivo) {{
+        if (cardEmpezar) cardEmpezar.style.display = 'none';
+        if (bannerActivo) {{
+          bannerActivo.style.display = 'flex';
+          const titulo = document.getElementById('banner-capitulo-titulo');
+          const subtitulo = document.getElementById('banner-capitulo-subtitulo');
+          if (titulo) titulo.innerText = `Capítulo activo: ${{cap.personaje}}/${{cap.nombre}}`;
+          if (subtitulo) {{
+            const fechaTxt = cap.fecha_inicio ? cap.fecha_inicio.replace('T', ' ').slice(0, 19) : '';
+            const movidos = (datosEstado.balance_capitulo && datosEstado.balance_capitulo.movidos !== undefined) ? datosEstado.balance_capitulo.movidos : (cap.archivos_movidos || 0);
+            subtitulo.innerText = `Iniciado: ${{fechaTxt}} | ${{movidos}} archivo(s) movido(s). Todo archivo candidato entrante se asigna a esta historia.`;
+          }}
+        }}
+        if (bannerOlvidado) {{
+          bannerOlvidado.style.display = datosEstado.alerta_olvidado ? 'flex' : 'none';
+          const txtOlv = document.getElementById('banner-olvidado-texto');
+          if (txtOlv) txtOlv.innerText = `⚠️ ¿Sigue activo este capítulo? Lleva más de ${{datosEstado.horas_limite || 12}} horas abierto.`;
+        }}
       }} else {{
-        badge.className = 'badge-capitulo-inactivo';
-        badge.innerText = 'Inactivo';
-        desc.innerText = 'Sin capítulo activo (Modo respaldo: se asignará por alias al inicio del nombre).';
-        if (cap && cap.personaje && selPers) selPers.value = cap.personaje;
-        if (cap && cap.nombre && txtNombre) txtNombre.value = cap.nombre;
+        if (bannerActivo) bannerActivo.style.display = 'none';
+        if (bannerOlvidado) bannerOlvidado.style.display = 'none';
+        if (cardEmpezar) {{
+          cardEmpezar.style.display = 'block';
+          const txtNombre = document.getElementById('txt-capitulo-nombre');
+          if (txtNombre && cap && !cap.nombre) txtNombre.value = '';
+        }}
+      }}
+    }}
+
+    async function empezarCapitulo() {{
+      const selPers = document.getElementById('sel-capitulo-personaje');
+      const txtNombre = document.getElementById('txt-capitulo-nombre');
+      const errSpan = document.getElementById('error-capitulo-activo');
+
+      const personaje = (selPers ? selPers.value : 'lucie').trim();
+      const nombre = (txtNombre ? txtNombre.value : '').trim();
+
+      const err = validarNombreEscena(nombre);
+      if (err) {{
+        if (errSpan) {{
+          errSpan.innerText = err;
+          errSpan.style.display = 'inline-block';
+        }}
+        return;
+      }}
+      if (errSpan) {{ errSpan.style.display = 'none'; }}
+
+      try {{
+        await apiFetch('/api/capitulos/empezar', {{
+          method: 'POST',
+          body: JSON.stringify({{ personaje, nombre }})
+        }});
+        if (txtNombre) txtNombre.value = '';
+        await cargarDatos();
+      }} catch (e) {{
+        if (errSpan) {{
+          errSpan.innerText = e.message;
+          errSpan.style.display = 'inline-block';
+        }} else {{
+          mostrarError(e.message);
+        }}
+      }}
+    }}
+
+    async function abrirModalTerminarCapitulo() {{
+      try {{
+        const res = await apiFetch('/api/capitulos/estado');
+        const cap = res.capitulo;
+        const bal = res.balance || {{ pendientes: 0, movidos: 0 }};
+        const cont = document.getElementById('modal-terminar-resumen');
+        if (cont) {{
+          cont.innerHTML = `
+            <p style="margin-bottom:8px;">Capítulo actual: <strong>${{escapeHTML(cap.personaje)}} / ${{escapeHTML(cap.nombre)}}</strong></p>
+            <div style="background:var(--card-alt); padding:12px; border-radius:6px; margin:12px 0;">
+              <div style="margin-bottom:6px;">📁 <strong>${{bal.pendientes}}</strong> archivo(s) pendiente(s) en Descargas</div>
+              <div>📦 <strong>${{bal.movidos}}</strong> archivo(s) ya movido(s) al destino</div>
+            </div>
+            <p style="color:var(--text-muted); font-size:0.85rem;">
+              Al terminar, el capítulo queda cerrado: no se le asignará ningún archivo nuevo y lo que llegue después seguirá el circuito sin capítulo activo.
+            </p>
+          `;
+        }}
+        document.getElementById('modal-terminar-capitulo').style.display = 'flex';
+      }} catch (e) {{
+        mostrarError(e.message);
+      }}
+    }}
+
+    function cerrarModalTerminarCapitulo() {{
+      document.getElementById('modal-terminar-capitulo').style.display = 'none';
+    }}
+
+    async function ejecutarTerminarCapitulo(trasMover) {{
+      try {{
+        await apiFetch('/api/capitulos/terminar', {{
+          method: 'POST',
+          body: JSON.stringify({{ accion: trasMover ? 'mover_pendientes' : 'sin_mover' }})
+        }});
+        cerrarModalTerminarCapitulo();
+        await cargarDatos();
+        if (pestanaActual === 'capitulos-cerrados') {{
+          await cargarCapitulosCerrados();
+        }}
+      }} catch (e) {{
+        mostrarError(e.message);
+      }}
+    }}
+
+    async function posponerAlertaCapitulo() {{
+      try {{
+        await apiFetch('/api/capitulos/posponer_alerta', {{
+          method: 'POST',
+          body: JSON.stringify({{}})
+        }});
+        await cargarDatos();
+      }} catch (e) {{
+        mostrarError(e.message);
+      }}
+    }}
+
+    async function ejecutarMoverYTerminar() {{
+      cerrarModalTerminarCapitulo();
+      const cap = datosEstado.capitulo_activo;
+      if (!cap || !cap.habilitado) {{
+        await ejecutarTerminarCapitulo(false);
+        return;
+      }}
+      const lotesCapitulo = datosEstado.lotes.filter(l =>
+        (l.personaje_sugerido === cap.personaje || cap.personaje) &&
+        (l.escena_sugerida === cap.nombre || l.raiz_escena === `${{cap.personaje}}::${{cap.nombre}}`)
+      );
+      if (!lotesCapitulo.length) {{
+        await ejecutarTerminarCapitulo(true);
+        return;
+      }}
+      terminarCapituloTrasMover = true;
+      if (lotesCapitulo.length === 1) {{
+        await simularMoverLote(lotesCapitulo[0].lote_id);
+      }} else {{
+        await simularMoverLotesListos();
+      }}
+    }}
+
+    async function cargarCapitulosCerrados() {{
+      const cont = document.getElementById('contenedor-capitulos-cerrados');
+      if (!cont) return;
+      try {{
+        const res = await apiFetch('/api/capitulos/cerrados');
+        const cerrados = res.cerrados || [];
+        if (!cerrados.length) {{
+          cont.innerHTML = '<p style="color:var(--text-muted); padding:16px;">No hay capítulos cerrados en el historial.</p>';
+          return;
+        }}
+        cont.innerHTML = `
+          <table class="tabla-historial">
+            <thead>
+              <tr>
+                <th style="width:12%;">Personaje</th>
+                <th style="width:25%;">Capítulo</th>
+                <th style="width:20%;">Fecha Inicio</th>
+                <th style="width:20%;">Fecha Fin</th>
+                <th style="width:11%; text-align:center;">Movidos</th>
+                <th style="width:12%; text-align:center;">Acción</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${{cerrados.map(c => `
+                <tr>
+                  <td><code>${{escapeHTML(c.personaje)}}</code></td>
+                  <td><strong>${{escapeHTML(c.nombre)}}</strong></td>
+                  <td style="color:var(--text-muted);">${{(c.fecha_inicio || '').replace('T', ' ').slice(0, 19)}}</td>
+                  <td style="color:var(--text-muted);">${{(c.fecha_fin || '').replace('T', ' ').slice(0, 19)}}</td>
+                  <td style="text-align:center;"><strong>${{c.archivos_movidos || 0}}</strong></td>
+                  <td style="text-align:center;">
+                    <button class="btn-sm" onclick="reabrirCapitulo(${{c.id}})" style="background:var(--teal); color:#000; font-weight:600; padding:4px 10px; border-radius:4px; border:none; cursor:pointer;">
+                      Reabrir
+                    </button>
+                  </td>
+                </tr>
+              `).join('')}}
+            </tbody>
+          </table>
+        `;
+      }} catch (e) {{
+        cont.innerHTML = `<p style="color:var(--error); padding:16px;">Error al cargar capítulos: ${{escapeHTML(e.message)}}</p>`;
+      }}
+    }}
+
+    async function reabrirCapitulo(id) {{
+      try {{
+        await apiFetch('/api/capitulos/reabrir', {{
+          method: 'POST',
+          body: JSON.stringify({{ id: id }})
+        }});
+        await cargarDatos();
+        mostrarPestana('lotes');
+      }} catch (e) {{
+        mostrarError(e.message);
       }}
     }}
 
@@ -2868,6 +3491,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       document.getElementById('modal-simulacion').style.display = 'none';
       simulacionActiva = null;
       loteActivoId = null;
+      terminarCapituloTrasMover = false;
     }}
 
     async function ejecutarMoverLote() {{
@@ -2886,6 +3510,18 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
           body: JSON.stringify(bodyReq)
         }});
         cerrarModal();
+
+        if (terminarCapituloTrasMover) {{
+          terminarCapituloTrasMover = false;
+          try {{
+            await apiFetch('/api/capitulos/terminar', {{
+              method: 'POST',
+              body: JSON.stringify({{ accion: 'mover_pendientes' }})
+            }});
+          }} catch (errTerminar) {{
+            console.error('Error al terminar capítulo tras mover:', errTerminar);
+          }}
+        }}
 
         if (res.es_multilote) {{
           const primerRes = (res.resultados && res.resultados.length > 0) ? res.resultados[0] : null;
