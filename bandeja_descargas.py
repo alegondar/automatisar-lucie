@@ -74,6 +74,17 @@ def calcular_sha256(ruta_archivo: str, bloque: int = 65536) -> str:
     return h.hexdigest()
 
 
+def formatear_bytes(total_bytes: int) -> str:
+    """Formatea una cantidad de bytes a una cadena legible (B, KB, MB, GB)."""
+    if total_bytes < 1024:
+        return f"{total_bytes} B"
+    elif total_bytes < 1024 * 1024:
+        return f"{total_bytes / 1024:.1f} KB"
+    elif total_bytes < 1024 * 1024 * 1024:
+        return f"{total_bytes / (1024 * 1024):.1f} MB"
+    return f"{total_bytes / (1024 * 1024 * 1024):.1f} GB"
+
+
 class ConfiguracionBandeja:
     """Gestiona la carga y validación de config_bandeja.json."""
 
@@ -177,13 +188,22 @@ class GestorBaseDatosBandeja:
                 fecha_inicio TEXT NOT NULL,
                 fecha_fin TEXT,
                 fecha_ultimo_aviso TEXT,
-                archivos_movidos INTEGER DEFAULT 0
+                archivos_movidos INTEGER DEFAULT 0,
+                descartado INTEGER DEFAULT 0,
+                fecha_descartado TEXT
             );
             """)
             cur.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_capitulo_unico_activo
             ON bandeja_capitulos(estado) WHERE estado = 'activo';
             """)
+            # Migración segura para bases de datos existentes
+            cur.execute("PRAGMA table_info(bandeja_capitulos);")
+            cols_cap = [r["name"] for r in cur.fetchall()]
+            if "descartado" not in cols_cap:
+                cur.execute("ALTER TABLE bandeja_capitulos ADD COLUMN descartado INTEGER DEFAULT 0;")
+            if "fecha_descartado" not in cols_cap:
+                cur.execute("ALTER TABLE bandeja_capitulos ADD COLUMN fecha_descartado TEXT;")
             con.commit()
 
     def registrar_o_actualizar(self, hash_val: str, ruta_actual: str, estado: str,
@@ -420,14 +440,94 @@ class GestorBaseDatosBandeja:
         updated["habilitado"] = True
         return updated
 
-    def listar_capitulos_cerrados(self) -> List[Dict[str, Any]]:
+    def obtener_capitulo_por_id(self, id_capitulo: int) -> Optional[Dict[str, Any]]:
         """
-        Retorna la lista de capítulos con estado 'cerrado', ordenados cronológicamente inverso.
+        Retorna un capítulo por su ID único.
         """
         with self._lock, self._conectar() as con:
             cur = con.cursor()
-            cur.execute("SELECT * FROM bandeja_capitulos WHERE estado = 'cerrado' ORDER BY id DESC")
+            cur.execute("SELECT * FROM bandeja_capitulos WHERE id = ?", (id_capitulo,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def listar_capitulos_cerrados(self) -> List[Dict[str, Any]]:
+        """
+        Retorna la lista de capítulos con estado 'cerrado' no descartados, ordenados cronológicamente inverso.
+        """
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            cur.execute("""
+            SELECT * FROM bandeja_capitulos
+            WHERE estado = 'cerrado' AND (descartado IS NULL OR descartado = 0)
+            ORDER BY id DESC
+            """)
             return [dict(r) for r in cur.fetchall()]
+
+    def listar_capitulos_descartados(self) -> List[Dict[str, Any]]:
+        """
+        Retorna la lista de capítulos marcados como descartados, ordenados cronológicamente inverso.
+        """
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            cur.execute("""
+            SELECT * FROM bandeja_capitulos
+            WHERE descartado = 1
+            ORDER BY id DESC
+            """)
+            return [dict(r) for r in cur.fetchall()]
+
+    def marcar_capitulo_descartado(self, id_capitulo: int, descartado: bool = True):
+        """
+        Marca o desmarca un capítulo como descartado.
+        """
+        now_iso = datetime.datetime.now().isoformat()
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            cur.execute("SELECT nombre FROM bandeja_capitulos WHERE id = ?", (id_capitulo,))
+            nom_row = cur.fetchone()
+            nombre_cap = nom_row["nombre"] if nom_row else ""
+
+            if descartado:
+                cur.execute("""
+                UPDATE bandeja_capitulos
+                SET descartado = 1, estado = 'cerrado', fecha_fin = COALESCE(fecha_fin, ?), fecha_descartado = ?
+                WHERE id = ?
+                """, (now_iso, now_iso, id_capitulo))
+                if nombre_cap:
+                    cur.execute("SELECT valor FROM bandeja_estado WHERE clave = 'capitulo_activo_nombre'")
+                    r = cur.fetchone()
+                    if r and r["valor"] == nombre_cap:
+                        cur.execute("UPDATE bandeja_estado SET valor = '0' WHERE clave = 'capitulo_activo_habilitado'")
+            else:
+                cur.execute("""
+                UPDATE bandeja_capitulos
+                SET descartado = 0, estado = 'cerrado', fecha_descartado = NULL
+                WHERE id = ?
+                """, (id_capitulo,))
+            con.commit()
+
+    def actualizar_rutas_archivos_descarte(self, origen_carpeta: str, destino_carpeta: str, es_reversion: bool = False):
+        """
+        Actualiza ruta_actual y estado en bandeja_archivos para todos los archivos contenidos
+        en origen_carpeta reubicados a destino_carpeta.
+        """
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            cur.execute("SELECT id, hash, ruta_actual, estado FROM bandeja_archivos")
+            filas = cur.fetchall()
+            norm_orig = os.path.realpath(origen_carpeta)
+            nuevo_estado = "movido" if es_reversion else "descartado"
+            for f in filas:
+                r_act = os.path.realpath(f["ruta_actual"])
+                if r_act == norm_orig or r_act.startswith(norm_orig + os.sep):
+                    rel = os.path.relpath(r_act, norm_orig)
+                    nueva_ruta = os.path.join(destino_carpeta, rel)
+                    cur.execute("""
+                    UPDATE bandeja_archivos
+                    SET ruta_actual = ?, estado = ?
+                    WHERE id = ?
+                    """, (nueva_ruta, nuevo_estado, f["id"]))
+            con.commit()
 
     def posponer_alerta_capitulo(self, id_capitulo: Optional[int] = None, nueva_fecha: Optional[str] = None) -> bool:
         """
@@ -545,6 +645,8 @@ class FiltroListaBlanca:
     def es_carpeta_escena_existente(self, nombre_carpeta: str) -> bool:
         """Verifica si una carpeta de Descargas comienza con un alias de personaje."""
         nombre_lower = nombre_carpeta.strip().lower()
+        if nombre_lower.startswith("_") or "_descartados" in nombre_lower:
+            return False
         for al in self.alias_personajes:
             if nombre_lower == al or nombre_lower.startswith(al + " ") or nombre_lower.startswith(al + "_") or nombre_lower.startswith(al + "-"):
                 return True
@@ -688,6 +790,10 @@ class ValidadorEscenas:
         # Caracteres prohibidos y de control
         if ".." in nombre or "/" in nombre or "\\" in nombre:
             return False, "El nombre de la escena no puede contener separadores de ruta ('/', '\\') ni '..'."
+
+        nombre_lower = nombre.strip().lower()
+        if nombre_lower in ("_descartados", "_lucie", "_a_revisar", "_enviados") or "_descartados" in nombre_lower:
+            return False, "El nombre de la escena no puede contener ni llamarse '_descartados'."
 
         if nombre.endswith(".") or nombre.endswith(" "):
             return False, "El nombre de la escena no puede finalizar con un punto o espacio."
@@ -969,6 +1075,17 @@ class GestorMovimientosBandeja:
         real = os.path.realpath(ruta)
         if not (real == self.ruta_descargas or real.startswith(self.ruta_descargas + os.sep)):
             raise ErrorSeguridadBandeja(f"Violación de seguridad: la ruta '{ruta}' no pertenece a ~/Descargas.")
+
+    def _validar_confinamiento_destino_base(self, ruta: str):
+        """Asegura que la ruta canónica permanezca estrictamente dentro de ~/Descargas/_lucie y rechaza symlinks."""
+        base_confinada = os.path.realpath(self.ruta_destino_base)
+        real = os.path.realpath(ruta)
+        if not (real == base_confinada or real.startswith(base_confinada + os.sep)):
+            raise ErrorSeguridadBandeja(
+                f"Violación de seguridad: la ruta '{ruta}' escapa del confinamiento de '{base_confinada}'."
+            )
+        if os.path.islink(ruta):
+            raise ErrorSeguridadBandeja(f"Violación de seguridad: '{ruta}' es un enlace simbólico no permitido.")
 
     def calcular_base_escena(self, personaje: str, nombre_escena: str) -> str:
         """
@@ -1259,6 +1376,172 @@ class GestorMovimientosBandeja:
                 "mensaje_aviso": mensaje_aviso
             }
 
+    def simular_descartar_capitulo(self, capitulo_id: int) -> Dict[str, Any]:
+        """
+        Simula el descarte de un capítulo moviéndolo hacia ~/Descargas/_lucie/_descartados/<personaje>/<escena>_<timestamp>/.
+        Retorna origen, destino, conteo de archivos, peso total y aviso anti-borrado.
+        """
+        cap = self.db.obtener_capitulo_por_id(capitulo_id)
+        if not cap:
+            raise ValueError(f"Capítulo con ID {capitulo_id} no encontrado.")
+
+        personaje = cap.get("personaje", "lucie").strip().lower()
+        nombre = cap.get("nombre", "").strip()
+
+        valido, motivo = ValidadorEscenas.validar_nombre_escena(
+            nombre, self.ruta_destino_base, self.ruta_descargas,
+            es_existente_descargas=False, personaje=personaje
+        )
+        if not valido:
+            raise ErrorValidacionEscena(f"Nombre de capítulo inválido para descarte: {motivo}")
+
+        origen_carpeta = os.path.join(self.ruta_destino_base, personaje, nombre)
+        self._validar_confinamiento_destino_base(origen_carpeta)
+
+        # Destino dentro de _descartados
+        fecha_tag = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        nombre_dest = f"{nombre}_{fecha_tag}"
+        destino_base = os.path.join(self.ruta_destino_base, "_descartados", personaje, nombre_dest)
+        self._validar_confinamiento_destino_base(destino_base)
+
+        destino_carpeta = destino_base
+        sufijo = 1
+        while os.path.exists(destino_carpeta):
+            destino_carpeta = f"{destino_base} ({sufijo})"
+            sufijo += 1
+
+        carpeta_existe = os.path.exists(origen_carpeta) and os.path.isdir(origen_carpeta)
+        archivos_encontrados = []
+        peso_total = 0
+
+        if carpeta_existe:
+            if os.path.islink(origen_carpeta):
+                raise ErrorSeguridadBandeja(f"Violación de seguridad: '{origen_carpeta}' es un enlace simbólico.")
+            base_real = os.path.realpath(self.ruta_destino_base)
+            for root, dirs, files in os.walk(origen_carpeta):
+                for d in dirs:
+                    d_path = os.path.join(root, d)
+                    if os.path.islink(d_path):
+                        real_d = os.path.realpath(d_path)
+                        if not (real_d == base_real or real_d.startswith(base_real + os.sep)):
+                            raise ErrorSeguridadBandeja(f"Symlink saliente detectado en directorio: '{d_path}' -> '{real_d}'.")
+                for f in files:
+                    f_path = os.path.join(root, f)
+                    if os.path.islink(f_path):
+                        real_f = os.path.realpath(f_path)
+                        if not (real_f == base_real or real_f.startswith(base_real + os.sep)):
+                            raise ErrorSeguridadBandeja(f"Symlink saliente detectado en archivo: '{f_path}' -> '{real_f}'.")
+                    try:
+                        sz = os.path.getsize(f_path)
+                    except OSError:
+                        sz = 0
+                    peso_total += sz
+                    archivos_encontrados.append({
+                        "nombre": f,
+                        "ruta_relativa": os.path.relpath(f_path, origen_carpeta),
+                        "tamanio": sz
+                    })
+
+        total_archivos = len(archivos_encontrados)
+        carpeta_vacia = (total_archivos == 0)
+
+        return {
+            "valido": True,
+            "capitulo_id": capitulo_id,
+            "personaje": personaje,
+            "escena": nombre,
+            "origen_carpeta": origen_carpeta,
+            "destino_carpeta": destino_carpeta,
+            "total_archivos": total_archivos,
+            "peso_total": peso_total,
+            "peso_total_fmt": formatear_bytes(peso_total),
+            "carpeta_existe": carpeta_existe,
+            "carpeta_vacia": carpeta_vacia,
+            "aviso": "Esto NO borra: mueve a _descartados y se puede deshacer.",
+            "archivos": archivos_encontrados
+        }
+
+    def ejecutar_descartar_capitulo(self, simulacion: Dict[str, Any], nombre_confirmacion: str) -> Dict[str, Any]:
+        """
+        Ejecuta el descarte del capítulo trasladando su carpeta a _descartados con un único os.rename.
+        Exige coincidencia exacta de nombre_confirmacion con el nombre del capítulo.
+        """
+        escena_esperada = simulacion.get("escena", "")
+        if not nombre_confirmacion or nombre_confirmacion != escena_esperada:
+            raise ValueError(
+                f"Confirmación inválida: debe escribir exactamente '{escena_esperada}' para confirmar el descarte."
+            )
+
+        capitulo_id = simulacion["capitulo_id"]
+        personaje = simulacion["personaje"]
+        origen_carpeta = simulacion["origen_carpeta"]
+        destino_carpeta = simulacion["destino_carpeta"]
+        carpeta_existe = bool(simulacion.get("carpeta_existe"))
+        carpeta_vacia = bool(simulacion.get("carpeta_vacia"))
+
+        with self._lock:
+            # Revalidar confinamiento
+            self._validar_confinamiento_destino_base(origen_carpeta)
+            self._validar_confinamiento_destino_base(destino_carpeta)
+
+            movio_carpeta = False
+            if carpeta_existe and not carpeta_vacia:
+                if not os.path.exists(origen_carpeta):
+                    raise ErrorMovimiento(f"La carpeta origen '{origen_carpeta}' ya no existe.")
+                if os.path.exists(destino_carpeta):
+                    raise ErrorMovimiento(f"El destino '{destino_carpeta}' ya existe.")
+
+                os.makedirs(os.path.dirname(destino_carpeta), exist_ok=True)
+                os.rename(origen_carpeta, destino_carpeta)
+                movio_carpeta = True
+                self.db.actualizar_rutas_archivos_descarte(origen_carpeta, destino_carpeta, es_reversion=False)
+
+            # Verificar si era el capítulo activo antes de marcarlo como descartado
+            era_activo = False
+            cap_activo = self.db.obtener_capitulo_activo()
+            if cap_activo and cap_activo.get("habilitado") and cap_activo.get("id") == capitulo_id:
+                era_activo = True
+
+            # Marcar en base de datos
+            self.db.marcar_capitulo_descartado(capitulo_id, descartado=True)
+
+            if era_activo:
+                self.db.guardar_capitulo_activo("", "", False)
+
+            # Escribir en bitácora
+            id_operacion = f"op_desc_{int(time.time())}_{secrets.token_hex(4)}"
+            fecha_iso = datetime.datetime.now().isoformat()
+            registro_bitacora = {
+                "evento": "descartar_capitulo",
+                "id_operacion": id_operacion,
+                "capitulo_id": capitulo_id,
+                "personaje": personaje,
+                "escena": escena_esperada,
+                "origen_carpeta": origen_carpeta if movio_carpeta else "",
+                "destino_carpeta": destino_carpeta if movio_carpeta else "",
+                "total_archivos": simulacion.get("total_archivos", 0),
+                "peso_total": simulacion.get("peso_total", 0),
+                "fecha": fecha_iso
+            }
+            with open(self.ruta_bitacora, "a", encoding="utf-8") as f:
+                f.write(json.dumps(registro_bitacora, ensure_ascii=False) + "\n")
+
+            if movio_carpeta:
+                mensaje = f"Capítulo '{escena_esperada}' descartado. Se movieron {simulacion.get('total_archivos', 0)} archivos a _descartados."
+            else:
+                mensaje = f"Capítulo '{escena_esperada}' descartado en la base de datos (no poseía archivos en disco)."
+
+            return {
+                "exito": True,
+                "id_operacion": id_operacion,
+                "capitulo_id": capitulo_id,
+                "personaje": personaje,
+                "escena": escena_esperada,
+                "mensaje": mensaje,
+                "total_archivos": simulacion.get("total_archivos", 0),
+                "destino": destino_carpeta if movio_carpeta else ""
+            }
+
     def deshacer_operacion(self, id_operacion: str) -> Dict[str, Any]:
         """
         Revierte una operación de movimiento restaurando los archivos a su origen mediante os.rename.
@@ -1292,7 +1575,47 @@ class GestorMovimientosBandeja:
                 if op.get("evento") == "deshacer" and op.get("id_operacion_revertida") == id_operacion:
                     raise ErrorDeshacer(f"La operación '{id_operacion}' ya fue deshecha previamente.")
 
-            # Fase 1: Verificación preventiva integral
+            # Caso especial: Reversión de descarte de capítulo
+            if operacion_encontrada.get("evento") == "descartar_capitulo":
+                origen_carpeta = operacion_encontrada.get("origen_carpeta", "")
+                destino_carpeta = operacion_encontrada.get("destino_carpeta", "")
+                cap_id = operacion_encontrada.get("capitulo_id")
+                total_archivos = operacion_encontrada.get("total_archivos", 0)
+
+                if origen_carpeta and destino_carpeta:
+                    if not os.path.exists(destino_carpeta):
+                        raise ErrorDeshacer(
+                            f"No se puede deshacer: la carpeta descartada '{destino_carpeta}' ya no existe o fue alterada externamente."
+                        )
+                    if os.path.exists(origen_carpeta):
+                        raise ErrorDeshacer(
+                            f"No se puede deshacer: la ruta original '{origen_carpeta}' ya se encuentra ocupada. "
+                            f"No se sobrescribe ni se altera ningún archivo."
+                        )
+                    os.makedirs(os.path.dirname(origen_carpeta), exist_ok=True)
+                    os.rename(destino_carpeta, origen_carpeta)
+                    self.db.actualizar_rutas_archivos_descarte(destino_carpeta, origen_carpeta, es_reversion=True)
+
+                if cap_id:
+                    self.db.marcar_capitulo_descartado(cap_id, descartado=False)
+
+                evento_reversion = {
+                    "evento": "deshacer",
+                    "id_operacion_revertida": id_operacion,
+                    "fecha": datetime.datetime.now().isoformat(),
+                    "total_revertidos": total_archivos
+                }
+                with open(self.ruta_bitacora, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(evento_reversion, ensure_ascii=False) + "\n")
+
+                return {
+                    "exito": True,
+                    "id_operacion": id_operacion,
+                    "total_revertidos": total_archivos,
+                    "mensaje": f"Capítulo '{operacion_encontrada.get('escena')}' restaurado exitosamente a su ubicación original."
+                }
+
+            # Fase 1: Verificación preventiva integral para movimientos normales
             for mov in operacion_encontrada["movimientos"]:
                 origen_anterior = mov["origen_anterior"]
                 destino_nuevo = mov["destino_nuevo"]
@@ -1376,6 +1699,30 @@ class GestorMovimientosBandeja:
                     continue
                 id_op = e.get("id_operacion", "")
                 fecha_op = e.get("fecha", "")
+
+                if e.get("evento") == "descartar_capitulo":
+                    estado = "deshecho" if id_op in revertidas else "descartado"
+                    escena_nombre = e.get("escena", "")
+                    pers = e.get("personaje", "")
+                    origen = e.get("origen_carpeta", "")
+                    destino = e.get("destino_carpeta", "")
+                    movimientos_resultado.append({
+                        "id_operacion": id_op,
+                        "fecha": fecha_op,
+                        "archivo": f"Capítulo '{escena_nombre}' ({pers})",
+                        "nombre_original": escena_nombre,
+                        "nombre_nuevo": os.path.basename(destino) if destino else "(sin carpeta)",
+                        "origen": origen or "(sin carpeta)",
+                        "destino": destino or "(sin carpeta)",
+                        "tamanio": e.get("peso_total", 0),
+                        "hash": "",
+                        "estado": estado,
+                        "tipo_evento": "descartar_capitulo"
+                    })
+                    if len(movimientos_resultado) >= limite:
+                        return movimientos_resultado
+                    continue
+
                 estado = "deshecho" if id_op in revertidas else "movido"
 
                 for mov in reversed(e.get("movimientos", [])):
@@ -1690,7 +2037,7 @@ class VigilanteBandeja:
                     if os.path.isdir(carpeta_pers):
                         for sub in os.listdir(carpeta_pers):
                             ruta_sub = os.path.join(carpeta_pers, sub)
-                            if os.path.isdir(ruta_sub) and sub not in ("videos sin editar", "imagenes"):
+                            if os.path.isdir(ruta_sub) and sub not in ("videos sin editar", "imagenes", "_descartados") and not sub.startswith("_"):
                                 if not any(e["nombre"] == sub and e["personaje"] == pers for e in escenas_existentes):
                                     escenas_existentes.append({
                                         "nombre": sub,
@@ -1705,7 +2052,7 @@ class VigilanteBandeja:
                         if os.path.isdir(carpeta_tipo):
                             for sub in os.listdir(carpeta_tipo):
                                 ruta_sub = os.path.join(carpeta_tipo, sub)
-                                if os.path.isdir(ruta_sub):
+                                if os.path.isdir(ruta_sub) and not sub.startswith("_"):
                                     if not any(e["nombre"] == sub and e["personaje"] == pers for e in escenas_existentes):
                                         escenas_existentes.append({
                                             "nombre": sub,
@@ -1866,6 +2213,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._handle_capitulos_estado()
         elif ruta == "/api/capitulos/cerrados":
             self._handle_capitulos_cerrados()
+        elif ruta == "/api/capitulos/descartados":
+            self._handle_capitulos_descartados()
         elif ruta == "/api/capitulo-activo":
             cap_activo = self.db.obtener_capitulo_activo()
             self._enviar_json({"capitulo_activo": cap_activo})
@@ -1895,6 +2244,10 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     def _handle_capitulos_cerrados(self):
         cerrados = self.db.listar_capitulos_cerrados()
         self._enviar_json({"cerrados": cerrados})
+
+    def _handle_capitulos_descartados(self):
+        descartados = self.db.listar_capitulos_descartados()
+        self._enviar_json({"descartados": descartados})
 
     def _servir_miniatura(self, query_string: str):
         params = parse_qs(query_string)
@@ -1936,6 +2289,10 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._handle_capitulos_terminar(body)
         elif ruta == "/api/capitulos/reabrir":
             self._handle_capitulos_reabrir(body)
+        elif ruta == "/api/capitulos/descartar-simular":
+            self._handle_capitulos_descartar_simular(body)
+        elif ruta == "/api/capitulos/descartar":
+            self._handle_capitulos_descartar(body)
         elif ruta == "/api/capitulos/posponer_alerta":
             self._handle_capitulos_posponer_alerta(body)
         elif ruta == "/api/capitulo-activo":
@@ -2016,6 +2373,70 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._enviar_error(HTTPStatus.CONFLICT, str(e))
         except Exception as e:
             self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al reabrir capítulo: {str(e)}")
+
+    def _handle_capitulos_descartar_simular(self, body: Dict[str, Any]):
+        capitulo_id = body.get("id")
+        if capitulo_id is None:
+            cap_activo = self.db.obtener_capitulo_activo()
+            if cap_activo and cap_activo.get("habilitado") and cap_activo.get("id"):
+                capitulo_id = cap_activo["id"]
+            else:
+                self._enviar_error(HTTPStatus.BAD_REQUEST, "Se requiere el ID del capítulo a descartar.")
+                return
+
+        try:
+            capitulo_id = int(capitulo_id)
+        except (ValueError, TypeError):
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "El ID del capítulo debe ser numérico.")
+            return
+
+        try:
+            sim = self.movimientos.simular_descartar_capitulo(capitulo_id)
+            self._enviar_json(sim)
+        except ErrorValidacionEscena as e:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, str(e))
+        except ErrorSeguridadBandeja as e:
+            self._enviar_error(HTTPStatus.FORBIDDEN, str(e))
+        except ValueError as e:
+            self._enviar_error(HTTPStatus.NOT_FOUND, str(e))
+        except Exception as e:
+            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al simular descarte: {str(e)}")
+
+    def _handle_capitulos_descartar(self, body: Dict[str, Any]):
+        capitulo_id = body.get("id")
+        nombre_confirmacion = str(body.get("nombre_confirmacion", "")).strip()
+
+        if capitulo_id is None:
+            cap_activo = self.db.obtener_capitulo_activo()
+            if cap_activo and cap_activo.get("habilitado") and cap_activo.get("id"):
+                capitulo_id = cap_activo["id"]
+            else:
+                self._enviar_error(HTTPStatus.BAD_REQUEST, "Se requiere el ID del capítulo a descartar.")
+                return
+
+        try:
+            capitulo_id = int(capitulo_id)
+        except (ValueError, TypeError):
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "El ID del capítulo debe ser numérico.")
+            return
+
+        if not nombre_confirmacion:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "Debe ingresar el nombre del capítulo para confirmar el descarte.")
+            return
+
+        try:
+            sim = self.movimientos.simular_descartar_capitulo(capitulo_id)
+            resultado = self.movimientos.ejecutar_descartar_capitulo(sim, nombre_confirmacion)
+            self.vigilante.escanear()
+            self._enviar_json(resultado)
+        except ErrorValidacionEscena as e:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, str(e))
+        except ErrorSeguridadBandeja as e:
+            self._enviar_error(HTTPStatus.FORBIDDEN, str(e))
+        except ValueError as e:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, str(e))
+        except Exception as e:
+            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al descartar capítulo: {str(e)}")
 
     def _handle_capitulos_posponer_alerta(self, body: Dict[str, Any]):
         id_cap = body.get("id")
@@ -2504,6 +2925,15 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       font-weight: 600;
       text-transform: uppercase;
     }}
+    .badge-descartado {{
+      background: rgba(245, 158, 11, 0.2);
+      color: #f59e0b;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+    }}
     /* Modal de Simulación */
     .modal-overlay {{
       display: none;
@@ -2734,6 +3164,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     <button class="nav-btn active" id="nav-btn-lotes" onclick="mostrarPestana('lotes', event)">Lotes Detectados</button>
     <button class="nav-btn" id="nav-btn-sin-identificar" onclick="mostrarPestana('sin-identificar', event)">Sin Identificar</button>
     <button class="nav-btn" id="nav-btn-capitulos-cerrados" onclick="mostrarPestana('capitulos-cerrados', event)">Capítulos Cerrados</button>
+    <button class="nav-btn" id="nav-btn-descartados" onclick="mostrarPestana('descartados', event)">Descartados</button>
     <button class="nav-btn" id="nav-btn-historial" onclick="mostrarPestana('historial', event)">Historial</button>
     <button class="nav-btn" onclick="recargarVistaActual()">Refrescar</button>
   </nav>
@@ -2761,7 +3192,10 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
           Cargando detalles...
         </div>
       </div>
-      <div>
+      <div style="display:flex; gap:10px; align-items:center;">
+        <button class="btn-sm" id="btn-descartar-capitulo-activo" onclick="descartarCapituloActivo()" style="background:#4b5563; color:#fff; font-weight:600; padding:8px 16px; border:none; border-radius:4px; cursor:pointer;">
+          Descartar capítulo
+        </button>
         <button class="btn-sm" id="btn-terminar-capitulo" onclick="abrirModalTerminarCapitulo()" style="background:#ef4444; color:#fff; font-weight:600; padding:8px 16px; border:none; border-radius:4px; cursor:pointer;">
           Terminar capítulo
         </button>
@@ -2842,6 +3276,19 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       </div>
     </section>
 
+    <section id="sec-descartados" style="display:none;">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h2>Capítulos Descartados</h2>
+            <small style="color:var(--text-muted)">Capítulos en cuarentena dentro de _descartados. Los archivos no fueron borrados y se pueden consultar o restaurar.</small>
+          </div>
+          <button class="btn-sm" onclick="cargarCapitulosDescartados()">Actualizar</button>
+        </div>
+        <div id="contenedor-capitulos-descartados">Cargando descartados...</div>
+      </div>
+    </section>
+
     <section id="sec-historial" style="display:none;">
       <div class="card">
         <div class="card-header">
@@ -2871,6 +3318,32 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     </div>
   </div>
 
+  <!-- Modal para Descartar Capítulo con Simulación y Confirmación por Nombre -->
+  <div id="modal-descartar-capitulo" class="modal-overlay">
+    <div class="modal-content" style="max-width:620px;">
+      <h2 style="color:var(--text); margin-bottom:12px;">Descartar Capítulo</h2>
+      <div id="modal-descartar-detalles" style="margin:16px 0; font-size:0.95rem; line-height:1.6;">
+        Cargando detalles de descarte...
+      </div>
+      <div id="modal-descartar-aviso" style="background:rgba(245, 158, 11, 0.15); border:1px solid #f59e0b; color:#fef3c7; padding:12px 16px; border-radius:6px; margin:16px 0; font-weight:500;">
+        ⚠️ Esto NO borra: mueve a _descartados y se puede deshacer.
+      </div>
+      <div id="modal-descartar-confirmacion-box" style="margin:16px 0;">
+        <label for="txt-confirmar-descartar" style="display:block; font-size:0.9rem; margin-bottom:6px;">
+          Para confirmar, escribí el nombre exacto del capítulo (<strong id="nombre-capitulo-esperado" style="color:var(--teal)"></strong>):
+        </label>
+        <input type="text" id="txt-confirmar-descartar" placeholder="Nombre exacto del capítulo" style="width:100%; padding:8px 12px; background:var(--card-alt); border:1px solid var(--border); color:var(--text); border-radius:4px;" oninput="validarConfirmacionDescartar()">
+        <span id="error-confirmar-descartar" class="error-inline" style="display:none; color:var(--danger); font-size:0.8rem; margin-top:4px;"></span>
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:20px;">
+        <button class="btn-cancelar" onclick="cerrarModalDescartarCapitulo()">Cancelar</button>
+        <button class="btn-sm" id="btn-confirmar-descartar" onclick="ejecutarDescarteCapitulo()" disabled style="background:#ef4444; color:#fff; font-weight:600; padding:8px 18px; border:none; border-radius:4px; cursor:not-allowed; opacity:0.5;">
+          Descartar capítulo
+        </button>
+      </div>
+    </div>
+  </div>
+
   <div id="modal-simulacion" class="modal-overlay">
     <div class="modal-content">
       <h2>Simulación previa de movimientos</h2>
@@ -2889,6 +3362,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     const CSRF_TOKEN = "{self.token_csrf}";
     let datosEstado = {{ lotes: [], sin_identificar: [], escenas: [], personajes: [], ultimo_personaje: "lucie", capitulo_activo: null, alerta_olvidado: false, horas_limite: 12, balance_capitulo: {{ pendientes: 0, movidos: 0 }} }};
     let simulacionActiva = null;
+    let descarteSimulacionActiva = null;
     let loteActivoId = null;
     let terminarCapituloTrasMover = false;
     let pestanaActual = 'lotes';
@@ -2917,6 +3391,16 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       banner.style.display = 'flex';
     }}
 
+    function mostrarAvisoDescartar(personaje, escena, idOperacion) {{
+      operacionAvisoActual = idOperacion;
+      const banner = document.getElementById('banner-aviso');
+      const msg = document.getElementById('banner-aviso-msg');
+      if (msg) {{
+        msg.innerText = `Se descartó el capítulo ${{personaje}}/${{escena}} (movido a _descartados)`;
+      }}
+      if (banner) banner.style.display = 'flex';
+    }}
+
     function cerrarAviso() {{
       const banner = document.getElementById('banner-aviso');
       banner.style.display = 'none';
@@ -2926,7 +3410,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     async function deshacerDesdeAviso() {{
       if (!operacionAvisoActual) return;
       const idOp = operacionAvisoActual;
-      if (!confirm("¿Confirmás deshacer este lote completo? Los archivos regresarán a sus rutas originales.")) {{
+      if (!confirm("¿Confirmás deshacer esta operación? Los archivos regresarán a sus rutas originales.")) {{
         return;
       }}
       try {{
@@ -2938,6 +3422,10 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         await cargarDatos();
         if (pestanaActual === 'historial') {{
           await cargarHistorial();
+        }} else if (pestanaActual === 'capitulos-cerrados') {{
+          await cargarCapitulosCerrados();
+        }} else if (pestanaActual === 'descartados') {{
+          await cargarCapitulosDescartados();
         }}
       }} catch (e) {{
         mostrarError(e.message);
@@ -2957,12 +3445,15 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       document.getElementById('sec-lotes').style.display = (pestana === 'lotes') ? 'block' : 'none';
       document.getElementById('sec-sin-identificar').style.display = (pestana === 'sin-identificar') ? 'block' : 'none';
       document.getElementById('sec-capitulos-cerrados').style.display = (pestana === 'capitulos-cerrados') ? 'block' : 'none';
+      document.getElementById('sec-descartados').style.display = (pestana === 'descartados') ? 'block' : 'none';
       document.getElementById('sec-historial').style.display = (pestana === 'historial') ? 'block' : 'none';
 
       if (pestana === 'historial') {{
         cargarHistorial();
       }} else if (pestana === 'capitulos-cerrados') {{
         cargarCapitulosCerrados();
+      }} else if (pestana === 'descartados') {{
+        cargarCapitulosDescartados();
       }}
     }}
 
@@ -2971,6 +3462,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         await cargarHistorial();
       }} else if (pestanaActual === 'capitulos-cerrados') {{
         await cargarCapitulosCerrados();
+      }} else if (pestanaActual === 'descartados') {{
+        await cargarCapitulosDescartados();
       }} else {{
         await cargarDatos();
       }}
@@ -3197,10 +3690,10 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
               <tr>
                 <th style="width:12%;">Personaje</th>
                 <th style="width:25%;">Capítulo</th>
-                <th style="width:20%;">Fecha Inicio</th>
-                <th style="width:20%;">Fecha Fin</th>
-                <th style="width:11%; text-align:center;">Movidos</th>
-                <th style="width:12%; text-align:center;">Acción</th>
+                <th style="width:18%;">Fecha Inicio</th>
+                <th style="width:18%;">Fecha Fin</th>
+                <th style="width:9%; text-align:center;">Movidos</th>
+                <th style="width:18%; text-align:center;">Acción</th>
               </tr>
             </thead>
             <tbody>
@@ -3214,6 +3707,9 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
                   <td style="text-align:center;">
                     <button class="btn-sm" onclick="reabrirCapitulo(${{c.id}})" style="background:var(--teal); color:#000; font-weight:600; padding:4px 10px; border-radius:4px; border:none; cursor:pointer;">
                       Reabrir
+                    </button>
+                    <button class="btn-sm" onclick="abrirModalDescartarCapitulo(${{c.id}}, '${{escapeHTML(c.nombre)}}', '${{escapeHTML(c.personaje)}}')" style="background:#4b5563; color:#fff; font-weight:600; padding:4px 10px; border-radius:4px; border:none; cursor:pointer; margin-left:6px;">
+                      Descartar
                     </button>
                   </td>
                 </tr>
@@ -3237,6 +3733,167 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       }} catch (e) {{
         mostrarError(e.message);
       }}
+    }}
+
+    async function cargarCapitulosDescartados() {{
+      const cont = document.getElementById('contenedor-capitulos-descartados');
+      if (!cont) return;
+      try {{
+        const res = await apiFetch('/api/capitulos/descartados');
+        const descartados = res.descartados || [];
+        if (!descartados.length) {{
+          cont.innerHTML = '<p style="color:var(--text-muted); padding:16px;">No hay capítulos descartados en cuarentena.</p>';
+          return;
+        }}
+        cont.innerHTML = `
+          <table class="tabla-historial">
+            <thead>
+              <tr>
+                <th style="width:12%;">Personaje</th>
+                <th style="width:25%;">Capítulo</th>
+                <th style="width:22%;">Fecha Inicio</th>
+                <th style="width:22%;">Fecha Descarte</th>
+                <th style="width:19%; text-align:center;">Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${{descartados.map(c => `
+                <tr>
+                  <td><code>${{escapeHTML(c.personaje)}}</code></td>
+                  <td><strong>${{escapeHTML(c.nombre)}}</strong></td>
+                  <td style="color:var(--text-muted);">${{(c.fecha_inicio || '').replace('T', ' ').slice(0, 19)}}</td>
+                  <td style="color:var(--text-muted);">${{(c.fecha_descartado || c.fecha_fin || '').replace('T', ' ').slice(0, 19)}}</td>
+                  <td style="text-align:center;">
+                    <span class="badge-descartado">Descartado</span>
+                  </td>
+                </tr>
+              `).join('')}}
+            </tbody>
+          </table>
+        `;
+      }} catch (e) {{
+        cont.innerHTML = `<p style="color:var(--error); padding:16px;">Error al cargar descartados: ${{escapeHTML(e.message)}}</p>`;
+      }}
+    }}
+
+    function descartarCapituloActivo() {{
+      const cap = datosEstado.capitulo_activo;
+      if (!cap || !cap.id) {{
+        mostrarError("No hay capítulo activo para descartar.");
+        return;
+      }}
+      abrirModalDescartarCapitulo(cap.id, cap.nombre, cap.personaje);
+    }}
+
+    async function abrirModalDescartarCapitulo(idCapitulo, nombreCapitulo, personaje) {{
+      try {{
+        const modal = document.getElementById('modal-descartar-capitulo');
+        const detalles = document.getElementById('modal-descartar-detalles');
+        const txtConfirm = document.getElementById('txt-confirmar-descartar');
+        const lblEsperado = document.getElementById('nombre-capitulo-esperado');
+        const btnConfirm = document.getElementById('btn-confirmar-descartar');
+        const errSpan = document.getElementById('error-confirmar-descartar');
+
+        txtConfirm.value = '';
+        btnConfirm.disabled = true;
+        btnConfirm.style.cursor = 'not-allowed';
+        btnConfirm.style.opacity = '0.5';
+        if (errSpan) {{
+          errSpan.style.display = 'none';
+          errSpan.innerText = '';
+        }}
+        if (lblEsperado) lblEsperado.innerText = nombreCapitulo || '';
+
+        detalles.innerHTML = '<p style="color:var(--text-muted)">Calculando simulación de descarte...</p>';
+        modal.style.display = 'flex';
+
+        const sim = await apiFetch('/api/capitulos/descartar-simular', {{
+          method: 'POST',
+          body: JSON.stringify({{ id: idCapitulo }})
+        }});
+        descarteSimulacionActiva = sim;
+
+        let notaVacio = '';
+        if (!sim.carpeta_existe || sim.carpeta_vacia) {{
+          notaVacio = '<p style="color:#f59e0b; margin-top:8px;"><em>Nota: La carpeta no existe o está vacía. Se descartará el registro en la base de datos sin mover archivos.</em></p>';
+        }}
+
+        detalles.innerHTML = `
+          <p style="margin-bottom:8px;">Capítulo: <strong>${{escapeHTML(sim.escena)}}</strong> (${{escapeHTML(sim.personaje)}})</p>
+          <div style="background:var(--card-alt); padding:12px; border-radius:6px; margin:12px 0; font-size:0.9rem;">
+            <div>📁 <strong>Origen:</strong> <code style="word-break:break-all;">${{escapeHTML(sim.origen_carpeta)}}</code></div>
+            <div style="margin-top:6px;">📦 <strong>Destino en cuarentena:</strong> <code style="word-break:break-all; color:var(--teal);">${{escapeHTML(sim.destino_carpeta)}}</code></div>
+            <div style="margin-top:6px;">📊 <strong>Total archivos:</strong> ${{sim.total_archivos}} &bull; <strong>Peso:</strong> ${{escapeHTML(sim.peso_total_fmt || '0 B')}}</div>
+          </div>
+          ${{notaVacio}}
+        `;
+      }} catch (e) {{
+        mostrarError(e.message);
+        cerrarModalDescartarCapitulo();
+      }}
+    }}
+
+    function validarConfirmacionDescartar() {{
+      const txtConfirm = document.getElementById('txt-confirmar-descartar');
+      const btnConfirm = document.getElementById('btn-confirmar-descartar');
+      const errSpan = document.getElementById('error-confirmar-descartar');
+      if (!descarteSimulacionActiva || !txtConfirm || !btnConfirm) return;
+
+      const esperado = (descarteSimulacionActiva.escena || '').trim();
+      const ingresado = txtConfirm.value.trim();
+
+      if (ingresado === esperado) {{
+        btnConfirm.disabled = false;
+        btnConfirm.style.cursor = 'pointer';
+        btnConfirm.style.opacity = '1';
+        if (errSpan) errSpan.style.display = 'none';
+      }} else {{
+        btnConfirm.disabled = true;
+        btnConfirm.style.cursor = 'not-allowed';
+        btnConfirm.style.opacity = '0.5';
+      }}
+    }}
+
+    async function ejecutarDescarteCapitulo() {{
+      if (!descarteSimulacionActiva) return;
+      const txtConfirm = document.getElementById('txt-confirmar-descartar');
+      const nombreConfirmacion = (txtConfirm ? txtConfirm.value : '').trim();
+      const escena = descarteSimulacionActiva.escena;
+      const pers = descarteSimulacionActiva.personaje;
+
+      try {{
+        const res = await apiFetch('/api/capitulos/descartar', {{
+          method: 'POST',
+          body: JSON.stringify({{
+            simulacion: descarteSimulacionActiva,
+            nombre_confirmacion: nombreConfirmacion
+          }})
+        }});
+        cerrarModalDescartarCapitulo();
+        mostrarAvisoDescartar(pers, escena, res.id_operacion);
+        await cargarDatos();
+        if (pestanaActual === 'capitulos-cerrados') {{
+          await cargarCapitulosCerrados();
+        }} else if (pestanaActual === 'descartados') {{
+          await cargarCapitulosDescartados();
+        }} else if (pestanaActual === 'historial') {{
+          await cargarHistorial();
+        }}
+      }} catch (e) {{
+        const errSpan = document.getElementById('error-confirmar-descartar');
+        if (errSpan) {{
+          errSpan.innerText = e.message;
+          errSpan.style.display = 'block';
+        }} else {{
+          mostrarError(e.message);
+        }}
+      }}
+    }}
+
+    function cerrarModalDescartarCapitulo() {{
+      const modal = document.getElementById('modal-descartar-capitulo');
+      if (modal) modal.style.display = 'none';
+      descarteSimulacionActiva = null;
     }}
 
     async function guardarCapituloActivo(habilitar) {{
@@ -3586,9 +4243,9 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         return;
       }}
 
-      const primerMovido = historialActual.find(m => m.estado === 'movido');
+      const primerReversible = historialActual.find(m => m.estado === 'movido' || m.estado === 'descartado');
       if (btnUltimo) {{
-        btnUltimo.disabled = !primerMovido;
+        btnUltimo.disabled = !primerReversible;
       }}
 
       cont.innerHTML = `
@@ -3611,12 +4268,12 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
                 <td><small title="${{m.origen}}">${{m.origen}}</small></td>
                 <td><small style="color:var(--teal)" title="${{m.destino}}">${{m.destino}}</small></td>
                 <td>
-                  <span class="${{m.estado === 'movido' ? 'badge-movido' : 'badge-deshecho'}}">
+                  <span class="${{m.estado === 'deshecho' ? 'badge-deshecho' : (m.estado === 'descartado' ? 'badge-descartado' : 'badge-movido')}}">
                     ${{m.estado}}
                   </span>
                 </td>
                 <td>
-                  ${{m.estado === 'movido' ? `
+                  ${{(m.estado === 'movido' || m.estado === 'descartado') ? `
                     <button class="btn-sm" onclick="deshacerMovimiento('${{m.id_operacion}}')">
                       Deshacer
                     </button>
@@ -3646,18 +4303,23 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         }}
         await cargarHistorial();
         await cargarDatos();
+        if (pestanaActual === 'descartados') {{
+          await cargarCapitulosDescartados();
+        }} else if (pestanaActual === 'capitulos-cerrados') {{
+          await cargarCapitulosCerrados();
+        }}
       }} catch (e) {{
         mostrarError(e.message);
       }}
     }}
 
     async function deshacerUltimoLote() {{
-      const primerMovido = historialActual.find(m => m.estado === 'movido');
-      if (!primerMovido) {{
+      const primerReversible = historialActual.find(m => m.estado === 'movido' || m.estado === 'descartado');
+      if (!primerReversible) {{
         mostrarError("No hay operaciones pendientes de deshacer en el historial.");
         return;
       }}
-      await deshacerMovimiento(primerMovido.id_operacion);
+      await deshacerMovimiento(primerReversible.id_operacion);
     }}
 
     async function iniciarMover(loteId) {{

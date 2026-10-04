@@ -22,6 +22,7 @@ import http.client
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
 import threading
 import time
@@ -2139,6 +2140,465 @@ class TestCapituloSoloMaterialNuevo(unittest.TestCase):
                 personaje_deducido, personaje,
                 f"obtener_personaje_de_alias_inicial({nombre_archivo}) retornó '{personaje_deducido}', esperado '{personaje}'"
             )
+
+
+
+class TestDescartarCapitulo(unittest.TestCase):
+    """Pruebas exhaustivas para el descarte de capítulos a la sala de cuarentena _descartados."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp(prefix="test_descartar_capitulo_")
+        self.descargas = os.path.join(self.tmp_dir, "Descargas")
+        self.destino = os.path.join(self.descargas, "_lucie")
+        self.db_path = os.path.join(self.tmp_dir, "bandeja.db")
+        self.bitacora = os.path.join(self.tmp_dir, "bitacora.jsonl")
+        self.alias_file = os.path.join(self.tmp_dir, "alias.json")
+
+        os.makedirs(self.descargas, exist_ok=True)
+        os.makedirs(self.destino, exist_ok=True)
+
+        with open(self.alias_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "lucie": ["lucie", "luci"],
+                "roli": ["roli", "laroli", "magui"],
+                "mailen": ["mailen"]
+            }, f)
+
+        self.config = ConfiguracionBandeja()
+        self.config.ruta_descargas = self.descargas
+        self.config.ruta_destino_base = self.destino
+        self.config.archivo_alias_personajes = self.alias_file
+        self.config.puerto_servidor = 8805
+        self.config.host_servidor = "127.0.0.1"
+
+        self.db = GestorBaseDatosBandeja(self.db_path)
+        self.movimientos = GestorMovimientosBandeja(self.descargas, self.destino, self.db, self.bitacora)
+        self.filtro = FiltroListaBlanca(self.config)
+        self.detector = DetectorDescargasActivas(0.0)
+        self.agrupador = AgrupadorLotes(10)
+        self.vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+
+        self.servidor = None
+        self.hilo_servidor = None
+
+    def tearDown(self):
+        if self.servidor:
+            self.servidor.shutdown()
+            self.servidor.server_close()
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _crear_archivo(self, ruta: str, contenido: bytes = b"datos de prueba") -> str:
+        os.makedirs(os.path.dirname(ruta), exist_ok=True)
+        with open(ruta, "wb") as f:
+            f.write(contenido)
+        return ruta
+
+    def _iniciar_servidor_prueba(self, token_csrf: str = "csrf_test_token_123"):
+        miniaturas = GeneradorMiniaturas(self.db, os.path.join(self.tmp_dir, "thumbs"))
+        self.servidor = crear_servidor(
+            self.config, self.db, self.vigilante, self.movimientos, miniaturas, token_csrf=token_csrf
+        )
+        self.token_csrf = token_csrf
+        self.hilo_servidor = threading.Thread(target=self.servidor.serve_forever, daemon=True)
+        self.hilo_servidor.start()
+        time.sleep(0.2)
+
+    def _request(self, method: str, path: str, headers: dict = None, body: str = None) -> Tuple[int, dict, bytes]:
+        conn = http.client.HTTPConnection("127.0.0.1", self.config.puerto_servidor, timeout=5)
+        headers = headers or {}
+        conn.request(method, path, body=body, headers=headers)
+        res = conn.getresponse()
+        raw = res.read()
+        conn.close()
+        try:
+            parsed_json = json.loads(raw.decode("utf-8"))
+        except Exception:
+            parsed_json = {}
+        return res.status, parsed_json, raw
+
+    def test_simulacion_descartar_capitulo(self):
+        """La simulación calcula origen, destino en _descartados, cantidad de archivos y no altera el disco."""
+        cap = self.db.empezar_capitulo("lucie", "paseo_playa")
+        cap_id = cap["id"]
+
+        carpeta_escena = os.path.join(self.destino, "lucie", "paseo_playa")
+        f1 = self._crear_archivo(os.path.join(carpeta_escena, "foto1.jpg"), b"contenido foto")
+        f2 = self._crear_archivo(os.path.join(carpeta_escena, "video1.mp4"), b"contenido video")
+
+        sim = self.movimientos.simular_descartar_capitulo(cap_id)
+
+        self.assertTrue(sim["valido"])
+        self.assertEqual(sim["capitulo_id"], cap_id)
+        self.assertEqual(sim["personaje"], "lucie")
+        self.assertEqual(sim["escena"], "paseo_playa")
+        self.assertEqual(sim["total_archivos"], 2)
+        self.assertEqual(sim["peso_total"], len(b"contenido foto") + len(b"contenido video"))
+        self.assertEqual(sim["origen_carpeta"], carpeta_escena)
+        self.assertIn("_descartados", sim["destino_carpeta"])
+        self.assertIn("lucie", sim["destino_carpeta"])
+        self.assertIn("Esto NO borra", sim["aviso"])
+        self.assertTrue(sim["carpeta_existe"])
+        self.assertFalse(sim["carpeta_vacia"])
+
+        # Verificar que el destino no fue creado todavía
+        self.assertFalse(os.path.exists(sim["destino_carpeta"]))
+        # Verificar que el origen sigue intacto
+        self.assertTrue(os.path.exists(f1))
+        self.assertTrue(os.path.exists(f2))
+
+    def test_descartar_mueve_carpeta_completa_sin_perder_archivos(self):
+        """Descartar traslada la carpeta con os.rename; compara hashes SHA-256 antes y después."""
+        cap = self.db.empezar_capitulo("lucie", "parque")
+        cap_id = cap["id"]
+
+        carpeta_escena = os.path.join(self.destino, "lucie", "parque")
+        f1 = self._crear_archivo(os.path.join(carpeta_escena, "foto_arbol.jpg"), b"arbol_bytes_12345")
+        f2 = self._crear_archivo(os.path.join(carpeta_escena, "clip_fuente.mp4"), b"fuente_bytes_67890")
+
+        hash1 = calcular_sha256(f1)
+        hash2 = calcular_sha256(f2)
+
+        # Registrar en bandeja_archivos
+        self.db.registrar_o_actualizar(hash1, f1, "movido", "lucie", "parque")
+        self.db.registrar_o_actualizar(hash2, f2, "movido", "lucie", "parque")
+
+        sim = self.movimientos.simular_descartar_capitulo(cap_id)
+        res = self.movimientos.ejecutar_descartar_capitulo(sim, "parque")
+
+        self.assertTrue(res["exito"])
+        self.assertEqual(res["total_archivos"], 2)
+
+        # El origen ya no debe existir
+        self.assertFalse(os.path.exists(carpeta_escena))
+
+        # El destino debe existir con los archivos exactos y hashes idénticos
+        destino_carpeta = sim["destino_carpeta"]
+        self.assertTrue(os.path.exists(destino_carpeta))
+        dest_f1 = os.path.join(destino_carpeta, "foto_arbol.jpg")
+        dest_f2 = os.path.join(destino_carpeta, "clip_fuente.mp4")
+        self.assertTrue(os.path.exists(dest_f1))
+        self.assertTrue(os.path.exists(dest_f2))
+
+        self.assertEqual(calcular_sha256(dest_f1), hash1)
+        self.assertEqual(calcular_sha256(dest_f2), hash2)
+
+        # Base de datos: capítulo marcado como descartado
+        cap_db = self.db.obtener_capitulo_por_id(cap_id)
+        self.assertEqual(cap_db["descartado"], 1)
+        self.assertIsNotNone(cap_db["fecha_descartado"])
+
+        # bandeja_archivos: rutas actualizadas y estado descartado
+        arch1 = self.db.obtener_por_hash(hash1)
+        arch2 = self.db.obtener_por_hash(hash2)
+        self.assertEqual(arch1["estado"], "descartado")
+        self.assertEqual(arch2["estado"], "descartado")
+        self.assertEqual(arch1["ruta_actual"], dest_f1)
+        self.assertEqual(arch2["ruta_actual"], dest_f2)
+
+        # Bitácora contiene evento descartar_capitulo
+        with open(self.bitacora, "r", encoding="utf-8") as f:
+            lineas = [json.loads(line) for line in f if line.strip()]
+        eventos_descarte = [e for e in lineas if e.get("evento") == "descartar_capitulo"]
+        self.assertEqual(len(eventos_descarte), 1)
+        self.assertEqual(eventos_descarte[0]["escena"], "parque")
+        self.assertEqual(eventos_descarte[0]["total_archivos"], 2)
+
+    def test_confirmacion_nombre_incorrecto_rechazada(self):
+        """Si el nombre de confirmación no coincide con la escena, se rechaza y nada se mueve ni altera."""
+        cap = self.db.empezar_capitulo("roli", "gimnasio")
+        carpeta_escena = os.path.join(self.destino, "roli", "gimnasio")
+        f1 = self._crear_archivo(os.path.join(carpeta_escena, "pesa.jpg"), b"foto pesa")
+
+        sim = self.movimientos.simular_descartar_capitulo(cap["id"])
+
+        for nombre_invalido in ["otro", "Gimnasio", "gimnasio ", "gimnasi", ""]:
+            with self.assertRaises((ValueError, ErrorValidacionEscena)):
+                self.movimientos.ejecutar_descartar_capitulo(sim, nombre_invalido)
+
+        # Verificar que el origen y BD están intactos
+        self.assertTrue(os.path.exists(carpeta_escena))
+        self.assertTrue(os.path.exists(f1))
+        cap_db = self.db.obtener_capitulo_por_id(cap["id"])
+        self.assertEqual(cap_db["descartado"], 0)
+
+    def test_colision_destino_resuelta_sin_pisar(self):
+        """Si la carpeta en _descartados ya existiera, se le asigna sufijo numérico y no pisa nada."""
+        cap = self.db.empezar_capitulo("mailen", "patin")
+        carpeta_escena = os.path.join(self.destino, "mailen", "patin")
+        f1 = self._crear_archivo(os.path.join(carpeta_escena, "patin1.mp4"), b"video patin")
+
+        sim1 = self.movimientos.simular_descartar_capitulo(cap["id"])
+        destino_esperado = sim1["destino_carpeta"]
+
+        # Crear carpeta de colisión con un archivo previo
+        archivo_previo = self._crear_archivo(os.path.join(destino_esperado, "no_tocar.txt"), b"datos_sagrados")
+
+        # Simular nuevamente: debe asignar sufijo ' (1)'
+        sim2 = self.movimientos.simular_descartar_capitulo(cap["id"])
+        self.assertTrue(sim2["destino_carpeta"].endswith(" (1)"))
+        self.assertNotEqual(sim2["destino_carpeta"], destino_esperado)
+
+        # Ejecutar descarte
+        res = self.movimientos.ejecutar_descartar_capitulo(sim2, "patin")
+        self.assertTrue(res["exito"])
+
+        # Verificar que el archivo previo en la ruta original no fue tocado
+        self.assertTrue(os.path.exists(archivo_previo))
+        with open(archivo_previo, "rb") as f:
+            self.assertEqual(f.read(), b"datos_sagrados")
+
+        # Verificar que los archivos del capítulo están en la carpeta con sufijo
+        self.assertTrue(os.path.exists(os.path.join(sim2["destino_carpeta"], "patin1.mp4")))
+
+    def test_deshacer_restaura_todo_y_se_niega_si_ocupado(self):
+        """Deshacer restaura la carpeta a su origen; si el origen está ocupado, se niega sin pisar."""
+        cap = self.db.empezar_capitulo("lucie", "recuerdos")
+        carpeta_escena = os.path.join(self.destino, "lucie", "recuerdos")
+        f1 = self._crear_archivo(os.path.join(carpeta_escena, "foto.jpg"), b"foto recuerdos")
+        hash1 = calcular_sha256(f1)
+        self.db.registrar_o_actualizar(hash1, f1, "movido", "lucie", "recuerdos")
+
+        sim = self.movimientos.simular_descartar_capitulo(cap["id"])
+        res = self.movimientos.ejecutar_descartar_capitulo(sim, "recuerdos")
+        id_operacion = res["id_operacion"]
+
+        # 1. Intentar deshacer cuando el origen fue ocupado por un nuevo archivo/carpeta
+        os.makedirs(carpeta_escena, exist_ok=True)
+        self._crear_archivo(os.path.join(carpeta_escena, "intruso.txt"), b"ocupante")
+
+        with self.assertRaises(ErrorDeshacer) as ctx:
+            self.movimientos.deshacer_operacion(id_operacion)
+        self.assertIn("ya se encuentra ocupada", str(ctx.exception))
+
+        # La carpeta en cuarentena no debe haber sido tocada
+        self.assertTrue(os.path.exists(sim["destino_carpeta"]))
+
+        # 2. Desocupar la ruta de origen y volver a intentar deshacer
+        os.remove(os.path.join(carpeta_escena, "intruso.txt"))
+        os.rmdir(carpeta_escena)
+
+        undo_res = self.movimientos.deshacer_operacion(id_operacion)
+        self.assertTrue(undo_res["exito"])
+
+        # Origen restaurado
+        self.assertTrue(os.path.exists(carpeta_escena))
+        restaurado_f1 = os.path.join(carpeta_escena, "foto.jpg")
+        self.assertTrue(os.path.exists(restaurado_f1))
+        self.assertEqual(calcular_sha256(restaurado_f1), hash1)
+
+        # Destino en _descartados ya no existe
+        self.assertFalse(os.path.exists(sim["destino_carpeta"]))
+
+        # Base de datos: descartado = 0, estado = 'cerrado'
+        cap_db = self.db.obtener_capitulo_por_id(cap["id"])
+        self.assertEqual(cap_db["descartado"], 0)
+        self.assertEqual(cap_db["estado"], "cerrado")
+
+        # Archivo en base de datos restaurado a 'movido'
+        arch_db = self.db.obtener_por_hash(hash1)
+        self.assertEqual(arch_db["estado"], "movido")
+        self.assertEqual(arch_db["ruta_actual"], restaurado_f1)
+
+        # Bitácora registra evento deshacer
+        with open(self.bitacora, "r", encoding="utf-8") as f:
+            lineas = [json.loads(line) for line in f if line.strip()]
+        reversiones = [e for e in lineas if e.get("evento") == "deshacer" and e.get("id_operacion_revertida") == id_operacion]
+        self.assertEqual(len(reversiones), 1)
+
+    def test_capitulo_activo_descartado_deja_de_asignar_archivos(self):
+        """Al descartar el capítulo activo, este se cierra automáticamente y los archivos nuevos no se le asignan."""
+        self.db.empezar_capitulo("lucie", "paseo_activo")
+        self.assertTrue(self.db.obtener_capitulo_activo()["habilitado"])
+
+        carpeta_escena = os.path.join(self.destino, "lucie", "paseo_activo")
+        self._crear_archivo(os.path.join(carpeta_escena, "f1.jpg"), b"foto 1")
+
+        sim = self.movimientos.simular_descartar_capitulo(self.db.obtener_capitulo_activo()["id"])
+        self.movimientos.ejecutar_descartar_capitulo(sim, "paseo_activo")
+
+        # Debe haber dejado de ser activo
+        cap_activo = self.db.obtener_capitulo_activo()
+        self.assertFalse(cap_activo["habilitado"])
+
+        # Nuevo archivo candidato que llega a Descargas
+        self._crear_archivo(os.path.join(self.descargas, "lucie_nuevo_video.mp4"), b"video nuevo")
+        self.vigilante.escanear()
+        self.vigilante.escanear()
+
+        estado = self.vigilante.obtener_estado()
+        lote = next((l for l in estado["lotes"] if any(a["nombre"] == "lucie_nuevo_video.mp4" for a in l["archivos"])), None)
+        self.assertIsNotNone(lote)
+        # No debe tener sugerida la escena descartada
+        self.assertNotEqual(lote.get("escena_sugerida"), "paseo_activo")
+
+    def test_descartar_capitulo_sin_carpeta_o_vacia(self):
+        """Si la carpeta no existe en disco o está vacía, se descarta el capítulo en SQLite sin errores."""
+        cap = self.db.empezar_capitulo("mailen", "vacio_total")
+        cap_id = cap["id"]
+
+        sim = self.movimientos.simular_descartar_capitulo(cap_id)
+        self.assertTrue(sim["carpeta_vacia"])
+        self.assertFalse(sim["carpeta_existe"])
+        self.assertEqual(sim["total_archivos"], 0)
+
+        res = self.movimientos.ejecutar_descartar_capitulo(sim, "vacio_total")
+        self.assertTrue(res["exito"])
+        self.assertEqual(res["total_archivos"], 0)
+
+        cap_db = self.db.obtener_capitulo_por_id(cap_id)
+        self.assertEqual(cap_db["descartado"], 1)
+
+    def test_migracion_tabla_capitulos_con_datos_previos(self):
+        """Migración segura de bandeja_capitulos cuando la columna descartado no existe en BD previa."""
+        db_legada_path = os.path.join(self.tmp_dir, "db_legada.sqlite")
+        conn = sqlite3.connect(db_legada_path)
+        with conn:
+            conn.execute("""
+                CREATE TABLE bandeja_capitulos (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    personaje TEXT NOT NULL,
+                    nombre TEXT NOT NULL,
+                    fecha_inicio TEXT NOT NULL,
+                    fecha_fin TEXT,
+                    archivos_movidos INTEGER DEFAULT 0,
+                    estado TEXT NOT NULL DEFAULT 'activo' CHECK(estado IN ('activo', 'cerrado'))
+                )
+            """)
+            conn.execute("""
+                INSERT INTO bandeja_capitulos (personaje, nombre, fecha_inicio, estado)
+                VALUES ('lucie', 'cap_preexistente', '2026-02-01T10:00:00', 'cerrado')
+            """)
+        conn.close()
+
+        # Instanciar GestorBaseDatosBandeja: ejecutará la migración ALTER TABLE
+        db_migrada = GestorBaseDatosBandeja(db_legada_path)
+
+        # Verificar que el capítulo preexistente sigue intacto y con descartado = 0
+        cerrados = db_migrada.listar_capitulos_cerrados()
+        self.assertEqual(len(cerrados), 1)
+        self.assertEqual(cerrados[0]["nombre"], "cap_preexistente")
+        self.assertEqual(cerrados[0].get("descartado", 0), 0)
+
+        # Verificar que se puede descartar y listar en descartados
+        db_migrada.marcar_capitulo_descartado(cerrados[0]["id"], descartado=True)
+        self.assertEqual(len(db_migrada.listar_capitulos_cerrados()), 0)
+
+        descartados = db_migrada.listar_capitulos_descartados()
+        self.assertEqual(len(descartados), 1)
+        self.assertEqual(descartados[0]["nombre"], "cap_preexistente")
+
+    def test_endpoints_descartar_rechazan_sin_csrf_o_host_invalido(self):
+        """Los endpoints de descarte exigen CSRF, validación de Host y rechazan anomalías."""
+        self._iniciar_servidor_prueba()
+
+        cap = self.db.empezar_capitulo("roli", "ensayo")
+        cap_id = cap["id"]
+        carpeta_escena = os.path.join(self.destino, "roli", "ensayo")
+        self._crear_archivo(os.path.join(carpeta_escena, "ensayo.mp4"), b"video ensayo")
+
+        # 1. Simulación sin CSRF -> 403 Forbidden
+        status, _, _ = self._request(
+            "POST", "/api/capitulos/descartar-simular",
+            headers={"Content-Type": "application/json", "Host": "127.0.0.1:8805"},
+            body=json.dumps({"id": cap_id})
+        )
+        self.assertEqual(status, 403)
+
+        # 2. Simulación con Host falso -> 403 Forbidden
+        status, _, _ = self._request(
+            "POST", "/api/capitulos/descartar-simular",
+            headers={
+                "Content-Type": "application/json",
+                "Host": "sitio-malicioso.com",
+                "X-CSRF-Token": self.token_csrf
+            },
+            body=json.dumps({"id": cap_id})
+        )
+        self.assertEqual(status, 403)
+
+        # 3. Simulación válida -> 200 OK
+        status, data_sim, _ = self._request(
+            "POST", "/api/capitulos/descartar-simular",
+            headers={
+                "Content-Type": "application/json",
+                "Host": "127.0.0.1:8805",
+                "X-CSRF-Token": self.token_csrf
+            },
+            body=json.dumps({"id": cap_id})
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(data_sim.get("valido"))
+
+        # 4. Ejecución con nombre de confirmación incorrecto -> 400 Bad Request
+        status, _, _ = self._request(
+            "POST", "/api/capitulos/descartar",
+            headers={
+                "Content-Type": "application/json",
+                "Host": "127.0.0.1:8805",
+                "X-CSRF-Token": self.token_csrf
+            },
+            body=json.dumps({
+                "simulacion": data_sim,
+                "nombre_confirmacion": "nombre_erroneo"
+            })
+        )
+        self.assertEqual(status, 400)
+
+        # 5. Ejecución con nombre de confirmación correcto -> 200 OK
+        status, data_res, _ = self._request(
+            "POST", "/api/capitulos/descartar",
+            headers={
+                "Content-Type": "application/json",
+                "Host": "127.0.0.1:8805",
+                "X-CSRF-Token": self.token_csrf
+            },
+            body=json.dumps({
+                "simulacion": data_sim,
+                "nombre_confirmacion": "ensayo"
+            })
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(data_res.get("exito"))
+
+        # 6. GET /api/capitulos/descartados devuelve el capítulo descartado
+        status, data_desc, _ = self._request("GET", "/api/capitulos/descartados")
+        self.assertEqual(status, 200)
+        descartados = data_desc.get("descartados", [])
+        self.assertTrue(any(c["nombre"] == "ensayo" for c in descartados))
+
+    def test_confinamiento_traversal_o_symlink_saliente_rechazado(self):
+        """Path traversal o enlaces simbólicos que apunten fuera de _lucie se rechazan tajantemente."""
+        cap = self.db.empezar_capitulo("lucie", "test_symlink")
+        carpeta_escena = os.path.join(self.destino, "lucie", "test_symlink")
+        os.makedirs(carpeta_escena, exist_ok=True)
+
+        # Crear symlink a un archivo fuera de _lucie (ej. en self.descargas o self.tmp_dir)
+        archivo_afuera = os.path.join(self.tmp_dir, "afuera.txt")
+        with open(archivo_afuera, "wb") as f:
+            f.write(b"fuera de lucie")
+
+        symlink_path = os.path.join(carpeta_escena, "link_peligroso.txt")
+        os.symlink(archivo_afuera, symlink_path)
+
+        with self.assertRaises(ErrorSeguridadBandeja):
+            self.movimientos.simular_descartar_capitulo(cap["id"])
+
+    def test_aislamiento_descartados_no_es_escena_ni_destino(self):
+        """_descartados nunca puede ser usado como escena válida ni reconocido como carpeta de escena."""
+        valido, motivo = ValidadorEscenas.validar_nombre_escena(
+            "_descartados", self.destino, self.descargas, es_existente_descargas=False, personaje="lucie"
+        )
+        self.assertFalse(valido)
+        self.assertIn("_descartados", motivo)
+
+        valido_sub, _ = ValidadorEscenas.validar_nombre_escena(
+            "_descartados/sub", self.destino, self.descargas, es_existente_descargas=False, personaje="lucie"
+        )
+        self.assertFalse(valido_sub)
+
+        # FiltroListaBlanca nunca debe considerar _descartados como escena existente
+        self.assertFalse(self.filtro.es_carpeta_escena_existente("_descartados"))
+        self.assertFalse(self.filtro.es_carpeta_escena_existente("_cualquier_oculta"))
 
 
 class TestAuditoriaASTAntiBorrado(unittest.TestCase):
