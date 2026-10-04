@@ -1500,23 +1500,81 @@ class TestRenombradoAlMover(unittest.TestCase):
         self.tmp_dir_obj.cleanup()
 
     def test_calcular_base_escena_con_y_sin_alias(self):
-        """Verifica que la base no duplique el alias y que lo agregue cuando falte."""
-        # Escena que ya empieza con personaje o alias
+        """Verifica que la base no duplique el alias de su propio personaje y que anteponga el personaje si es de otro o sin alias."""
+        # Ejemplos requeridos por la regla de negocio:
+        # lucie + "lucietrapitos" -> lucietrapitos
         self.assertEqual(self.gestor.calcular_base_escena("lucie", "lucietrapitos"), "lucietrapitos")
+        # lucie + "luci-fiesta" -> luci-fiesta
+        self.assertEqual(self.gestor.calcular_base_escena("lucie", "luci-fiesta"), "luci-fiesta")
+        # roli + "lucietrapitos" -> rolilucietrapitos (alias de otro personaje no se omite)
+        self.assertEqual(self.gestor.calcular_base_escena("roli", "lucietrapitos"), "rolilucietrapitos")
+        # roli + "maguifiesta" -> maguifiesta (magui es alias de roli)
+        self.assertEqual(self.gestor.calcular_base_escena("roli", "maguifiesta"), "maguifiesta")
+        # mailen + "bici" -> mailenbici (sin alias)
+        self.assertEqual(self.gestor.calcular_base_escena("mailen", "bici"), "mailenbici")
+        # lucie + "trapitos" -> lucietrapitos (sin alias)
+        self.assertEqual(self.gestor.calcular_base_escena("lucie", "trapitos"), "lucietrapitos")
+
+        # Casos adicionales de alias propios
         self.assertEqual(self.gestor.calcular_base_escena("lucie", "lucitrapitos"), "lucitrapitos")
         self.assertEqual(self.gestor.calcular_base_escena("roli", "rolibici"), "rolibici")
         self.assertEqual(self.gestor.calcular_base_escena("roli", "larolibici"), "larolibici")
-        self.assertEqual(self.gestor.calcular_base_escena("roli", "maguifiesta"), "maguifiesta")
         self.assertEqual(self.gestor.calcular_base_escena("mailen", "mailenauto"), "mailenauto")
 
-        # Escena sin alias al inicio: se antepone el personaje
-        self.assertEqual(self.gestor.calcular_base_escena("lucie", "trapitos"), "lucietrapitos")
-        self.assertEqual(self.gestor.calcular_base_escena("roli", "bici"), "rolibici")
-        self.assertEqual(self.gestor.calcular_base_escena("mailen", "auto"), "mailenauto")
+        # Casos adicionales de alias de otros personajes
+        self.assertEqual(self.gestor.calcular_base_escena("mailen", "lucietrapitos"), "mailenlucietrapitos")
+        self.assertEqual(self.gestor.calcular_base_escena("mailen", "rolibici"), "mailenrolibici")
+        self.assertEqual(self.gestor.calcular_base_escena("lucie", "rolibici"), "lucierolibici")
+        self.assertEqual(self.gestor.calcular_base_escena("lucie", "maguifiesta"), "luciemaguifiesta")
+        self.assertEqual(self.gestor.calcular_base_escena("roli", "mailenbici"), "rolimailenbici")
 
         # Normalización a minúsculas y eliminación de espacios
         self.assertEqual(self.gestor.calcular_base_escena("LUCIE", "  TRAPITOS  "), "lucietrapitos")
         self.assertEqual(self.gestor.calcular_base_escena("roli", "  PARQUE  "), "roliparque")
+
+    def test_obtener_personaje_de_alias_inicial_consistente_con_base(self):
+        """
+        Verifica la regla de negocio: todo nombre generado <base>1.jpg debe ser leído
+        por obtener_personaje_de_alias_inicial como el MISMO personaje elegido en el panel.
+        """
+        filtro = FiltroListaBlanca(ConfiguracionBandeja())
+
+        casos_prueba = [
+            # Ejemplos requeridos
+            ("lucie", "lucietrapitos"),
+            ("lucie", "luci-fiesta"),
+            ("roli", "lucietrapitos"),
+            ("roli", "maguifiesta"),
+            ("mailen", "bici"),
+            ("lucie", "trapitos"),
+            # Combinaciones cruzadas entre todos los personajes
+            ("roli", "rolibici"),
+            ("roli", "larolibici"),
+            ("roli", "bici"),
+            ("mailen", "mailenauto"),
+            ("mailen", "auto"),
+            ("mailen", "lucietrapitos"),
+            ("mailen", "rolibici"),
+            ("mailen", "maguifiesta"),
+            ("lucie", "lucitrapitos"),
+            ("lucie", "rolibici"),
+            ("lucie", "larolibici"),
+            ("lucie", "maguifiesta"),
+            ("lucie", "mailenbici"),
+            ("roli", "mailenbici"),
+        ]
+
+        for personaje, escena in casos_prueba:
+            with self.subTest(personaje=personaje, escena=escena):
+                base = self.gestor.calcular_base_escena(personaje, escena)
+                nombre_generado = f"{base}1.jpg"
+                personaje_deducido = filtro.obtener_personaje_de_alias_inicial(nombre_generado)
+                self.assertEqual(
+                    personaje_deducido,
+                    personaje,
+                    f"Para personaje={personaje} y escena={escena} -> base={base} generó {nombre_generado}, "
+                    f"pero obtener_personaje_de_alias_inicial devolvió {personaje_deducido}"
+                )
 
     def test_contadores_separados_foto_y_video(self):
         """Foto y video del mismo lote reciben contadores independientes (<base>1.jpg y <base>1.mp4)."""

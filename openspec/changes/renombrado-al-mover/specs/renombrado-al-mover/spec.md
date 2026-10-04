@@ -7,15 +7,32 @@ Define el comportamiento del sistema para el renombrado automático de archivos 
 ## ADDED Requirements
 
 ### Requirement: Cálculo de base de nombre por escena y personaje
-El sistema SHALL calcular la base del nombre en minúsculas y sin espacios. Si el nombre de la escena ya comienza con el personaje o alguno de sus alias conocidos, la base SHALL ser exactamente el nombre de la escena. En caso contrario, la base SHALL componerse concatenando el identificador del personaje y el nombre de la escena (`<personaje><escena>`).
+El sistema SHALL calcular la base del nombre en minúsculas y sin espacios. El sistema SHALL omitir el prefijo del personaje ÚNICAMENTE si la escena (en minúscula) ya comienza con el nombre del personaje elegido o con un alias de ESE personaje. Si la escena comienza con un alias de OTRO personaje, o con ninguno, la base SHALL componerse concatenando el identificador del personaje y el nombre de la escena (`<personaje><escena>`). Todo nombre generado con esta base (`<base><número>.<ext>`) SHALL ser interpretado por `obtener_personaje_de_alias_inicial` como el MISMO personaje que fue seleccionado en el panel.
 
-#### Scenario: Escena que ya incluye el alias del personaje
+#### Scenario: Escena que ya incluye el alias del personaje elegido
 - **WHEN** se mueve un archivo con personaje `lucie` y escena `lucietrapitos`
 - **THEN** la base calculada es `lucietrapitos` sin duplicar el prefijo `lucie`
 
-#### Scenario: Escena sin alias del personaje
-- **WHEN** se mueve un archivo con personaje `lucie` y escena `trapitos`
-- **THEN** la base calculada es `lucietrapitos` anteponiendo el personaje
+#### Scenario: Escena con variante de alias del personaje elegido
+- **WHEN** se mueve un archivo con personaje `lucie` y escena `luci-fiesta`
+- **THEN** la base calculada es `luci-fiesta` reconociendo el alias `luci` del personaje `lucie`
+
+#### Scenario: Escena con alias de otro personaje
+- **WHEN** se mueve un archivo con personaje elegido `roli` y escena `lucietrapitos`
+- **THEN** la base calculada es `rolilucietrapitos`, anteponiendo el personaje elegido para asegurar que el prefijo dominante sea `roli`
+
+#### Scenario: Escena con alias propio no canónico
+- **WHEN** se mueve un archivo con personaje `roli` y escena `maguifiesta`
+- **THEN** la base calculada es `maguifiesta`, dado que `magui` es un alias reconocido de `roli`
+
+#### Scenario: Escena sin alias de personaje
+- **WHEN** se mueve un archivo con personaje `mailen` y escena `bici`, o `lucie` y `trapitos`
+- **THEN** la base calculada es `mailenbici` y `lucietrapitos` respectivamente, anteponiendo el personaje elegido
+
+#### Scenario: Consistencia estricta con deducción de personaje inicial
+- **WHEN** se genera un nombre de archivo a partir de `<base>1.jpg`
+- **THEN** la invocación de `obtener_personaje_de_alias_inicial` devuelve de forma unívoca el personaje elegido en el panel
+
 
 ---
 

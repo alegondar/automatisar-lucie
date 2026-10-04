@@ -906,25 +906,37 @@ class GestorMovimientosBandeja:
         self.alias_map = self._cargar_alias(ruta_alias)
         self._lock = threading.Lock()
 
-    def _cargar_alias(self, ruta_alias: str) -> Dict[str, Set[str]]:
+    def _cargar_alias(self, ruta_alias: Optional[str]) -> Dict[str, Set[str]]:
         alias_map: Dict[str, Set[str]] = {
             "lucie": {"lucie", "luci"},
             "roli": {"roli", "laroli", "magui"},
             "mailen": {"mailen"}
         }
-        if os.path.exists(ruta_alias):
+        if ruta_alias and os.path.exists(ruta_alias):
             try:
                 with open(ruta_alias, "r", encoding="utf-8") as f:
                     datos = json.load(f)
-                for r in datos.get("reglas", []):
-                    pers = str(r.get("personaje", "")).strip().lower()
-                    if pers:
-                        if pers not in alias_map:
-                            alias_map[pers] = {pers}
-                        for pat in r.get("patrones", []):
-                            limpio = pat.replace("*", "").strip().lower()
-                            if limpio:
-                                alias_map[pers].add(limpio)
+                if isinstance(datos, dict):
+                    if "reglas" in datos:
+                        for r in datos.get("reglas", []):
+                            pers = str(r.get("personaje", "")).strip().lower()
+                            if pers:
+                                if pers not in alias_map:
+                                    alias_map[pers] = {pers}
+                                for pat in r.get("patrones", []):
+                                    limpio = pat.replace("*", "").strip().lower()
+                                    if limpio:
+                                        alias_map[pers].add(limpio)
+                    else:
+                        for pers, pats in datos.items():
+                            p_key = str(pers).strip().lower()
+                            if p_key not in alias_map:
+                                alias_map[p_key] = {p_key}
+                            if isinstance(pats, list):
+                                for pat in pats:
+                                    limpio = str(pat).replace("*", "").strip().lower()
+                                    if limpio:
+                                        alias_map[p_key].add(limpio)
             except Exception:
                 pass
         return alias_map
@@ -938,22 +950,31 @@ class GestorMovimientosBandeja:
     def calcular_base_escena(self, personaje: str, nombre_escena: str) -> str:
         """
         Calcula la base del nombre para los archivos a mover:
-        - Si el nombre de la escena ya comienza con el personaje o alguno de sus alias conocidos,
-          la base es la escena tal cual.
-        - Si no, la base es <personaje><escena>.
+        - Omitir el prefijo SOLO si la escena (en minúscula) empieza con el nombre del
+          personaje elegido o con un alias de ESE personaje.
+        - Si empieza con un alias de OTRO personaje, o con ninguno, la base es <personaje><escena>.
         - Siempre en minúsculas y sin espacios extra.
+        - Garantiza que obtener_personaje_de_alias_inicial deduzca exactamente el personaje elegido.
         """
         pers = (personaje or "lucie").strip().lower()
         escena = (nombre_escena or "").strip().lower()
 
-        sus_alias = set(self.alias_map.get(pers, {pers})) | {pers}
+        # Determinar el personaje canónico si se ingresó un alias
+        pers_canonico = pers
+        for can, aliases in self.alias_map.items():
+            if pers == can or pers in aliases:
+                pers_canonico = can
+                break
+
+        # Conjunto de alias exclusivos de este personaje
+        sus_alias = set(self.alias_map.get(pers_canonico, {pers_canonico})) | {pers_canonico, pers}
         alias_ordenados = sorted(sus_alias, key=len, reverse=True)
 
         for al in alias_ordenados:
             if escena.startswith(al):
                 return escena
 
-        return f"{pers}{escena}"
+        return f"{pers_canonico}{escena}"
 
     @classmethod
     def clasificar_familia_medio(cls, extension: str) -> str:
