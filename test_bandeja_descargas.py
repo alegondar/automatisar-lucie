@@ -252,8 +252,8 @@ class TestGestorMovimientosYDeshacer(unittest.TestCase):
         with open(arch1, "wb") as f:
             f.write(b"contenido 1")
 
-        # Crear previamente un archivo en el destino para forzar colisión
-        destino_colision = os.path.join(self.destino_base, "lucie", "escena1", "grok-video-1.mp4")
+        # Crear previamente un archivo en el destino para forzar incremento de contador
+        destino_colision = os.path.join(self.destino_base, "lucie", "escena1", "lucieescena11.mp4")
         os.makedirs(os.path.dirname(destino_colision), exist_ok=True)
         with open(destino_colision, "wb") as f:
             f.write(b"archivo previo existente")
@@ -266,7 +266,7 @@ class TestGestorMovimientosYDeshacer(unittest.TestCase):
         )
 
         destino_simulado = sim["movimientos"][0]["destino"]
-        self.assertTrue(destino_simulado.endswith("grok-video-1 (1).mp4"))
+        self.assertTrue(destino_simulado.endswith("lucieescena12.mp4"))
 
         # Ejecutar movimiento
         res = self.gestor.ejecutar_movimiento_lote(sim, lote_id="lote_1")
@@ -291,11 +291,11 @@ class TestGestorMovimientosYDeshacer(unittest.TestCase):
         )
 
         destino_calculado = sim["movimientos"][0]["destino"]
-        self.assertEqual(destino_calculado, os.path.join(carpeta_existente, "grok-video-2.mp4"))
+        self.assertEqual(destino_calculado, os.path.join(carpeta_existente, "roli parque1.mp4"))
 
         res = self.gestor.ejecutar_movimiento_lote(sim, "lote_2")
         self.assertTrue(res["exito"])
-        self.assertTrue(os.path.exists(os.path.join(carpeta_existente, "grok-video-2.mp4")))
+        self.assertTrue(os.path.exists(os.path.join(carpeta_existente, "roli parque1.mp4")))
         self.assertTrue(os.path.isdir(carpeta_existente))
 
     def test_deshacer_exitoso(self):
@@ -408,11 +408,11 @@ class TestGestorMovimientosYDeshacer(unittest.TestCase):
 
         self.assertEqual(
             dest_vid,
-            os.path.join(self.destino_base, "lucie", "parque_primavera", "grok-video-mixto.mp4")
+            os.path.join(self.destino_base, "lucie", "parque_primavera", "lucieparque_primavera1.mp4")
         )
         self.assertEqual(
             dest_img,
-            os.path.join(self.destino_base, "lucie", "parque_primavera", "lucie_20261003120000.png")
+            os.path.join(self.destino_base, "lucie", "parque_primavera", "lucieparque_primavera1.png")
         )
 
         # Ejecutar movimiento
@@ -452,7 +452,7 @@ class TestGestorMovimientosYDeshacer(unittest.TestCase):
         dest_img = sim["movimientos"][0]["destino"]
         self.assertEqual(
             dest_img,
-            os.path.join(self.destino_base, "mailen", "estudio", "toma_20261003140000.webp")
+            os.path.join(self.destino_base, "mailen", "estudio", "mailenestudio1.webp")
         )
 
         res = gestor_custom.ejecutar_movimiento_lote(sim, lote_id="lote_custom")
@@ -469,7 +469,6 @@ class TestGestorMovimientosYDeshacer(unittest.TestCase):
         config = ConfiguracionBandeja()
         config.ruta_descargas = self.descargas
         config.ruta_destino_base = self.destino_base
-        config.carpeta_imagenes = "imagenes"
 
         vigilante = VigilanteBandeja(
             config, self.db, FiltroListaBlanca(config), DetectorDescargasActivas(0.1), AgrupadorLotes(10)
@@ -917,9 +916,12 @@ class TestServidorHTTPYSeguridad(unittest.TestCase):
             self.assertIn("lucie", m["destino_relativo"])
             self.assertIn("prueba_bandeja", m["destino_relativo"])
 
-        # 2. Resalta el segmento de tipo ("imagenes" o "videos sin editar")
-        self.assertIn('<span class="tag-tipo tag-video">videos sin editar</span>', html_sim)
-        self.assertIn('<span class="tag-tipo tag-imagen">imagenes</span>', html_sim)
+        # 2. Muestra nombre original -> nombre nuevo y omite etiquetas obsoletas de tipo
+        self.assertIn("grok_sim_vid_01.mp4", html_sim)
+        self.assertIn("lucieprueba_bandeja1.mp4", html_sim)
+        self.assertIn("grok_sim_img_01.png", html_sim)
+        self.assertIn("lucieprueba_bandeja1.png", html_sim)
+        self.assertNotIn("tag-tipo", html_sim)
 
         # 3. La función generar_html_simulacion produce el mismo marcado coherente
         html_directo = generar_html_simulacion(sim_data)
@@ -1214,8 +1216,8 @@ class TestCapituloActivoYReconocimientoNombres(unittest.TestCase):
             id_op_b = data_mov["resultados"][1]["id_operacion"]
             self.assertNotEqual(id_op_a, id_op_b, "Cada lote debe conservar su propio id_operacion")
 
-            dest_a = os.path.join(self.destino, "lucie", "escena_lucie", "lucie_a.mp4")
-            dest_b = os.path.join(self.destino, "roli", "escena_roli", "roli_b.jpg")
+            dest_a = os.path.join(self.destino, "lucie", "escena_lucie", "lucieescena_lucie1.mp4")
+            dest_b = os.path.join(self.destino, "roli", "escena_roli", "roliescena_roli1.jpg")
             self.assertTrue(os.path.exists(dest_a))
             self.assertTrue(os.path.exists(dest_b))
             self.assertFalse(os.path.exists(arch_a))
@@ -1471,6 +1473,328 @@ class TestCicloVidaCapitulos(unittest.TestCase):
         self.assertEqual(lote["archivos"][0]["nombre"], "lucie_en_el_taller.mp4")
         self.assertEqual(lote["archivos"][0]["personaje"], "roli")
         self.assertEqual(lote["archivos"][0]["escena"], "taller_mecanico")
+
+
+class TestRenombradoAlMover(unittest.TestCase):
+    """Pruebas unitarias completas para el renombrado automático de archivos al mover."""
+
+    def setUp(self):
+        self.tmp_dir_obj = tempfile.TemporaryDirectory(prefix="test_renombrado_")
+        self.tmp_dir = self.tmp_dir_obj.name
+        self.descargas = os.path.join(self.tmp_dir, "Descargas")
+        self.destino_base = os.path.join(self.descargas, "_lucie")
+        os.makedirs(self.descargas, exist_ok=True)
+        os.makedirs(self.destino_base, exist_ok=True)
+
+        self.db_path = os.path.join(self.tmp_dir, "test_bandeja.sqlite")
+        self.bitacora_path = os.path.join(self.tmp_dir, "bitacora_test.jsonl")
+        self.db = GestorBaseDatosBandeja(self.db_path)
+        self.gestor = GestorMovimientosBandeja(
+            ruta_descargas=self.descargas,
+            ruta_destino_base=self.destino_base,
+            db=self.db,
+            ruta_bitacora=self.bitacora_path
+        )
+
+    def tearDown(self):
+        self.tmp_dir_obj.cleanup()
+
+    def test_calcular_base_escena_con_y_sin_alias(self):
+        """Verifica que la base no duplique el alias y que lo agregue cuando falte."""
+        # Escena que ya empieza con personaje o alias
+        self.assertEqual(self.gestor.calcular_base_escena("lucie", "lucietrapitos"), "lucietrapitos")
+        self.assertEqual(self.gestor.calcular_base_escena("lucie", "lucitrapitos"), "lucitrapitos")
+        self.assertEqual(self.gestor.calcular_base_escena("roli", "rolibici"), "rolibici")
+        self.assertEqual(self.gestor.calcular_base_escena("roli", "larolibici"), "larolibici")
+        self.assertEqual(self.gestor.calcular_base_escena("roli", "maguifiesta"), "maguifiesta")
+        self.assertEqual(self.gestor.calcular_base_escena("mailen", "mailenauto"), "mailenauto")
+
+        # Escena sin alias al inicio: se antepone el personaje
+        self.assertEqual(self.gestor.calcular_base_escena("lucie", "trapitos"), "lucietrapitos")
+        self.assertEqual(self.gestor.calcular_base_escena("roli", "bici"), "rolibici")
+        self.assertEqual(self.gestor.calcular_base_escena("mailen", "auto"), "mailenauto")
+
+        # Normalización a minúsculas y eliminación de espacios
+        self.assertEqual(self.gestor.calcular_base_escena("LUCIE", "  TRAPITOS  "), "lucietrapitos")
+        self.assertEqual(self.gestor.calcular_base_escena("roli", "  PARQUE  "), "roliparque")
+
+    def test_contadores_separados_foto_y_video(self):
+        """Foto y video del mismo lote reciben contadores independientes (<base>1.jpg y <base>1.mp4)."""
+        f1 = os.path.join(self.descargas, "grok-img-1.jpg")
+        f2 = os.path.join(self.descargas, "grok-img-2.png")
+        v1 = os.path.join(self.descargas, "grok-vid-1.mp4")
+        v2 = os.path.join(self.descargas, "grok-vid-2.webm")
+        for ruta in (f1, f2, v1, v2):
+            with open(ruta, "wb") as f:
+                f.write(b"dummy")
+
+        sim = self.gestor.simular_movimiento_lote(
+            archivos=[
+                {"ruta": f1, "tamanio": 5, "hash": "h_f1"},
+                {"ruta": f2, "tamanio": 5, "hash": "h_f2"},
+                {"ruta": v1, "tamanio": 5, "hash": "h_v1"},
+                {"ruta": v2, "tamanio": 5, "hash": "h_v2"}
+            ],
+            personaje="lucie",
+            nombre_escena="trapitos",
+            es_existente_descargas=False
+        )
+
+        nombres_nuevos = [m["nombre_nuevo"] for m in sim["movimientos"]]
+        self.assertIn("lucietrapitos1.jpg", nombres_nuevos)
+        self.assertIn("lucietrapitos2.png", nombres_nuevos)
+        self.assertIn("lucietrapitos1.mp4", nombres_nuevos)
+        self.assertIn("lucietrapitos2.webm", nombres_nuevos)
+
+    def test_orden_por_mtime_dentro_del_lote_y_desempate(self):
+        """Verifica ordenamiento por mtime ascendente y desempate por nombre original."""
+        p_c = os.path.join(self.descargas, "c_grok.jpg")
+        p_a = os.path.join(self.descargas, "a_grok.jpg")
+        p_b = os.path.join(self.descargas, "b_grok.jpg")
+        for p in (p_c, p_a, p_b):
+            with open(p, "wb") as f:
+                f.write(b"data")
+
+        # Asignar tiempos explícitos: B es el más viejo (1000), luego C (2000), luego A (3000)
+        os.utime(p_b, (1000, 1000))
+        os.utime(p_c, (2000, 2000))
+        os.utime(p_a, (3000, 3000))
+
+        sim = self.gestor.simular_movimiento_lote(
+            archivos=[
+                {"ruta": p_a, "tamanio": 4, "hash": "ha"},
+                {"ruta": p_c, "tamanio": 4, "hash": "hc"},
+                {"ruta": p_b, "tamanio": 4, "hash": "hb"}
+            ],
+            personaje="roli",
+            nombre_escena="bici",
+            es_existente_descargas=False
+        )
+
+        movs = sim["movimientos"]
+        self.assertEqual(movs[0]["nombre_original"], "b_grok.jpg")
+        self.assertEqual(movs[0]["nombre_nuevo"], "rolibici1.jpg")
+        self.assertEqual(movs[1]["nombre_original"], "c_grok.jpg")
+        self.assertEqual(movs[1]["nombre_nuevo"], "rolibici2.jpg")
+        self.assertEqual(movs[2]["nombre_original"], "a_grok.jpg")
+        self.assertEqual(movs[2]["nombre_nuevo"], "rolibici3.jpg")
+
+        # Desempate alfabético ante igual mtime
+        p_z = os.path.join(self.descargas, "z_grok.mp4")
+        p_m = os.path.join(self.descargas, "m_grok.mp4")
+        with open(p_z, "wb") as f:
+            f.write(b"v")
+        with open(p_m, "wb") as f:
+            f.write(b"v")
+        os.utime(p_z, (5000, 5000))
+        os.utime(p_m, (5000, 5000))
+
+        sim_empate = self.gestor.simular_movimiento_lote(
+            archivos=[{"ruta": p_z, "tamanio": 1, "hash": "hz"}, {"ruta": p_m, "tamanio": 1, "hash": "hm"}],
+            personaje="mailen",
+            nombre_escena="auto",
+            es_existente_descargas=False
+        )
+        self.assertEqual(sim_empate["movimientos"][0]["nombre_original"], "m_grok.mp4")
+        self.assertEqual(sim_empate["movimientos"][0]["nombre_nuevo"], "mailenauto1.mp4")
+        self.assertEqual(sim_empate["movimientos"][1]["nombre_original"], "z_grok.mp4")
+        self.assertEqual(sim_empate["movimientos"][1]["nombre_nuevo"], "mailenauto2.mp4")
+
+    def test_continuacion_numeracion_carpeta_poblada(self):
+        """Si la carpeta ya contiene archivos, la numeración continúa desde max_existente + 1."""
+        carpeta_destino = os.path.join(self.destino_base, "lucie", "trapitos")
+        os.makedirs(carpeta_destino, exist_ok=True)
+        with open(os.path.join(carpeta_destino, "lucietrapitos1.mp4"), "wb") as f:
+            f.write(b"v1")
+        with open(os.path.join(carpeta_destino, "lucietrapitos5.mp4"), "wb") as f:
+            f.write(b"v5")
+        with open(os.path.join(carpeta_destino, "lucietrapitos2.jpg"), "wb") as f:
+            f.write(b"f2")
+
+        vid_nuevo = os.path.join(self.descargas, "grok-video-nuevo.mp4")
+        img_nueva = os.path.join(self.descargas, "grok-image-nueva.png")
+        with open(vid_nuevo, "wb") as f:
+            f.write(b"vnew")
+        with open(img_nueva, "wb") as f:
+            f.write(b"fnew")
+
+        sim = self.gestor.simular_movimiento_lote(
+            archivos=[
+                {"ruta": vid_nuevo, "tamanio": 4, "hash": "hvn"},
+                {"ruta": img_nueva, "tamanio": 4, "hash": "hin"}
+            ],
+            personaje="lucie",
+            nombre_escena="trapitos",
+            es_existente_descargas=False
+        )
+
+        nombres_nuevos = {m["nombre_original"]: m["nombre_nuevo"] for m in sim["movimientos"]}
+        self.assertEqual(nombres_nuevos["grok-video-nuevo.mp4"], "lucietrapitos6.mp4")
+        self.assertEqual(nombres_nuevos["grok-image-nueva.png"], "lucietrapitos3.png")
+
+    def test_colision_case_insensitive(self):
+        """Verifica que si existe un archivo con distinta mayúscula/minúscula no se pisa."""
+        carpeta_destino = os.path.join(self.destino_base, "lucie", "trapitos")
+        os.makedirs(carpeta_destino, exist_ok=True)
+        # Existe con mayúsculas
+        archivo_existente = os.path.join(carpeta_destino, "Lucietrapitos1.JPG")
+        with open(archivo_existente, "wb") as f:
+            f.write(b"foto existente en mayusculas")
+
+        foto_nueva = os.path.join(self.descargas, "grok-img-123.jpg")
+        with open(foto_nueva, "wb") as f:
+            f.write(b"foto nueva")
+
+        sim = self.gestor.simular_movimiento_lote(
+            archivos=[{"ruta": foto_nueva, "tamanio": 10, "hash": "h_ci"}],
+            personaje="lucie",
+            nombre_escena="trapitos",
+            es_existente_descargas=False
+        )
+
+        self.assertEqual(sim["movimientos"][0]["nombre_nuevo"], "lucietrapitos2.jpg")
+        res = self.gestor.ejecutar_movimiento_lote(sim, lote_id="lote_ci")
+        self.assertTrue(res["exito"])
+        # Ambos archivos existen intactos
+        self.assertTrue(os.path.exists(archivo_existente))
+        self.assertTrue(os.path.exists(os.path.join(carpeta_destino, "lucietrapitos2.jpg")))
+
+    def test_multi_lote_sin_nombres_repetidos_misma_escena(self):
+        """Dos lotes destinados a la misma escena en una solicitud multi-lote no repiten nombres."""
+        f_a1 = os.path.join(self.descargas, "loteA_foto1.jpg")
+        f_a2 = os.path.join(self.descargas, "loteA_foto2.jpg")
+        f_b1 = os.path.join(self.descargas, "loteB_foto1.jpg")
+        f_b2 = os.path.join(self.descargas, "loteB_foto2.jpg")
+        for f in (f_a1, f_a2, f_b1, f_b2):
+            with open(f, "wb") as fh:
+                fh.write(b"data")
+
+        destinos_reservados = set()
+        sim_a = self.gestor.simular_movimiento_lote(
+            archivos=[{"ruta": f_a1, "tamanio": 4, "hash": "h_a1"}, {"ruta": f_a2, "tamanio": 4, "hash": "h_a2"}],
+            personaje="lucie",
+            nombre_escena="trapitos",
+            destinos_reservados=destinos_reservados
+        )
+        for m in sim_a["movimientos"]:
+            destinos_reservados.add(m["destino"])
+
+        sim_b = self.gestor.simular_movimiento_lote(
+            archivos=[{"ruta": f_b1, "tamanio": 4, "hash": "h_b1"}, {"ruta": f_b2, "tamanio": 4, "hash": "h_b2"}],
+            personaje="lucie",
+            nombre_escena="trapitos",
+            destinos_reservados=destinos_reservados
+        )
+
+        nombres_a = [m["nombre_nuevo"] for m in sim_a["movimientos"]]
+        nombres_b = [m["nombre_nuevo"] for m in sim_b["movimientos"]]
+
+        self.assertEqual(nombres_a, ["lucietrapitos1.jpg", "lucietrapitos2.jpg"])
+        self.assertEqual(nombres_b, ["lucietrapitos3.jpg", "lucietrapitos4.jpg"])
+        # No hay intersección de nombres
+        self.assertEqual(len(set(nombres_a).intersection(set(nombres_b))), 0)
+
+    def test_deshacer_devuelve_nombre_original_y_se_niega_si_origen_ocupado(self):
+        """Deshacer restaura el nombre original y aborta si la ruta original está ocupada."""
+        orig_nombre = "grok-image-3545ac09.jpg"
+        orig_ruta = os.path.join(self.descargas, orig_nombre)
+        with open(orig_ruta, "wb") as f:
+            f.write(b"contenido original")
+
+        sim = self.gestor.simular_movimiento_lote(
+            archivos=[{"ruta": orig_ruta, "tamanio": 18, "hash": "hash_grok"}],
+            personaje="lucie",
+            nombre_escena="trapitos",
+            es_existente_descargas=False
+        )
+
+        res_mov = self.gestor.ejecutar_movimiento_lote(sim, lote_id="lote_undo")
+        self.assertTrue(res_mov["exito"])
+        dest_ruta = sim["movimientos"][0]["destino"]
+        self.assertTrue(os.path.exists(dest_ruta))
+        self.assertFalse(os.path.exists(orig_ruta))
+
+        # Verificar SQLite refleja destino_nuevo
+        reg_sqlite = self.db.obtener_por_hash("hash_grok")
+        self.assertIsNotNone(reg_sqlite)
+        self.assertEqual(reg_sqlite["ruta_actual"], dest_ruta)
+
+        # 1. Deshacer exitoso: vuelve al nombre original
+        res_undo = self.gestor.deshacer_operacion(res_mov["id_operacion"])
+        self.assertTrue(res_undo["exito"])
+        self.assertTrue(os.path.exists(orig_ruta))
+        self.assertFalse(os.path.exists(dest_ruta))
+
+        # SQLite vuelve a origen_anterior
+        reg_sqlite_undo = self.db.obtener_por_hash("hash_grok")
+        self.assertEqual(reg_sqlite_undo["ruta_actual"], orig_ruta)
+
+        # 2. Volver a mover y ocupar el origen para probar denegación estricta
+        sim2 = self.gestor.simular_movimiento_lote(
+            archivos=[{"ruta": orig_ruta, "tamanio": 18, "hash": "hash_grok"}],
+            personaje="lucie",
+            nombre_escena="trapitos"
+        )
+        res_mov2 = self.gestor.ejecutar_movimiento_lote(sim2, lote_id="lote_undo_2")
+        self.assertTrue(res_mov2["exito"])
+
+        # Ocupar la ruta original con un archivo nuevo
+        with open(orig_ruta, "wb") as f:
+            f.write(b"archivo nuevo ocupando el origen")
+
+        # Intentar deshacer: debe denegarse terminantemente
+        with self.assertRaises(ErrorDeshacer) as ctx:
+            self.gestor.deshacer_operacion(res_mov2["id_operacion"])
+        self.assertIn("ya se encuentra ocupada", str(ctx.exception))
+        # El archivo en destino sigue intacto
+        self.assertTrue(os.path.exists(sim2["movimientos"][0]["destino"]))
+
+    def test_simulacion_muestra_original_y_nuevo_y_sin_tags_legados(self):
+        """generar_html_simulacion proyecta 'original -> nuevo' y omite etiquetas tag-tipo."""
+        f_path = os.path.join(self.descargas, "grok-video-preview.mp4")
+        with open(f_path, "wb") as f:
+            f.write(b"vid")
+
+        sim = self.gestor.simular_movimiento_lote(
+            archivos=[{"ruta": f_path, "tamanio": 3, "hash": "hpv"}],
+            personaje="lucie",
+            nombre_escena="trapitos"
+        )
+
+        html_out = sim["html"]
+        self.assertIn("grok-video-preview.mp4", html_out)
+        self.assertIn("lucietrapitos1.mp4", html_out)
+        self.assertIn("&rarr;", html_out)
+        self.assertIn("badge-renombrado", html_out)
+        self.assertNotIn("tag-tipo", html_out)
+        self.assertNotIn("videos sin editar", html_out)
+
+    def test_compatibilidad_bitacora_lineas_viejas(self):
+        """obtener_historial lee sin errores líneas antiguas sin nombre_original ni nombre_nuevo."""
+        linea_vieja = {
+            "id_operacion": "op_legada_123",
+            "lote_id": "lote_legado",
+            "fecha": "2026-10-01T10:00:00",
+            "personaje": "lucie",
+            "escena": "toma_legada",
+            "total_movimientos": 1,
+            "movimientos": [{
+                "origen_anterior": "/tmp/descargas/grok-video-viejo.mp4",
+                "destino_nuevo": "/tmp/descargas/_lucie/lucie/toma_legada/grok-video-viejo.mp4",
+                "hash": "hash_viejo",
+                "tamanio": 100
+            }]
+        }
+        with open(self.bitacora_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(linea_vieja) + "\n")
+
+        historial = self.gestor.obtener_historial(limite=10)
+        self.assertEqual(len(historial), 1)
+        item = historial[0]
+        self.assertEqual(item["archivo"], "grok-video-viejo.mp4")
+        self.assertEqual(item["nombre_original"], "grok-video-viejo.mp4")
+        self.assertEqual(item["nombre_nuevo"], "grok-video-viejo.mp4")
+        self.assertEqual(item["estado"], "movido")
 
 
 class TestAuditoriaASTAntiBorrado(unittest.TestCase):

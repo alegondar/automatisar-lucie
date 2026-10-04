@@ -81,7 +81,6 @@ class ConfiguracionBandeja:
         self.ruta_config = ruta_config
         self.ruta_descargas = os.path.expanduser("~/Descargas")
         self.ruta_destino_base = os.path.expanduser("~/Descargas/_lucie")
-        self.carpeta_imagenes = "imagenes"
         self.puerto_servidor = 8766
         self.host_servidor = "127.0.0.1"
         self.intervalo_sondeo_segundos = 5
@@ -108,8 +107,6 @@ class ConfiguracionBandeja:
                 self.ruta_descargas = os.path.abspath(os.path.expanduser(datos["ruta_descargas"]))
             if "ruta_destino_base" in datos:
                 self.ruta_destino_base = os.path.abspath(os.path.expanduser(datos["ruta_destino_base"]))
-            if "carpeta_imagenes" in datos:
-                self.carpeta_imagenes = str(datos["carpeta_imagenes"]).strip() or "imagenes"
             if "puerto_servidor" in datos:
                 self.puerto_servidor = int(datos["puerto_servidor"])
             if "host_servidor" in datos:
@@ -657,7 +654,7 @@ class ValidadorEscenas:
     @staticmethod
     def validar_nombre_escena(nombre: str, ruta_destino_base: str, ruta_descargas: str,
                               es_existente_descargas: bool = False, personaje: str = "lucie",
-                              carpeta_imagenes: str = "imagenes") -> Tuple[bool, str]:
+                              **kwargs) -> Tuple[bool, str]:
         """
         Valida que el nombre de escena sea seguro, cumpla reglas de longitud y caracteres,
         y no escape de su destino base.
@@ -836,9 +833,9 @@ class AgrupadorLotes:
 def generar_html_simulacion(simulacion: Dict[str, Any]) -> str:
     """
     Genera el marcado HTML para el modal de simulación previa.
-    Muestra el destino relativo al directorio base resaltando el segmento de tipo
-    ("videos sin editar" o "imagenes") y manteniendo la ruta de destino completa
-    en el tooltip (atributo title) de cada archivo.
+    Muestra para cada archivo 'nombre_original -> nombre_nuevo' y la ruta de destino
+    (manteniendo la ruta de destino completa en el tooltip title de cada archivo).
+    Elimina las etiquetas legadas de subcarpetas de tipo (imagenes / videos sin editar).
     """
     personaje = html.escape(str(simulacion.get("personaje", "")))
     escena = html.escape(str(simulacion.get("escena", "")))
@@ -850,41 +847,22 @@ def generar_html_simulacion(simulacion: Dict[str, Any]) -> str:
         origen = m.get("origen", "")
         destino_completo = m.get("destino", "")
         destino_relativo = m.get("destino_relativo") or destino_completo
-        subcarpeta_tipo = m.get("subcarpeta_tipo", "")
-        nombre_archivo = os.path.basename(origen)
+        nombre_original = m.get("nombre_original") or os.path.basename(origen)
+        nombre_nuevo = m.get("nombre_nuevo") or os.path.basename(destino_completo)
 
-        # Formatear segmentos del destino relativo
-        partes = [p for p in destino_relativo.replace("\\", "/").split("/") if p]
-        partes_formateadas = []
-        tipo_segmento_encontrado = False
-        for p in partes:
-            p_lower = p.lower()
-            if p_lower == "videos sin editar":
-                partes_formateadas.append(f'<span class="tag-tipo tag-video">{html.escape(p)}</span>')
-                tipo_segmento_encontrado = True
-            elif p_lower == "imagenes" or (subcarpeta_tipo and p_lower == subcarpeta_tipo.lower()):
-                partes_formateadas.append(f'<span class="tag-tipo tag-imagen">{html.escape(p)}</span>')
-                tipo_segmento_encontrado = True
-            else:
-                partes_formateadas.append(html.escape(p))
-
-        destino_resaltado = " / ".join(partes_formateadas)
-        if not tipo_segmento_encontrado:
-            _, ext_arch = os.path.splitext(nombre_archivo.lower())
-            es_img = ext_arch in EXTENSIONES_IMAGENES_DEFECTO
-            tag_cls = "tag-imagen" if es_img else "tag-video"
-            tag_txt = "imagenes" if es_img else "videos sin editar"
-            destino_resaltado += f' <span class="tag-tipo {tag_cls}">{tag_txt}</span>'
+        destino_limpio = destino_relativo.replace("\\", "/")
 
         origen_esc = html.escape(origen)
         destino_esc = html.escape(destino_completo)
-        nombre_esc = html.escape(nombre_archivo)
+        nombre_orig_esc = html.escape(nombre_original)
+        nombre_nuev_esc = html.escape(nombre_nuevo)
+        destino_limpio_esc = html.escape(destino_limpio)
 
         fila = (
             f'<tr>'
-            f'<td><strong>{nombre_esc}</strong></td>'
+            f'<td><strong>{nombre_orig_esc}</strong> &rarr; <span class="badge-renombrado" style="color:var(--accent-primary, #60a5fa); font-weight:600;">{nombre_nuev_esc}</span></td>'
             f'<td class="ruta-celda" title="{origen_esc}"><small style="color:var(--text-muted)">{origen_esc}</small></td>'
-            f'<td class="ruta-celda destino-celda" title="{destino_esc}" data-destino="{destino_esc}">{destino_resaltado}</td>'
+            f'<td class="ruta-celda destino-celda" title="{destino_esc}" data-destino="{destino_esc}">{destino_limpio_esc}</td>'
             f'</tr>'
         )
         filas.append(fila)
@@ -895,9 +873,9 @@ def generar_html_simulacion(simulacion: Dict[str, Any]) -> str:
         f'<table class="modal-tabla">\n'
         f'  <thead>\n'
         f'    <tr>\n'
-        f'      <th style="width:25%;">Archivo</th>\n'
+        f'      <th style="width:35%;">Archivo (Renombrado)</th>\n'
         f'      <th style="width:30%;">Origen</th>\n'
-        f'      <th style="width:45%;">Destino (relativo)</th>\n'
+        f'      <th style="width:35%;">Destino</th>\n'
         f'    </tr>\n'
         f'  </thead>\n'
         f'  <tbody>\n'
@@ -910,23 +888,121 @@ def generar_html_simulacion(simulacion: Dict[str, Any]) -> str:
 class GestorMovimientosBandeja:
     """
     Ejecuta simulaciones, movimientos con os.rename, resolución de colisiones,
+    renombrado automático atómico (<base><número>.<ext> con contadores separados para fotos y videos),
     registro en bitácora .jsonl y reversión estricta (deshacer).
     """
 
+    EXTENSIONES_FOTO = {".jpg", ".jpeg", ".png", ".webp"}
+    EXTENSIONES_VIDEO = {".mp4", ".mov", ".webm"}
+
     def __init__(self, ruta_descargas: str, ruta_destino_base: str, db: GestorBaseDatosBandeja,
-                 ruta_bitacora: str = "bitacora_bandeja.jsonl", carpeta_imagenes: str = "imagenes"):
+                 ruta_bitacora: str = "bitacora_bandeja.jsonl", ruta_alias: str = "alias-personajes.json",
+                 **kwargs):
         self.ruta_descargas = os.path.realpath(ruta_descargas)
         self.ruta_destino_base = os.path.realpath(ruta_destino_base)
         self.db = db
         self.ruta_bitacora = ruta_bitacora
-        self.carpeta_imagenes = (carpeta_imagenes or "imagenes").strip()
+        self.ruta_alias = ruta_alias
+        self.alias_map = self._cargar_alias(ruta_alias)
         self._lock = threading.Lock()
+
+    def _cargar_alias(self, ruta_alias: str) -> Dict[str, Set[str]]:
+        alias_map: Dict[str, Set[str]] = {
+            "lucie": {"lucie", "luci"},
+            "roli": {"roli", "laroli", "magui"},
+            "mailen": {"mailen"}
+        }
+        if os.path.exists(ruta_alias):
+            try:
+                with open(ruta_alias, "r", encoding="utf-8") as f:
+                    datos = json.load(f)
+                for r in datos.get("reglas", []):
+                    pers = str(r.get("personaje", "")).strip().lower()
+                    if pers:
+                        if pers not in alias_map:
+                            alias_map[pers] = {pers}
+                        for pat in r.get("patrones", []):
+                            limpio = pat.replace("*", "").strip().lower()
+                            if limpio:
+                                alias_map[pers].add(limpio)
+            except Exception:
+                pass
+        return alias_map
 
     def _validar_confinamiento(self, ruta: str):
         """Asegura que la ruta canónica permanezca estrictamente dentro de ~/Descargas."""
         real = os.path.realpath(ruta)
         if not (real == self.ruta_descargas or real.startswith(self.ruta_descargas + os.sep)):
             raise ErrorSeguridadBandeja(f"Violación de seguridad: la ruta '{ruta}' no pertenece a ~/Descargas.")
+
+    def calcular_base_escena(self, personaje: str, nombre_escena: str) -> str:
+        """
+        Calcula la base del nombre para los archivos a mover:
+        - Si el nombre de la escena ya comienza con el personaje o alguno de sus alias conocidos,
+          la base es la escena tal cual.
+        - Si no, la base es <personaje><escena>.
+        - Siempre en minúsculas y sin espacios extra.
+        """
+        pers = (personaje or "lucie").strip().lower()
+        escena = (nombre_escena or "").strip().lower()
+
+        sus_alias = set(self.alias_map.get(pers, {pers})) | {pers}
+        alias_ordenados = sorted(sus_alias, key=len, reverse=True)
+
+        for al in alias_ordenados:
+            if escena.startswith(al):
+                return escena
+
+        return f"{pers}{escena}"
+
+    @classmethod
+    def clasificar_familia_medio(cls, extension: str) -> str:
+        """Clasifica la extensión en familia 'foto', 'video' u 'otro'."""
+        ext = extension.strip().lower()
+        if not ext.startswith("."):
+            ext = "." + ext
+        if ext in cls.EXTENSIONES_FOTO:
+            return "foto"
+        if ext in cls.EXTENSIONES_VIDEO:
+            return "video"
+        return "otro"
+
+    def obtener_contadores_carpeta_destino(self, carpeta_destino: str, base: str) -> Dict[str, int]:
+        """
+        Inspecciona la carpeta destino buscando archivos existentes que coincidan con la base
+        mediante regex case-insensitive ^<base>(\\d+)(?:\\s*\\(\\d+\\))?\\.<ext>$.
+        Retorna el número inicial a usar para cada tipo: max_existente + 1.
+        """
+        max_foto = 0
+        max_video = 0
+        max_otro = 0
+
+        if os.path.exists(carpeta_destino) and os.path.isdir(carpeta_destino):
+            patron = re.compile(rf"^{re.escape(base)}(\d+)(?:\s*\(\d+\))?\.([a-zA-Z0-9]+)$", re.IGNORECASE)
+            try:
+                for f in os.listdir(carpeta_destino):
+                    m = patron.match(f)
+                    if m:
+                        num = int(m.group(1))
+                        ext = "." + m.group(2).lower()
+                        familia = self.clasificar_familia_medio(ext)
+                        if familia == "foto":
+                            if num > max_foto:
+                                max_foto = num
+                        elif familia == "video":
+                            if num > max_video:
+                                max_video = num
+                        else:
+                            if num > max_otro:
+                                max_otro = num
+            except OSError:
+                pass
+
+        return {
+            "foto": max_foto + 1,
+            "video": max_video + 1,
+            "otro": max_otro + 1
+        }
 
     def resolver_destino_sin_colision(self, ruta_destino_propuesta: str) -> str:
         """Si la ruta destino ya existe, busca un sufijo numérico correlativo ' (1)', ' (2)'."""
@@ -952,45 +1028,79 @@ class GestorMovimientosBandeja:
             contador += 1
 
     def simular_movimiento_lote(self, archivos: List[Dict[str, Any]], personaje: str,
-                                nombre_escena: str, es_existente_descargas: bool = False) -> Dict[str, Any]:
-        """Calcula el origen y destino exactos para cada archivo del lote antes de mover."""
+                                nombre_escena: str, es_existente_descargas: bool = False,
+                                destinos_reservados: Optional[Set[str]] = None) -> Dict[str, Any]:
+        """Calcula el origen y destino exactos para cada archivo del lote antes de mover con renombrado."""
         # 1. Validar nombre de escena
         valido, motivo = ValidadorEscenas.validar_nombre_escena(
             nombre_escena, self.ruta_destino_base, self.ruta_descargas,
-            es_existente_descargas=es_existente_descargas, personaje=personaje,
-            carpeta_imagenes=self.carpeta_imagenes
+            es_existente_descargas=es_existente_descargas, personaje=personaje
         )
         if not valido:
             raise ErrorValidacionEscena(motivo)
 
-        movimientos_simulados = []
-        destinos_vistos: Set[str] = set()
+        base = self.calcular_base_escena(personaje, nombre_escena)
 
-        for arch in archivos:
+        if es_existente_descargas:
+            carpeta_destino = os.path.join(self.ruta_descargas, nombre_escena)
+            base_rel = self.ruta_descargas
+        else:
+            carpeta_destino = os.path.join(self.ruta_destino_base, personaje, nombre_escena)
+            base_rel = self.ruta_destino_base
+
+        self._validar_confinamiento(carpeta_destino)
+
+        # Contadores iniciales según archivos existentes en la carpeta de destino
+        contadores = self.obtener_contadores_carpeta_destino(carpeta_destino, base)
+
+        # Archivos existentes en disco (case-insensitive para FAT32/exFAT)
+        archivos_disco_lower: Set[str] = set()
+        if os.path.exists(carpeta_destino) and os.path.isdir(carpeta_destino):
+            try:
+                archivos_disco_lower = {f.lower() for f in os.listdir(carpeta_destino)}
+            except OSError:
+                pass
+
+        # Conjunto de rutas destino reservadas (en minúsculas)
+        destinos_vistos: Set[str] = set()
+        if destinos_reservados:
+            destinos_vistos.update(d.lower() for d in destinos_reservados)
+
+        # Ordenar archivos del lote por mtime ascendente y desempate por nombre original
+        def _orden_key(item: Dict[str, Any]) -> Tuple[float, str]:
+            r = item.get("ruta", "")
+            n = os.path.basename(r).lower()
+            try:
+                mt = os.path.getmtime(r)
+            except OSError:
+                mt = 0.0
+            return (mt, n)
+
+        archivos_ordenados = sorted(archivos, key=_orden_key)
+        movimientos_simulados = []
+
+        for arch in archivos_ordenados:
             origen = os.path.realpath(arch["ruta"])
             self._validar_confinamiento(origen)
-            nombre_archivo = os.path.basename(origen)
+            nombre_archivo_original = os.path.basename(origen)
+            _, ext_raw = os.path.splitext(nombre_archivo_original)
+            ext_lower = ext_raw.lower()
+            familia = self.clasificar_familia_medio(ext_lower)
 
-            if es_existente_descargas:
-                carpeta_destino = os.path.join(self.ruta_descargas, nombre_escena)
-                subcarpeta_tipo = ""
-                base_rel = self.ruta_descargas
-            else:
-                # Sala de espera unificada: directamente a <destino>/<personaje>/<capítulo>/ sin subcarpetas de tipo
-                carpeta_destino = os.path.join(self.ruta_destino_base, personaje, nombre_escena)
-                subcarpeta_tipo = ""
-                base_rel = self.ruta_destino_base
+            # Asignar siguiente número correlativo disponible sin colisiones
+            while True:
+                num = contadores[familia]
+                nombre_candidato = f"{base}{num}{ext_lower}"
+                ruta_candidata = os.path.join(carpeta_destino, nombre_candidato)
+                nombre_candidato_lower = nombre_candidato.lower()
+                ruta_candidata_lower = ruta_candidata.lower()
+                contadores[familia] += 1
 
-            self._validar_confinamiento(carpeta_destino)
-            destino_inicial = os.path.join(carpeta_destino, nombre_archivo)
-
-            # Resolver colisión física en disco
-            destino_final = self.resolver_destino_sin_colision(destino_inicial)
-
-            # Resolver posible colisión intra-lote
-            while destino_final in destinos_vistos:
-                destino_final = self.resolver_destino_sin_colision(destino_final)
-            destinos_vistos.add(destino_final)
+                if nombre_candidato_lower not in archivos_disco_lower and ruta_candidata_lower not in destinos_vistos:
+                    destinos_vistos.add(ruta_candidata_lower)
+                    destino_final = ruta_candidata
+                    nombre_nuevo = nombre_candidato
+                    break
 
             destino_relativo = os.path.relpath(destino_final, base_rel).replace("\\", "/")
 
@@ -999,7 +1109,9 @@ class GestorMovimientosBandeja:
                 "origen": origen,
                 "destino": destino_final,
                 "destino_relativo": destino_relativo,
-                "subcarpeta_tipo": subcarpeta_tipo,
+                "nombre_original": nombre_archivo_original,
+                "nombre_nuevo": nombre_nuevo,
+                "subcarpeta_tipo": "",
                 "tamanio": arch.get("tamanio", 0),
                 "hash": arch.get("hash", "")
             })
@@ -1008,6 +1120,7 @@ class GestorMovimientosBandeja:
             "valido": True,
             "personaje": personaje,
             "escena": nombre_escena,
+            "base": base,
             "es_existente_descargas": es_existente_descargas,
             "total_archivos": len(movimientos_simulados),
             "movimientos": movimientos_simulados
@@ -1016,7 +1129,7 @@ class GestorMovimientosBandeja:
         return resultado_sim
 
     def ejecutar_movimiento_lote(self, simulacion: Dict[str, Any], lote_id: str) -> Dict[str, Any]:
-        """Ejecuta los movimientos atómicos con os.rename y los asienta en la bitácora .jsonl."""
+        """Ejecuta los movimientos atómicos con os.rename renombrando al destino y los asienta en la bitácora .jsonl."""
         with self._lock:
             movimientos_realizados = []
             id_operacion = f"op_{int(time.time())}_{secrets.token_hex(4)}"
@@ -1034,16 +1147,22 @@ class GestorMovimientosBandeja:
                 # Crear carpeta de destino
                 os.makedirs(os.path.dirname(destino), exist_ok=True)
 
-                # Mover atómicamente en el mismo sistema de archivos (sin borrar, sin pisar)
-                os.rename(origen, destino)
+                # Red de seguridad final para garantizar inexistencia previa
+                destino_final = self.resolver_destino_sin_colision(destino)
+
+                # Mover y renombrar atómicamente en el mismo sistema de archivos (sin borrar, sin pisar)
+                os.rename(origen, destino_final)
 
                 # Calcular hash si no estaba calculado
-                hash_val = item.get("hash") or calcular_sha256(destino)
+                hash_val = item.get("hash") or calcular_sha256(destino_final)
 
-                # Actualizar base de datos SQLite
+                nombre_orig = item.get("nombre_original") or os.path.basename(origen)
+                nombre_nuev = os.path.basename(destino_final)
+
+                # Actualizar base de datos SQLite con la nueva ruta y nombre
                 self.db.registrar_o_actualizar(
                     hash_val=hash_val,
-                    ruta_actual=destino,
+                    ruta_actual=destino_final,
                     estado="movido",
                     personaje=simulacion["personaje"],
                     escena=simulacion["escena"]
@@ -1051,7 +1170,9 @@ class GestorMovimientosBandeja:
 
                 movimientos_realizados.append({
                     "origen_anterior": origen,
-                    "destino_nuevo": destino,
+                    "destino_nuevo": destino_final,
+                    "nombre_original": nombre_orig,
+                    "nombre_nuevo": nombre_nuev,
                     "hash": hash_val,
                     "tamanio": item["tamanio"]
                 })
@@ -1068,6 +1189,7 @@ class GestorMovimientosBandeja:
                 "fecha": fecha_iso,
                 "personaje": simulacion["personaje"],
                 "escena": simulacion["escena"],
+                "base": simulacion.get("base", ""),
                 "es_existente_descargas": simulacion.get("es_existente_descargas", False),
                 "total_movimientos": len(movimientos_realizados),
                 "movimientos": movimientos_realizados
@@ -1108,10 +1230,13 @@ class GestorMovimientosBandeja:
                 for linea in f:
                     linea = linea.strip()
                     if linea:
-                        op = json.loads(linea)
-                        todas_operaciones.append(op)
-                        if op.get("id_operacion") == id_operacion:
-                            operacion_encontrada = op
+                        try:
+                            op = json.loads(linea)
+                            todas_operaciones.append(op)
+                            if op.get("id_operacion") == id_operacion:
+                                operacion_encontrada = op
+                        except Exception:
+                            pass
 
             if not operacion_encontrada:
                 raise ErrorDeshacer(f"No se encontró la operación '{id_operacion}' en la bitácora.")
@@ -1137,7 +1262,7 @@ class GestorMovimientosBandeja:
                         f"No se sobrescribe ni se altera ningún archivo."
                     )
 
-            # Fase 2: Ejecución de la reversión con os.rename
+            # Fase 2: Ejecución de la reversión con os.rename restaurando nombre original
             archivos_revertidos = []
             for mov in operacion_encontrada["movimientos"]:
                 origen_anterior = mov["origen_anterior"]
@@ -1146,7 +1271,7 @@ class GestorMovimientosBandeja:
                 os.makedirs(os.path.dirname(origen_anterior), exist_ok=True)
                 os.rename(destino_nuevo, origen_anterior)
 
-                # Actualizar estado en la base SQLite
+                # Actualizar estado en la base SQLite restaurando la ruta original
                 self.db.registrar_o_actualizar(
                     hash_val=mov["hash"],
                     ruta_actual=origen_anterior,
@@ -1174,6 +1299,7 @@ class GestorMovimientosBandeja:
         """
         Lee los últimos movimientos de la bitácora .jsonl (hasta el límite indicado),
         correlacionando los eventos de reversión para determinar el estado de cada movimiento.
+        Mantiene compatibilidad con líneas legadas que no incluyan nombre_original o nombre_nuevo.
         """
         with self._lock:
             if not os.path.exists(self.ruta_bitacora):
@@ -1208,11 +1334,14 @@ class GestorMovimientosBandeja:
                 for mov in reversed(e.get("movimientos", [])):
                     origen = mov.get("origen_anterior", "")
                     destino = mov.get("destino_nuevo", "")
-                    nombre = os.path.basename(origen)
+                    nombre_orig = mov.get("nombre_original") or os.path.basename(origen)
+                    nombre_nuev = mov.get("nombre_nuevo") or os.path.basename(destino)
                     movimientos_resultado.append({
                         "id_operacion": id_op,
                         "fecha": fecha_op,
-                        "archivo": nombre,
+                        "archivo": nombre_orig,
+                        "nombre_original": nombre_orig,
+                        "nombre_nuevo": nombre_nuev,
                         "origen": origen,
                         "destino": destino,
                         "tamanio": mov.get("tamanio", 0),
@@ -1477,9 +1606,7 @@ class VigilanteBandeja:
                                         "ruta": ruta_sub
                                     })
                     # Escenas legadas en subcarpetas de tipo
-                    subcarpetas_tipo = ["videos sin editar"]
-                    if self.config.carpeta_imagenes and self.config.carpeta_imagenes not in subcarpetas_tipo:
-                        subcarpetas_tipo.append(self.config.carpeta_imagenes)
+                    subcarpetas_tipo = ["videos sin editar", "imagenes"]
                     for sub_tipo in subcarpetas_tipo:
                         carpeta_tipo = os.path.join(self.config.ruta_destino_base, pers, sub_tipo)
                         if os.path.isdir(carpeta_tipo):
@@ -1726,8 +1853,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
         valido, motivo = ValidadorEscenas.validar_nombre_escena(
             nombre, self.config.ruta_destino_base, self.config.ruta_descargas,
-            es_existente_descargas=False, personaje=personaje,
-            carpeta_imagenes=self.config.carpeta_imagenes
+            es_existente_descargas=False, personaje=personaje
         )
         if not valido:
             self._enviar_error(HTTPStatus.BAD_REQUEST, f"Nombre de capítulo inválido: {motivo}")
@@ -1800,8 +1926,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
                 return
             valido, motivo = ValidadorEscenas.validar_nombre_escena(
                 nombre, self.config.ruta_destino_base, self.config.ruta_descargas,
-                es_existente_descargas=False, personaje=personaje,
-                carpeta_imagenes=self.config.carpeta_imagenes
+                es_existente_descargas=False, personaje=personaje
             )
             if not valido:
                 self._enviar_error(HTTPStatus.BAD_REQUEST, f"Nombre de capítulo inválido: {motivo}")
@@ -1864,6 +1989,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
             simulaciones_lotes = []
             todos_movimientos = []
+            destinos_reservados: Set[str] = set()
 
             try:
                 for item in lotes_req:
@@ -1881,8 +2007,12 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
                         archivos=archivos,
                         personaje=personaje,
                         nombre_escena=nombre_escena,
-                        es_existente_descargas=es_descargas
+                        es_existente_descargas=es_descargas,
+                        destinos_reservados=destinos_reservados
                     )
+                    for mov in sim_individual.get("movimientos", []):
+                        destinos_reservados.add(mov["destino"])
+
                     simulaciones_lotes.append({
                         "lote_id": lote_id,
                         "personaje": personaje,
@@ -3443,17 +3573,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
     function formatearDestinoCliente(m) {{
       const rel = (m.destino_relativo || m.destino || '').replace(/\\\\/g, '/');
-      const partes = rel.split('/').filter(Boolean);
-      const partesHTML = partes.map(p => {{
-        const pl = p.toLowerCase();
-        if (pl === 'videos sin editar') {{
-          return `<span class="tag-tipo tag-video">${{escapeHTML(p)}}</span>`;
-        }} else if (pl === 'imagenes' || (m.subcarpeta_tipo && pl === m.subcarpeta_tipo.toLowerCase())) {{
-          return `<span class="tag-tipo tag-imagen">${{escapeHTML(p)}}</span>`;
-        }}
-        return escapeHTML(p);
-      }});
-      return partesHTML.join(' / ');
+      return escapeHTML(rel);
     }}
 
     function mostrarModalSimulacion(sim) {{
@@ -3466,15 +3586,15 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
           <table class="modal-tabla">
             <thead>
               <tr>
-                <th style="width:25%;">Archivo</th>
+                <th style="width:35%;">Archivo (Renombrado)</th>
                 <th style="width:30%;">Origen</th>
-                <th style="width:45%;">Destino (relativo)</th>
+                <th style="width:35%;">Destino</th>
               </tr>
             </thead>
             <tbody>
               ${{sim.movimientos.map(m => `
                 <tr>
-                  <td><strong>${{escapeHTML(m.origen.split('/').pop())}}</strong></td>
+                  <td><strong>${{escapeHTML(m.nombre_original || m.origen.split('/').pop())}}</strong> &rarr; <span class="badge-renombrado" style="color:var(--accent-primary, #60a5fa); font-weight:600;">${{escapeHTML(m.nombre_nuevo || m.destino.split('/').pop())}}</span></td>
                   <td class="ruta-celda" title="${{escapeHTML(m.origen)}}"><small style="color:var(--text-muted)">${{escapeHTML(m.origen)}}</small></td>
                   <td class="ruta-celda destino-celda" title="${{escapeHTML(m.destino)}}" data-destino="${{escapeHTML(m.destino)}}">${{formatearDestinoCliente(m)}}</td>
                 </tr>
@@ -3609,7 +3729,7 @@ def main():
     detector = DetectorDescargasActivas()
     agrupador = AgrupadorLotes(config.ventana_lote_minutos)
     movimientos = GestorMovimientosBandeja(
-        config.ruta_descargas, config.ruta_destino_base, db, carpeta_imagenes=config.carpeta_imagenes
+        config.ruta_descargas, config.ruta_destino_base, db
     )
     miniaturas = GeneradorMiniaturas(db)
 
