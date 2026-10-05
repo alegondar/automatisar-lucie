@@ -26,7 +26,7 @@
 
 ## 5. Vigilante en segundo plano, frontend desacoplado y servidor HTTP
 
-- [ ] 5.1 Extraer a `bandeja/vigilante.py` la clase `VigilanteBandeja`, escaneo periódico de descargas y banner reactivo; verificar suite completa y AST
+- [x] 5.1 Extraer a `bandeja/vigilante.py` la clase `VigilanteBandeja`, escaneo periódico de descargas y banner reactivo; verificar suite completa y AST
 - [ ] 5.2 Extraer los activos del frontend SPA a `bandeja/web/panel.html`, `bandeja/web/panel.css` y `bandeja/web/panel.js`, eliminando la plantilla embebida del monolito
 - [ ] 5.3 Extraer a `bandeja/servidor.py` la clase `HandlerServidorBandeja` y `crear_servidor`, sirviendo activos estáticos exclusivamente mediante lista blanca estricta con inyección de token CSRF
 - [ ] 5.4 Actualizar la prueba de Node.js en `test_bandeja_descargas.py` para validar los archivos estáticos nuevos de `bandeja/web/` manteniendo idénticas todas las aserciones de UI y DOM; verificar suite completa y AST

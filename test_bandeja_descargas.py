@@ -1995,7 +1995,7 @@ class TestCapituloSoloMaterialNuevo(unittest.TestCase):
             f.write(b"data 15min")
         os.utime(f_15min_antes, (ts_ini - 900, ts_ini - 900))
 
-        with patch("bandeja_descargas.obtener_fecha_llegada", side_effect=lambda st: getattr(st, "st_mtime", getattr(st, "mtime", time.time()))):
+        with patch("bandeja.vigilante.obtener_fecha_llegada", side_effect=lambda st: getattr(st, "st_mtime", getattr(st, "mtime", time.time()))):
             # 1. Caso margen = 0: ambos archivos son anteriores al capítulo
             self.config.minutos_antes_inicio_capitulo = 0
             vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
