@@ -33,7 +33,7 @@
 
 ## 6. Fachada de compatibilidad e integración final
 
-- [ ] 6.1 Crear `bandeja/__init__.py` exportando la interfaz pública completa del paquete
-- [ ] 6.2 Convertir `bandeja_descargas.py` en un punto de entrada ligero compatible que re-exporta los símbolos públicos e invoca `main()`; verificar ejecución directa vía CLI
-- [ ] 6.3 Ajustar rutas de `mock.patch` en `test_bandeja_descargas.py` y `test_envio_pendrive.py` que requieran actualización hacia los nuevos submódulos, sin debilitar ninguna aserción
-- [ ] 6.4 Validar que ningún archivo `.py` en `bandeja/` supere ~1.200 líneas de código, comprobar equivalencia con las respuestas *golden*, verificar 100% de la suite de tests (>= 161 tests) y confirmar 0 infracciones en la auditoría AST
+- [x] 6.1 Crear `bandeja/__init__.py` exportando la interfaz pública completa del paquete
+- [x] 6.2 Convertir `bandeja_descargas.py` en un punto de entrada ligero compatible que re-exporta los símbolos públicos e invoca `main()`; verificar ejecución directa vía CLI
+- [x] 6.3 Ajustar rutas de `mock.patch` en `test_bandeja_descargas.py` y `test_envio_pendrive.py` que requieran actualización hacia los nuevos submódulos, sin debilitar ninguna aserción
+- [x] 6.4 Validar que ningún archivo `.py` en `bandeja/` supere ~1.200 líneas de código, comprobar equivalencia con las respuestas *golden*, verificar 100% de la suite de tests (>= 161 tests) y confirmar 0 infracciones en la auditoría AST
