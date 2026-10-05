@@ -16,7 +16,7 @@
 
 - [x] 3.1 Extraer a `bandeja/db.py` la clase `GestorBaseDatosBandeja`, esquemas de tablas SQLite y migraciones; verificar suite completa y AST
 - [x] 3.2 Extraer a `bandeja/clasificacion.py` las clases `FiltroListaBlanca`, `ValidadorEscenas` y resolución de alias; verificar suite completa y AST
-- [ ] 3.3 Extraer a `bandeja/lotes.py` la clase `AgrupadorLotes`, `obtener_fecha_llegada` y utilidades de fecha; verificar suite completa y AST
+- [x] 3.3 Extraer a `bandeja/lotes.py` la clase `AgrupadorLotes`, `obtener_fecha_llegada` y utilidades de fecha; verificar suite completa y AST
 
 ## 4. Módulos de ciclo de vida, movimientos y pendrive
 
