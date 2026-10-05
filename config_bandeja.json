@@ -36,5 +36,7 @@
     ".crdownload",
     ".part",
     ".tmp"
-  ]
+  ],
+  "carpeta_raiz_pendrive": "LucieSinReglas",
+  "rutas_candidatas_pendrive": []
 }

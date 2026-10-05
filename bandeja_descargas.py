@@ -16,8 +16,10 @@ Cumple estrictamente con las 7 Reglas de Oro del proyecto:
 """
 
 import argparse
+import concurrent.futures
 import datetime
 import fnmatch
+import glob
 import hashlib
 import hmac
 import html
@@ -25,13 +27,16 @@ import json
 import contextlib
 import logging
 import os
+import platform
 import re
 import secrets
 import shutil
 import sqlite3
+import string
 import subprocess
 import threading
 import time
+import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Set, Tuple, Any, Union
@@ -45,6 +50,7 @@ if not logger.handlers:
     logger.setLevel(logging.INFO)
 
 # Constantes del sistema
+RUTA_DESTINO_DEFECTO = os.path.expanduser("~/Descargas/_lucie")
 EXTENSIONES_MEDIA_DEFECTO = [".mp4", ".mov", ".webm", ".jpg", ".jpeg", ".png", ".webp"]
 EXTENSIONES_IMAGENES_DEFECTO = {".jpg", ".jpeg", ".png", ".webp"}
 EXTENSIONES_TEMP_DEFECTO = [".crdownload", ".part", ".tmp"]
@@ -141,6 +147,9 @@ class ConfiguracionBandeja:
         self.refresco_panel_segundos = 4
         self.subcarpeta_fotos = "fotos"
         self.subcarpeta_videos = "videos"
+        self.carpeta_raiz_pendrive = "LucieSinReglas"
+        self.rutas_candidatas_pendrive: List[str] = []
+        self.margen_libre_bytes = 1024 * 1024 * 1024  # 1 GiB por defecto
         self.cargar()
 
     def cargar(self):
@@ -177,6 +186,17 @@ class ConfiguracionBandeja:
                 val = str(datos["subcarpeta_videos"]).strip()
                 if val:
                     self.subcarpeta_videos = val
+            if "carpeta_raiz_pendrive" in datos:
+                val = str(datos["carpeta_raiz_pendrive"]).strip()
+                if val:
+                    self.carpeta_raiz_pendrive = val
+            if "rutas_candidatas_pendrive" in datos and isinstance(datos["rutas_candidatas_pendrive"], list):
+                self.rutas_candidatas_pendrive = [os.path.abspath(os.path.expanduser(str(r))) for r in datos["rutas_candidatas_pendrive"] if str(r).strip()]
+            if "margen_libre_bytes" in datos:
+                try:
+                    self.margen_libre_bytes = max(0, int(datos["margen_libre_bytes"]))
+                except (ValueError, TypeError):
+                    self.margen_libre_bytes = 1024 * 1024 * 1024
             if "intervalo_sondeo_segundos" in datos:
                 self.intervalo_sondeo_segundos = max(1, int(datos["intervalo_sondeo_segundos"]))
             if "ventana_lote_minutos" in datos:
@@ -862,7 +882,9 @@ class FiltroListaBlanca:
         nombre_lower = nombre_carpeta.strip().lower()
         if (nombre_lower.startswith("_") or 
             "_descartados" in nombre_lower or 
-            nombre_lower in ("fotos", "videos")):
+            "_enviados" in nombre_lower or 
+            "_revertidos" in nombre_lower or 
+            nombre_lower in ("fotos", "videos", "_enviados", "_revertidos")):
             return False
         for al in self.alias_personajes:
             if nombre_lower == al or nombre_lower.startswith(al + " ") or nombre_lower.startswith(al + "_") or nombre_lower.startswith(al + "-"):
@@ -1009,9 +1031,11 @@ class ValidadorEscenas:
             return False, "El nombre de la escena no puede contener separadores de ruta ('/', '\\') ni '..'."
 
         nombre_lower = nombre.strip().lower()
-        if (nombre_lower in ("_descartados", "_lucie", "_a_revisar", "_enviados", "fotos", "videos") or 
-            "_descartados" in nombre_lower):
-            return False, f"El nombre de la escena '{nombre}' es una palabra reservada del sistema o contiene '_descartados'."
+        if (nombre_lower in ("_descartados", "_lucie", "_a_revisar", "_enviados", "_revertidos", "fotos", "videos") or 
+            "_descartados" in nombre_lower or
+            "_enviados" in nombre_lower or
+            "_revertidos" in nombre_lower):
+            return False, f"El nombre de la escena '{nombre}' es una palabra reservada del sistema o contiene nombres reservados (_descartados, _enviados, _revertidos)."
 
         if nombre.endswith(".") or nombre.endswith(" "):
             return False, "El nombre de la escena no puede finalizar con un punto o espacio."
@@ -2055,6 +2079,16 @@ class GestorMovimientosBandeja:
                     "mensaje": f"Capítulo '{operacion_encontrada.get('escena')}' restaurado exitosamente a su ubicación original."
                 }
 
+            # Caso especial 2: Reversión de envío al pendrive
+            if operacion_encontrada.get("evento") == "envio_pendrive":
+                return deshacer_envio_pendrive(
+                    id_operacion=id_operacion,
+                    operacion=operacion_encontrada,
+                    config=getattr(self, "config", None),
+                    db=self.db,
+                    ruta_bitacora=self.ruta_bitacora
+                )
+
             # Fase 1: Verificación preventiva integral para movimientos normales
             for mov in operacion_encontrada["movimientos"]:
                 origen_anterior = mov["origen_anterior"]
@@ -2163,6 +2197,28 @@ class GestorMovimientosBandeja:
                         return movimientos_resultado
                     continue
 
+                if e.get("evento") == "envio_pendrive":
+                    estado = "deshecho" if id_op in revertidas else "enviado"
+                    total_arch = e.get("total_archivos", 0)
+                    caps_txt = ", ".join(e.get("capitulos", []))
+                    movimientos_resultado.append({
+                        "id_operacion": id_op,
+                        "fecha": fecha_op,
+                        "archivo": f"Envío pendrive: {total_arch} archivo(s) ({caps_txt})",
+                        "nombre_original": f"{total_arch} archivo(s)",
+                        "nombre_nuevo": f"Pendrive ({str(e.get('pendrive_id', ''))[:8]}...)",
+                        "origen": "Sala de espera",
+                        "destino": e.get("pendrive_montaje", "Pendrive"),
+                        "tamanio": e.get("bytes_totales", 0),
+                        "hash": "",
+                        "estado": estado,
+                        "tipo_evento": "envio_pendrive",
+                        "archivos": e.get("archivos", [])
+                    })
+                    if len(movimientos_resultado) >= limite:
+                        return movimientos_resultado
+                    continue
+
                 estado = "deshecho" if id_op in revertidas else "movido"
 
                 for mov in reversed(e.get("movimientos", [])):
@@ -2261,6 +2317,1319 @@ class GeneradorMiniaturas:
         return None
 
 
+# ==============================================================================
+# MÓDULO DE ENVÍO A PENDRIVE (LucieSinReglas) - DETECCIÓN, MARCADOR Y SEGURIDAD
+# ==============================================================================
+
+NOMBRE_MARCADOR_PENDRIVE = ".lucie_pendrive.json"
+CARPETA_RAIZ_PENDRIVE_DEFECTO = "LucieSinReglas"
+NOMBRE_MANIFIESTO_PENDRIVE = "manifiesto.jsonl"
+
+
+def validar_marcador_pendrive(datos: Any) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
+    """
+    Valida la estructura y contenido del marcador de identidad .lucie_pendrive.json.
+    Esquema obligatorio:
+    - id: UUIDv4 canónico en minúsculas.
+    - creado: timestamp en formato ISO 8601.
+    - version: entero igual a 1.
+    Retorna (es_valido, datos_validados, mensaje_error).
+    """
+    if not isinstance(datos, dict):
+        return False, None, "El contenido del marcador debe ser un objeto JSON."
+
+    if "id" not in datos or "creado" not in datos or "version" not in datos:
+        return False, None, "El marcador no contiene los campos obligatorios ('id', 'creado', 'version')."
+
+    # Validar UUIDv4
+    id_str = str(datos["id"]).strip()
+    try:
+        val_uuid = uuid.UUID(id_str, version=4)
+        if str(val_uuid).lower() != id_str.lower():
+            return False, None, f"El identificador '{id_str}' no es un UUIDv4 válido."
+    except (ValueError, AttributeError, TypeError):
+        return False, None, f"El identificador '{id_str}' no es un UUIDv4 válido."
+
+    # Validar fecha ISO
+    creado_str = str(datos["creado"]).strip()
+    if not creado_str:
+        return False, None, "El campo 'creado' no puede estar vacío."
+    try:
+        datetime.datetime.fromisoformat(creado_str)
+    except Exception:
+        # Permitir ISO con sufijo 'Z' si python < 3.11
+        if creado_str.endswith("Z"):
+            try:
+                datetime.datetime.fromisoformat(creado_str[:-1] + "+00:00")
+            except Exception:
+                return False, None, f"El campo 'creado' ('{creado_str}') no tiene formato ISO 8601 válido."
+        else:
+            return False, None, f"El campo 'creado' ('{creado_str}') no tiene formato ISO 8601 válido."
+
+    # Validar versión
+    try:
+        ver = int(datos["version"])
+        if ver != 1:
+            return False, None, f"Versión de marcador no soportada: {ver} (se requiere versión 1)."
+    except (ValueError, TypeError):
+        return False, None, "El campo 'version' debe ser un número entero."
+
+    marcador_limpio = {
+        "id": str(val_uuid).lower(),
+        "creado": creado_str,
+        "version": 1
+    }
+    return True, marcador_limpio, None
+
+
+def leer_marcador_pendrive(ruta_raiz: str) -> Optional[Dict[str, Any]]:
+    """
+    Lee e interpreta el marcador .lucie_pendrive.json desde la raíz de una unidad.
+    Retorna los datos validados o None si no existe o es inválido.
+    """
+    if not ruta_raiz or not os.path.isdir(ruta_raiz):
+        return None
+
+    ruta_marcador = os.path.join(ruta_raiz, NOMBRE_MARCADOR_PENDRIVE)
+    if not os.path.isfile(ruta_marcador):
+        return None
+
+    try:
+        with open(ruta_marcador, "r", encoding="utf-8") as f:
+            datos = json.load(f)
+        valido, marcador, err = validar_marcador_pendrive(datos)
+        if valido:
+            return marcador
+        logger.warning(f"Marcador inválido en '{ruta_marcador}': {err}")
+        return None
+    except Exception as e:
+        logger.warning(f"Error al leer marcador en '{ruta_marcador}': {e}")
+        return None
+
+
+def obtener_sistema_archivos(punto_montaje: str) -> str:
+    """
+    Determina el sistema de archivos del punto de montaje especificado.
+    En Linux consulta /proc/mounts; si no está disponible, retorna 'desconocido'.
+    """
+    try:
+        punto_real = os.path.realpath(punto_montaje)
+        if os.name == "posix" and os.path.exists("/proc/mounts"):
+            mejor_coincidencia = ""
+            mejor_fstype = "desconocido"
+            with open("/proc/mounts", "r", encoding="utf-8", errors="replace") as f:
+                for linea in f:
+                    partes = linea.strip().split()
+                    if len(partes) >= 3:
+                        mp = os.path.realpath(partes[1])
+                        # Coincidencia exacta o la más larga que contenga punto_real
+                        if punto_real == mp:
+                            return partes[2].lower()
+                        elif punto_real.startswith(mp + os.sep) and len(mp) > len(mejor_coincidencia):
+                            mejor_coincidencia = mp
+                            mejor_fstype = partes[2].lower()
+            if mejor_fstype != "desconocido":
+                return mejor_fstype
+    except Exception as e:
+        logger.debug(f"No se pudo consultar /proc/mounts para {punto_montaje}: {e}")
+
+    return "desconocido"
+
+
+def obtener_espacio_disco(ruta: str) -> Dict[str, int]:
+    """
+    Retorna el espacio en disco total, usado y libre en bytes para la ruta dada.
+    """
+    try:
+        uso = shutil.disk_usage(ruta)
+        return {
+            "total": int(uso.total),
+            "usado": int(uso.used),
+            "libre": int(uso.free)
+        }
+    except Exception as e:
+        logger.warning(f"No se pudo obtener uso de disco para '{ruta}': {e}")
+        return {"total": 0, "usado": 0, "libre": 0}
+
+
+def buscar_puntos_montaje_candidatos(config: Optional[ConfiguracionBandeja] = None) -> List[str]:
+    """
+    Localiza posibles puntos de montaje de pendrives en el sistema según el SO y configuración.
+    """
+    candidatos: List[str] = []
+
+    # 1. Rutas configuradas explícitamente (para tests o montajes personalizados)
+    if config and config.rutas_candidatas_pendrive:
+        for r in config.rutas_candidatas_pendrive:
+            if r and os.path.isdir(r):
+                candidatos.append(os.path.realpath(r))
+
+    # 2. Linux / POSIX: puntos de montaje habituales
+    if os.name == "posix":
+        patrones = [
+            "/media/*/*",
+            "/run/media/*/*",
+            "/mnt/*"
+        ]
+        for pat in patrones:
+            for p in glob.glob(pat):
+                if os.path.isdir(p):
+                    candidatos.append(os.path.realpath(p))
+
+        # Pista: /run/media/$USER/MIUNIDAD o /media/$USER/MIUNIDAD
+        usuario_actual = os.environ.get("USER", "")
+        if usuario_actual:
+            pista_run = f"/run/media/{usuario_actual}/MIUNIDAD"
+            if os.path.isdir(pista_run):
+                candidatos.append(os.path.realpath(pista_run))
+            pista_media = f"/media/{usuario_actual}/MIUNIDAD"
+            if os.path.isdir(pista_media):
+                candidatos.append(os.path.realpath(pista_media))
+
+        # También revisar /proc/mounts por si hay montajes en /media o /run/media
+        if os.path.exists("/proc/mounts"):
+            try:
+                with open("/proc/mounts", "r", encoding="utf-8", errors="replace") as f:
+                    for linea in f:
+                        partes = linea.strip().split()
+                        if len(partes) >= 2:
+                            mp = partes[1]
+                            if mp.startswith("/media/") or mp.startswith("/run/media/"):
+                                if os.path.isdir(mp):
+                                    candidatos.append(os.path.realpath(mp))
+            except Exception:
+                pass
+
+    # 3. Windows: letras de unidad A:\ a Z:\
+    elif os.name == "nt":
+        for letra in string.ascii_uppercase:
+            unidad = f"{letra}:\\"
+            if os.path.exists(unidad) and os.path.isdir(unidad):
+                candidatos.append(os.path.realpath(unidad))
+
+    # Deduplicar manteniendo orden
+    vistos = set()
+    resultado: List[str] = []
+    for c in candidatos:
+        if c not in vistos:
+            vistos.add(c)
+            resultado.append(c)
+
+    return resultado
+
+
+def detectar_pendrive(config: Optional[ConfiguracionBandeja] = None) -> Optional[Dict[str, Any]]:
+    """
+    Busca unidades montadas que posean el marcador de identidad .lucie_pendrive.json válido.
+    Retorna la información del pendrive detectado o None si no hay ninguno.
+    """
+    carpeta_raiz = config.carpeta_raiz_pendrive if config else CARPETA_RAIZ_PENDRIVE_DEFECTO
+    candidatos = buscar_puntos_montaje_candidatos(config)
+
+    for cand in candidatos:
+        marcador = leer_marcador_pendrive(cand)
+        if marcador:
+            fs = obtener_sistema_archivos(cand)
+            espacio = obtener_espacio_disco(cand)
+            return {
+                "conectado": True,
+                "sin_respuesta": False,
+                "ruta_montaje": cand,
+                "punto_montaje": cand,
+                "id": marcador["id"],
+                "creado": marcador["creado"],
+                "version": marcador["version"],
+                "sistema_archivos": fs,
+                "espacio_total_bytes": espacio["total"],
+                "espacio_libre_bytes": espacio["libre"],
+                "espacio_usado_bytes": espacio["usado"],
+                "carpeta_raiz_confinada": os.path.join(cand, carpeta_raiz)
+            }
+
+    return None
+
+
+def ejecutar_lectura_pendrive_con_timeout(func, *args, timeout_segundos: float = 3.0, **kwargs) -> Any:
+    """
+    Ejecuta cualquier llamada al pendrive fuera del hilo HTTP en un ThreadPoolExecutor
+    con un tiempo límite estricto de timeout_segundos (por defecto 3 s).
+    Si el pendrive no responde o se cuelga, retorna un diccionario con
+    conectado=False, sin_respuesta=True y error="Pendrive sin respuesta".
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(func, *args, **kwargs)
+        try:
+            return future.result(timeout=timeout_segundos)
+        except concurrent.futures.TimeoutError:
+            logger.warning(f"Timeout al ejecutar {getattr(func, '__name__', str(func))} en pendrive ({timeout_segundos}s)")
+            return {
+                "conectado": False,
+                "sin_respuesta": True,
+                "error": "Pendrive sin respuesta"
+            }
+        except Exception as e:
+            logger.error(f"Error al ejecutar {getattr(func, '__name__', str(func))} en pendrive: {e}")
+            return {
+                "conectado": False,
+                "sin_respuesta": False,
+                "error": str(e)
+            }
+
+
+def detectar_pendrive_seguro(config: Optional[ConfiguracionBandeja] = None, timeout_segundos: float = 3.0) -> Dict[str, Any]:
+    """
+    Ejecuta detectar_pendrive fuera del hilo principal con límite de tiempo de 3 s.
+    Garantiza que el servidor HTTP nunca se congele si un pendrive defectuoso cuelga las llamadas I/O.
+    """
+    res = ejecutar_lectura_pendrive_con_timeout(detectar_pendrive, config, timeout_segundos=timeout_segundos)
+    if res is None:
+        return {"conectado": False, "sin_respuesta": False}
+    return res
+
+
+def detectar_unidad_candidata_sin_vincular(config: Optional[ConfiguracionBandeja] = None) -> Optional[Dict[str, Any]]:
+    """
+    Busca unidades montadas candidatas que NO posean el marcador .lucie_pendrive.json,
+    para permitir la acción de 'Vincular pendrive'.
+    """
+    candidatos = buscar_puntos_montaje_candidatos(config)
+    for cand in candidatos:
+        marcador = leer_marcador_pendrive(cand)
+        if not marcador:
+            fs = obtener_sistema_archivos(cand)
+            espacio = obtener_espacio_disco(cand)
+            return {
+                "punto_montaje": cand,
+                "sistema_archivos": fs,
+                "espacio_total_bytes": espacio["total"],
+                "espacio_libre_bytes": espacio["libre"],
+                "espacio_usado_bytes": espacio["usado"]
+            }
+    return None
+
+
+def simular_vinculacion_pendrive(punto_montaje: str, config: Optional[ConfiguracionBandeja] = None) -> Dict[str, Any]:
+    """
+    Simulación previa obligatoria para vincular un pendrive.
+    Muestra la unidad candidata (punto de montaje, sistema de archivos, espacio)
+    y detalla la estructura base que se creará sin escribir nada en disco.
+    """
+    if not punto_montaje:
+        raise ValueError("El punto de montaje no puede estar vacío.")
+
+    punto_real = os.path.realpath(punto_montaje)
+    if not os.path.isdir(punto_real):
+        raise FileNotFoundError(f"La ruta especificada no existe o no es un directorio: '{punto_montaje}' (resuelta como '{punto_real}')")
+
+    ruta_marcador = os.path.join(punto_real, NOMBRE_MARCADOR_PENDRIVE)
+    if os.path.exists(ruta_marcador):
+        marcador_existente = leer_marcador_pendrive(punto_real)
+        id_existente = marcador_existente.get("id") if marcador_existente else "desconocido"
+        raise ValueError(f"La unidad ya posee un marcador '{NOMBRE_MARCADOR_PENDRIVE}' con ID '{id_existente}'. Prohibida la sobrescritura.")
+
+    carpeta_raiz = config.carpeta_raiz_pendrive if config else CARPETA_RAIZ_PENDRIVE_DEFECTO
+    fs = obtener_sistema_archivos(punto_real)
+    espacio = obtener_espacio_disco(punto_real)
+
+    subcarpetas_base = [
+        os.path.join(carpeta_raiz, ".lucie"),
+        os.path.join(carpeta_raiz, "videos sin editar"),
+        os.path.join(carpeta_raiz, "videos ya editados"),
+        os.path.join(carpeta_raiz, "videos completos"),
+        os.path.join(carpeta_raiz, "imagenes"),
+    ]
+
+    return {
+        "puede_vincular": True,
+        "punto_montaje": punto_real,
+        "sistema_archivos": fs,
+        "espacio_total_bytes": espacio["total"],
+        "espacio_libre_bytes": espacio["libre"],
+        "espacio_usado_bytes": espacio["usado"],
+        "carpeta_raiz_pendrive": carpeta_raiz,
+        "marcador_archivo": NOMBRE_MARCADOR_PENDRIVE,
+        "subcarpetas_base": subcarpetas_base
+    }
+
+
+def vincular_pendrive(punto_montaje: str, config: Optional[ConfiguracionBandeja] = None) -> Dict[str, Any]:
+    """
+    Crea el marcador de identidad .lucie_pendrive.json con modo exclusivo ('xb')
+    y la estructura base LucieSinReglas/ con mkdir (exist_ok=True).
+    Nunca sobrescribe un marcador existente.
+    """
+    simulacion = simular_vinculacion_pendrive(punto_montaje, config)
+    punto_real = simulacion["punto_montaje"]
+    carpeta_raiz = simulacion["carpeta_raiz_pendrive"]
+
+    ruta_marcador = os.path.join(punto_real, NOMBRE_MARCADOR_PENDRIVE)
+    if os.path.exists(ruta_marcador):
+        raise ValueError(f"Conflicto de seguridad: el marcador '{NOMBRE_MARCADOR_PENDRIVE}' ya existe. Nunca se sobrescribe.")
+
+    id_nuevo = str(uuid.uuid4()).lower()
+    creado = datetime.datetime.now().isoformat()
+    datos_marcador = {
+        "id": id_nuevo,
+        "creado": creado,
+        "version": 1
+    }
+
+    # Creación exclusiva obligatoria ('xb')
+    contenido_bytes = json.dumps(datos_marcador, indent=2).encode("utf-8")
+    with open(ruta_marcador, "xb") as f:
+        f.write(contenido_bytes)
+        f.flush()
+        os.fsync(f.fileno())
+
+    # Crear estructura base en el pendrive (videos ya editados y videos completos vacíos)
+    raiz_confinada = os.path.join(punto_real, carpeta_raiz)
+    directorios_a_crear = [
+        os.path.join(raiz_confinada, ".lucie"),
+        os.path.join(raiz_confinada, "videos sin editar"),
+        os.path.join(raiz_confinada, "videos ya editados"),
+        os.path.join(raiz_confinada, "videos completos"),
+        os.path.join(raiz_confinada, "imagenes"),
+    ]
+    for d in directorios_a_crear:
+        os.makedirs(d, exist_ok=True)
+
+    return {
+        "exito": True,
+        "mensaje": f"Pendrive vinculado exitosamente con ID '{id_nuevo}'. Estructura '{carpeta_raiz}' creada.",
+        "id": id_nuevo,
+        "creado": creado,
+        "punto_montaje": punto_real,
+        "carpeta_raiz_confinada": raiz_confinada,
+        "directorios_creados": directorios_a_crear
+    }
+
+
+def leer_manifiesto_pendrive(ruta_montaje: str, carpeta_raiz: str = "LucieSinReglas") -> List[Dict[str, Any]]:
+    """
+    Lee las entradas históricas de <pendrive>/<carpeta_raiz>/.lucie/manifiesto.jsonl.
+    Retorna la lista de diccionarios registrados.
+    """
+    ruta_manifiesto = os.path.join(ruta_montaje, carpeta_raiz, ".lucie", "manifiesto.jsonl")
+    if not os.path.isfile(ruta_manifiesto):
+        return []
+
+    entradas = []
+    try:
+        with open(ruta_manifiesto, "r", encoding="utf-8", errors="replace") as f:
+            for linea in f:
+                linea_str = linea.strip()
+                if linea_str:
+                    try:
+                        entradas.append(json.loads(linea_str))
+                    except json.JSONDecodeError:
+                        pass
+    except Exception as e:
+        logger.warning(f"Error al leer manifiesto en '{ruta_manifiesto}': {e}")
+    return entradas
+
+
+def _es_extension_video(ext: str) -> bool:
+    return ext.lower() in (".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v")
+
+
+def _es_extension_foto(ext: str) -> bool:
+    return ext.lower() in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tiff")
+
+
+def _es_extension_multimedia(ext: str) -> bool:
+    return _es_extension_video(ext) or _es_extension_foto(ext)
+
+
+def escanear_capitulos_para_envio(ruta_destino_base: str) -> List[Dict[str, Any]]:
+    """
+    Escanea la sala de espera ~/Descargas/_lucie/<personaje>/<capítulo>/
+    omitiendo carpetas del sistema (_enviados, _revertidos, _descartados, _a_revisar).
+    Retorna lista de capítulos disponibles con sus archivos.
+    """
+    ruta_real_base = os.path.realpath(ruta_destino_base)
+    if not os.path.isdir(ruta_real_base):
+        return []
+
+    carpetas_ignoradas = {"_enviados", "_revertidos", "_descartados", "_a_revisar"}
+    resultado = []
+
+    for pers in sorted(os.listdir(ruta_real_base)):
+        if pers.startswith("_") or pers in carpetas_ignoradas:
+            continue
+        ruta_pers = os.path.join(ruta_real_base, pers)
+        if not os.path.isdir(ruta_pers):
+            continue
+
+        for cap in sorted(os.listdir(ruta_pers)):
+            if cap.startswith("_") or cap in carpetas_ignoradas or cap in ("fotos", "videos"):
+                continue
+            ruta_cap = os.path.join(ruta_pers, cap)
+            if not os.path.isdir(ruta_cap):
+                continue
+
+            resultado.append({
+                "personaje": pers,
+                "capitulo": cap,
+                "ruta_absoluta": ruta_cap
+            })
+
+    return resultado
+
+
+def listar_archivos_part_huerfanos(punto_montaje: str, carpeta_raiz: str = "LucieSinReglas") -> List[Dict[str, Any]]:
+    """
+    Busca de manera no destructiva archivos incompletos con extensión .part
+    dentro de <punto_montaje>/<carpeta_raiz>/.
+    NUNCA borra ni renombra estos archivos: solo los lista para visualización y diagnóstico.
+    """
+    if not punto_montaje or not os.path.isdir(punto_montaje):
+        return []
+    raiz_completa = os.path.join(punto_montaje, carpeta_raiz)
+    if not os.path.isdir(raiz_completa):
+        return []
+
+    huerfanos = []
+    try:
+        for root, dirs, files in os.walk(raiz_completa):
+            for f in files:
+                if f.endswith(".part"):
+                    p = os.path.join(root, f)
+                    try:
+                        st = os.stat(p)
+                        sz = st.st_size
+                        mtime = datetime.datetime.fromtimestamp(st.st_mtime).isoformat()
+                    except OSError:
+                        sz = 0
+                        mtime = ""
+                    huerfanos.append({
+                        "nombre": f,
+                        "ruta_relativa": os.path.relpath(p, raiz_completa),
+                        "ruta_absoluta": p,
+                        "tamanio_bytes": sz,
+                        "tamanio_fmt": formatear_bytes(sz),
+                        "fecha_modificacion": mtime
+                    })
+    except Exception as e:
+        logger.warning(f"Error al listar archivos .part en pendrive: {e}")
+    return sorted(huerfanos, key=lambda x: x["nombre"])
+
+
+def _leer_estado_pendrive_raw(config: Optional[ConfiguracionBandeja] = None,
+                              db: Optional[GestorBaseDatosBandeja] = None) -> Dict[str, Any]:
+    """Rutina interna de lectura del estado físico del pendrive."""
+    cfg = config or ConfiguracionBandeja()
+    info = detectar_pendrive(cfg)
+    if not info:
+        cand = detectar_unidad_candidata_sin_vincular(cfg)
+        return {
+            "conectado": False,
+            "sin_respuesta": False,
+            "id": None,
+            "punto_montaje": cand.get("punto_montaje") if cand else None,
+            "sistema_archivos": cand.get("sistema_archivos") if cand else None,
+            "espacio_libre_bytes": cand.get("espacio_libre_bytes", 0) if cand else 0,
+            "espacio_libre_fmt": formatear_bytes(cand.get("espacio_libre_bytes", 0)) if cand else "0 B",
+            "espacio_total_bytes": cand.get("espacio_total_bytes", 0) if cand else 0,
+            "espacio_total_fmt": formatear_bytes(cand.get("espacio_total_bytes", 0)) if cand else "0 B",
+            "espacio_usado_bytes": cand.get("espacio_usado_bytes", 0) if cand else 0,
+            "unidad_candidata": cand,
+            "archivos_part_huerfanos": [],
+            "archivos_pendientes_conteo": 0,
+            "capitulos_pendientes_conteo": 0,
+            "capitulos_pendientes": [],
+            "banner_reactivo": None
+        }
+
+    punto = info.get("punto_montaje") or info.get("ruta_montaje")
+    carpeta_raiz = getattr(cfg, "carpeta_raiz_pendrive", CARPETA_RAIZ_PENDRIVE_DEFECTO)
+    part_files = listar_archivos_part_huerfanos(punto, carpeta_raiz)
+
+    # Conteo y desglose de archivos pendientes en sala de espera
+    base_destino = getattr(cfg, "ruta_destino_base", RUTA_DESTINO_DEFECTO)
+    caps = escanear_capitulos_para_envio(base_destino)
+    tot_arch = 0
+    sub_f = getattr(cfg, "subcarpeta_fotos", "fotos")
+    sub_v = getattr(cfg, "subcarpeta_videos", "videos")
+    caps_detalle = []
+
+    for c in caps:
+        ruta_c = c["ruta_absoluta"]
+        cant_vids = 0
+        cant_fotos = 0
+        bytes_cap = 0
+
+        d_v = os.path.join(ruta_c, sub_v)
+        if os.path.isdir(d_v):
+            for x in os.listdir(d_v):
+                p = os.path.join(d_v, x)
+                if os.path.isfile(p) and not x.startswith("."):
+                    cant_vids += 1
+                    try:
+                        bytes_cap += os.path.getsize(p)
+                    except OSError:
+                        pass
+
+        d_f = os.path.join(ruta_c, sub_f)
+        if os.path.isdir(d_f):
+            for x in os.listdir(d_f):
+                p = os.path.join(d_f, x)
+                if os.path.isfile(p) and not x.startswith("."):
+                    cant_fotos += 1
+                    try:
+                        bytes_cap += os.path.getsize(p)
+                    except OSError:
+                        pass
+
+        for x in os.listdir(ruta_c):
+            p = os.path.join(ruta_c, x)
+            if os.path.isfile(p) and not x.startswith("."):
+                _, ext = os.path.splitext(x)
+                if _es_extension_video(ext):
+                    cant_vids += 1
+                    try:
+                        bytes_cap += os.path.getsize(p)
+                    except OSError:
+                        pass
+                elif _es_extension_foto(ext):
+                    cant_fotos += 1
+                    try:
+                        bytes_cap += os.path.getsize(p)
+                    except OSError:
+                        pass
+
+        tot_c = cant_vids + cant_fotos
+        if tot_c > 0:
+            tot_arch += tot_c
+            caps_detalle.append({
+                "personaje": c["personaje"],
+                "capitulo": c["capitulo"],
+                "videos": cant_vids,
+                "fotos": cant_fotos,
+                "total_archivos": tot_c,
+                "bytes_totales": bytes_cap,
+                "bytes_totales_fmt": formatear_bytes(bytes_cap)
+            })
+
+    banner = None
+    if tot_arch > 0:
+        banner = {
+            "mostrar": True,
+            "mensaje": f"Pendrive detectado: {tot_arch} archivo(s) de {len(caps_detalle)} capítulo(s) listos para enviar",
+            "archivos": tot_arch,
+            "capitulos": len(caps_detalle)
+        }
+
+    esp_libre = info.get("espacio_libre_bytes", 0)
+    esp_total = info.get("espacio_total_bytes", 0)
+    esp_usado = info.get("espacio_usado_bytes", 0)
+
+    return {
+        "conectado": True,
+        "sin_respuesta": False,
+        "id": info["id"],
+        "punto_montaje": punto,
+        "sistema_archivos": info.get("sistema_archivos"),
+        "espacio_libre_bytes": esp_libre,
+        "espacio_libre_fmt": formatear_bytes(esp_libre),
+        "espacio_total_bytes": esp_total,
+        "espacio_total_fmt": formatear_bytes(esp_total),
+        "espacio_usado_bytes": esp_usado,
+        "unidad_candidata": None,
+        "archivos_part_huerfanos": part_files,
+        "archivos_pendientes_conteo": tot_arch,
+        "capitulos_pendientes_conteo": len(caps_detalle),
+        "capitulos_pendientes": caps_detalle,
+        "banner_reactivo": banner
+    }
+
+
+def obtener_estado_pendrive(config: Optional[ConfiguracionBandeja] = None,
+                            db: Optional[GestorBaseDatosBandeja] = None,
+                            timeout_segundos: float = 3.0) -> Dict[str, Any]:
+    """
+    Obtiene el estado completo del pendrive ejecutando la lectura fuera del hilo principal
+    con límite estricto de timeout_segundos (por defecto 3 s).
+    Si el pendrive se cuelga o no responde, retorna sin bloquear indicando sin_respuesta=True.
+    """
+    res = ejecutar_lectura_pendrive_con_timeout(_leer_estado_pendrive_raw, config, db, timeout_segundos=timeout_segundos)
+    if not isinstance(res, dict) or res.get("sin_respuesta"):
+        return {
+            "conectado": False,
+            "sin_respuesta": True,
+            "error": "Pendrive sin respuesta",
+            "mensaje": "Pendrive sin respuesta",
+            "id": None,
+            "punto_montaje": None,
+            "sistema_archivos": None,
+            "espacio_libre_bytes": 0,
+            "espacio_total_bytes": 0,
+            "espacio_usado_bytes": 0,
+            "archivos_part_huerfanos": [],
+            "archivos_pendientes_conteo": 0,
+            "capitulos_pendientes_conteo": 0,
+            "banner_reactivo": None
+        }
+    return res
+
+
+def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
+                            config: Optional[ConfiguracionBandeja] = None,
+                            db: Optional[GestorBaseDatosBandeja] = None,
+                            **kwargs) -> Dict[str, Any]:
+    """
+    Genera el plan de envío con simulación previa obligatoria por lote.
+    Verifica:
+    - Identidad y presencia del pendrive (.lucie_pendrive.json).
+    - Espacio libre suficiente con margen de seguridad (1 GiB).
+    - Límite de 4 GiB en particiones FAT32/vfat (bloqueo preventivo).
+    - Colisiones case-insensitive y conflictos de hash (distinto hash bloquea la copia).
+    - Deduplicación contra el manifiesto append-only (mismo hash se omite e informa 'ya enviado').
+    - Exclusión y aviso de archivos sueltos no multimedia en la raíz del capítulo.
+    - Advertencia si algún capítulo sigue abierto en la sala de espera.
+    """
+    cfg = config or ConfiguracionBandeja()
+    carpeta_raiz = cfg.carpeta_raiz_pendrive
+    capitulos_lista = capitulos_filtro if capitulos_filtro is not None else kwargs.get("capitulos")
+
+    if capitulos_lista:
+        for c_item in capitulos_lista:
+            c_str = str(c_item).strip()
+            if ".." in c_str or c_str.startswith("/") or "\\" in c_str:
+                raise ValueError(f"Intento de path traversal o nombre inválido en capítulo: '{c_item}'")
+
+    info_pendrive = detectar_pendrive(cfg)
+    if not info_pendrive or not info_pendrive.get("conectado"):
+        return {
+            "puede_enviar": False,
+            "error": "No se detectó ningún pendrive vinculado con marcador .lucie_pendrive.json conectado.",
+            "archivos_a_copiar": [],
+            "archivos_omitidos": [],
+            "archivos_conflictos": [],
+            "archivos_bloqueados": [],
+            "archivos_no_multimedia": [],
+            "avisos": ["Conecte y vincule un pendrive antes de realizar el envío."],
+            "totales": {}
+        }
+
+    pendrive_montaje = info_pendrive["ruta_montaje"]
+    sistema_archivos = info_pendrive["sistema_archivos"]
+    espacio_libre = info_pendrive["espacio_libre_bytes"]
+    margen_libre = getattr(cfg, "margen_libre_bytes", 1024 * 1024 * 1024)
+
+    # 1. Leer manifiesto del pendrive para deduplicación por SHA-256
+    entradas_manifiesto = leer_manifiesto_pendrive(pendrive_montaje, carpeta_raiz)
+    hashes_manifiesto: Set[str] = set()
+    for e in entradas_manifiesto:
+        h = e.get("sha256")
+        if h and e.get("estado") != "revertido":
+            hashes_manifiesto.add(h.lower())
+
+    # 2. Obtener capítulos candidatos en la sala de espera
+    todos_capitulos = escanear_capitulos_para_envio(cfg.ruta_destino_base)
+    capitulos_seleccionados = []
+
+    if capitulos_lista:
+        filtro_normalizado = {c.strip().lower() for c in capitulos_lista if c.strip()}
+        if "todos" in filtro_normalizado or not filtro_normalizado:
+            capitulos_seleccionados = todos_capitulos
+        else:
+            for c in todos_capitulos:
+                clave_completa = f"{c['personaje']}/{c['capitulo']}".lower()
+                clave_corta = c["capitulo"].lower()
+                if clave_completa in filtro_normalizado or clave_corta in filtro_normalizado:
+                    capitulos_seleccionados.append(c)
+    else:
+        capitulos_seleccionados = todos_capitulos
+
+    # 3. Consultar capítulos abiertos si db está disponible
+    capitulos_abiertos_nombres = set()
+    if db:
+        try:
+            abiertos = db.listar_capitulos_abiertos()
+            for ab in abiertos:
+                capitulos_abiertos_nombres.add((ab.get("personaje", ""), ab.get("nombre", "")))
+        except Exception:
+            pass
+
+    archivos_a_copiar = []
+    archivos_omitidos = []
+    archivos_conflictos = []
+    archivos_bloqueados = []
+    archivos_no_multimedia = []
+    avisos = []
+
+    sub_fotos = getattr(cfg, "subcarpeta_fotos", "fotos")
+    sub_videos = getattr(cfg, "subcarpeta_videos", "videos")
+
+    es_fat = sistema_archivos in ("vfat", "fat32", "fat")
+
+    for c in capitulos_seleccionados:
+        pers = c["personaje"]
+        cap = c["capitulo"]
+        ruta_cap = c["ruta_absoluta"]
+
+        if (pers, cap) in capitulos_abiertos_nombres:
+            avisos.append(f"Aviso: El capítulo '{pers}/{cap}' sigue abierto en la sala de espera; podrían llegar más archivos.")
+
+        # Recorrer archivos dentro del capítulo
+        candidatos_archivos = []  # (ruta_origen, subcarpeta_origen, nombre_archivo)
+
+        # a) subcarpeta fotos
+        dir_fotos = os.path.join(ruta_cap, sub_fotos)
+        if os.path.isdir(dir_fotos):
+            for arch in sorted(os.listdir(dir_fotos)):
+                p = os.path.join(dir_fotos, arch)
+                if os.path.isfile(p) and not arch.startswith("."):
+                    candidatos_archivos.append((p, sub_fotos, arch))
+
+        # b) subcarpeta videos
+        dir_videos = os.path.join(ruta_cap, sub_videos)
+        if os.path.isdir(dir_videos):
+            for arch in sorted(os.listdir(dir_videos)):
+                p = os.path.join(dir_videos, arch)
+                if os.path.isfile(p) and not arch.startswith("."):
+                    candidatos_archivos.append((p, sub_videos, arch))
+
+        # c) archivos sueltos en la raíz del capítulo
+        for item in sorted(os.listdir(ruta_cap)):
+            p = os.path.join(ruta_cap, item)
+            if os.path.isfile(p) and not item.startswith("."):
+                _, ext = os.path.splitext(item)
+                if _es_extension_multimedia(ext):
+                    sub_asignada = sub_videos if _es_extension_video(ext) else sub_fotos
+                    candidatos_archivos.append((p, sub_asignada, item))
+                else:
+                    archivos_no_multimedia.append({
+                        "personaje": pers,
+                        "capitulo": cap,
+                        "nombre": item,
+                        "ruta_origen": p,
+                        "tamanio_bytes": os.path.getsize(p),
+                        "aviso": "Archivo suelto con extensión no multimedia en la raíz del capítulo: omitido del envío."
+                    })
+                    avisos.append(f"Archivo suelto no multimedia omitido: '{pers}/{cap}/{item}'.")
+
+        # Evaluar cada archivo candidato
+        for ruta_orig, sub_orig, nombre in candidatos_archivos:
+            try:
+                st = os.stat(ruta_orig)
+                tam = st.st_size
+            except OSError:
+                continue
+
+            _, ext = os.path.splitext(nombre)
+            tipo_media = "crudo" if _es_extension_video(ext) else "imagen"
+            sub_dest = "videos sin editar" if tipo_media == "crudo" else "imagenes"
+
+            ruta_rel_pendrive = os.path.join(sub_dest, pers, cap, nombre)
+            ruta_abs_pendrive = os.path.join(pendrive_montaje, carpeta_raiz, ruta_rel_pendrive)
+            dir_dest_pendrive = os.path.dirname(ruta_abs_pendrive)
+
+            sha_orig = calcular_sha256(ruta_orig)
+
+            item_info = {
+                "personaje": pers,
+                "capitulo": cap,
+                "nombre": nombre,
+                "tipo": tipo_media,
+                "subcarpeta_origen": sub_orig,
+                "ruta_origen": ruta_orig,
+                "ruta_relativa_pendrive": ruta_rel_pendrive,
+                "ruta_destino_absoluta": ruta_abs_pendrive,
+                "tamanio_bytes": tam,
+                "sha256": sha_orig,
+                "estado": "nuevo",
+                "aviso": ""
+            }
+
+            # 1. Chequeo contra manifiesto append-only: mismo sha256 -> ya enviado
+            if sha_orig.lower() in hashes_manifiesto:
+                item_info["estado"] = "ya_enviado"
+                item_info["aviso"] = "ya enviado (mismo SHA-256 en manifiesto)"
+                archivos_omitidos.append(item_info)
+                continue
+
+            # 2. Chequeo de colisión en destino físico (case-insensitive para FAT/exFAT)
+            archivo_colisionante = None
+            if os.path.isdir(dir_dest_pendrive):
+                for f_dest in os.listdir(dir_dest_pendrive):
+                    if f_dest.lower() == nombre.lower():
+                        archivo_colisionante = f_dest
+                        break
+
+            if archivo_colisionante:
+                ruta_colision = os.path.join(dir_dest_pendrive, archivo_colisionante)
+                sha_dest = calcular_sha256(ruta_colision)
+                if sha_dest == sha_orig:
+                    item_info["estado"] = "ya_enviado"
+                    item_info["aviso"] = f"ya enviado (archivo idéntico preexistente en destino: '{archivo_colisionante}')"
+                    archivos_omitidos.append(item_info)
+                    continue
+                else:
+                    item_info["estado"] = "conflicto"
+                    item_info["aviso"] = f"Conflicto: en pendrive ya existe '{archivo_colisionante}' con distinto hash ({sha_dest[:8]}... vs {sha_orig[:8]}...). No se copia ni pisa."
+                    archivos_conflictos.append(item_info)
+                    continue
+
+            # 3. Chequeo límite FAT32 > 4 GiB
+            if es_fat and tam > 4294967296:
+                item_info["estado"] = "bloqueado_fat32"
+                item_info["aviso"] = f"Bloqueado: el archivo ({tam} bytes) excede el límite de 4 GiB del sistema de archivos FAT32/vfat."
+                archivos_bloqueados.append(item_info)
+                continue
+
+            # Archivo nuevo listo para enviar
+            archivos_a_copiar.append(item_info)
+
+    bytes_a_copiar = sum(a["tamanio_bytes"] for a in archivos_a_copiar)
+    espacio_suficiente = (espacio_libre >= bytes_a_copiar + margen_libre)
+
+    puede_enviar = (
+        len(archivos_a_copiar) > 0 and
+        espacio_suficiente and
+        len(archivos_conflictos) == 0 and
+        len(archivos_bloqueados) == 0
+    )
+
+    motivo_bloqueo = None
+    if len(archivos_a_copiar) == 0:
+        if len(archivos_omitidos) > 0:
+            motivo_bloqueo = "Todos los archivos del capítulo ya fueron enviados al pendrive."
+        else:
+            motivo_bloqueo = "No se encontraron archivos para transferir."
+    elif not espacio_suficiente:
+        deficit = (bytes_a_copiar + margen_libre) - espacio_libre
+        motivo_bloqueo = f"Espacio insuficiente en pendrive: libre {formatear_bytes(espacio_libre)}, se requieren {formatear_bytes(bytes_a_copiar)} + {formatear_bytes(margen_libre)} de margen (déficit: {formatear_bytes(deficit)})."
+    elif len(archivos_conflictos) > 0:
+        motivo_bloqueo = f"Se detectaron {len(archivos_conflictos)} conflicto(s) de destino con distinto hash. Resuelva los conflictos antes de enviar."
+    elif len(archivos_bloqueados) > 0:
+        motivo_bloqueo = f"Se detectaron {len(archivos_bloqueados)} archivo(s) que superan el límite de 4 GiB en partición FAT32."
+
+    return {
+        "puede_enviar": puede_enviar,
+        "motivo_bloqueo": motivo_bloqueo,
+        "pendrive": {
+            "id": info_pendrive["id"],
+            "ruta_montaje": pendrive_montaje,
+            "sistema_archivos": sistema_archivos,
+            "espacio_libre_bytes": espacio_libre,
+            "espacio_total_bytes": info_pendrive["espacio_total_bytes"],
+            "margen_libre_bytes": margen_libre
+        },
+        "capitulos_seleccionados": [f"{c['personaje']}/{c['capitulo']}" for c in capitulos_seleccionados],
+        "archivos_a_copiar": archivos_a_copiar,
+        "archivos_omitidos": archivos_omitidos,
+        "archivos_conflictos": archivos_conflictos,
+        "archivos_bloqueados": archivos_bloqueados,
+        "archivos_no_multimedia": archivos_no_multimedia,
+        "avisos": avisos,
+        "totales": {
+            "total_evaluados": len(archivos_a_copiar) + len(archivos_omitidos) + len(archivos_conflictos) + len(archivos_bloqueados),
+            "a_copiar_cantidad": len(archivos_a_copiar),
+            "a_copiar_bytes": bytes_a_copiar,
+            "omitidos_ya_enviados": len(archivos_omitidos),
+            "conflictos": len(archivos_conflictos),
+            "bloqueados_fat32": len(archivos_bloqueados),
+            "no_multimedia": len(archivos_no_multimedia)
+        }
+    }
+
+
+def ejecutar_envio_pendrive(simulacion_o_capitulos: Any,
+                            config: Optional[ConfiguracionBandeja] = None,
+                            db: Optional[GestorBaseDatosBandeja] = None,
+                            movimientos: Optional[Any] = None) -> Dict[str, Any]:
+    """
+    Ejecuta la transferencia física segura de archivos hacia el pendrive siguiendo el protocolo:
+    1. Re-validación del plan o simulación previa (o ejecución de simulación si se pasan capítulos).
+    2. Copia en bloques binarios (1 MiB) hacia <destino>.part con cálculo de SHA-256 en la misma pasada.
+    3. Sincronización a disco con os.fsync.
+    4. Renombrado con os.rename a su nombre final tras comprobar ausencia de colisión.
+    5. Re-lectura del archivo final para verificar que su SHA-256 coincide con el origen.
+       Si ocurre error o discrepancia, el archivo .part se preserva (NO se borra) y el lote se interrumpe.
+    6. Preservación del archivo original: se mueve con os.rename a ~/Descargas/_lucie/_enviados/<pers>/<cap>/(fotos|videos)/<arch>
+       (con sufijo numérico si ya existiera en _enviados).
+    7. Registro en manifiesto.jsonl del pendrive en modo append-only ('a').
+    8. Registro del evento 'envio_pendrive' en bitacora_bandeja.jsonl.
+    """
+    cfg = config or ConfiguracionBandeja()
+
+    # 1. Obtener o re-ejecutar simulación
+    if isinstance(simulacion_o_capitulos, dict) and "archivos_a_copiar" in simulacion_o_capitulos and "puede_enviar" in simulacion_o_capitulos:
+        simulacion = simulacion_o_capitulos
+    else:
+        simulacion = simular_envio_capitulos(simulacion_o_capitulos, cfg, db)
+
+    if not simulacion.get("puede_enviar"):
+        motivo = simulacion.get("motivo_bloqueo") or "El plan de envío no está habilitado para confirmación."
+        raise ValueError(motivo)
+
+    archivos_a_copiar = simulacion.get("archivos_a_copiar", [])
+    if not archivos_a_copiar:
+        raise ValueError("No hay archivos para transferir en el plan de envío.")
+
+    pendrive_info = simulacion.get("pendrive", {})
+    pendrive_montaje = pendrive_info.get("ruta_montaje")
+    if not pendrive_montaje or not os.path.isdir(pendrive_montaje):
+        raise ValueError("El punto de montaje del pendrive no existe o fue desconectado.")
+
+    carpeta_raiz = getattr(cfg, "carpeta_raiz_pendrive", CARPETA_RAIZ_PENDRIVE_DEFECTO)
+    base_origen = os.path.realpath(getattr(cfg, "ruta_destino_base", RUTA_DESTINO_DEFECTO))
+    pendrive_raiz = os.path.realpath(os.path.join(pendrive_montaje, carpeta_raiz))
+
+    if not os.path.isdir(pendrive_raiz):
+        raise ValueError(f"La estructura base '{carpeta_raiz}' no existe en el pendrive. Debe vincular la unidad primero.")
+
+    id_envio = f"env_{uuid.uuid4().hex[:12]}"
+    fecha_iso = datetime.datetime.now().isoformat()
+    equipo_host = platform.node() or "localhost"
+    pendrive_id = pendrive_info.get("id", "")
+
+    archivos_transferidos = []
+
+    # 2. Transferencia física archivo por archivo
+    for item in archivos_a_copiar:
+        ruta_orig = item["ruta_origen"]
+        ruta_orig_real = os.path.realpath(ruta_orig)
+
+        # Confinamiento de origen
+        if os.path.islink(ruta_orig) or not (ruta_orig_real == base_origen or ruta_orig_real.startswith(base_origen + os.sep)):
+            raise ErrorSeguridadBandeja(f"Violación de confinamiento: archivo de origen fuera de la sala de espera: '{ruta_orig}'")
+
+        if not os.path.exists(ruta_orig):
+            raise FileNotFoundError(f"El archivo de origen '{ruta_orig}' ya no existe.")
+
+        rel_dest = item["ruta_relativa_pendrive"]
+        if ".." in rel_dest or rel_dest.startswith("/") or rel_dest.startswith("\\"):
+            raise ErrorSeguridadBandeja(f"Intento de path traversal en ruta relativa: '{rel_dest}'")
+
+        ruta_dest = os.path.abspath(os.path.join(pendrive_raiz, rel_dest))
+        dest_dir = os.path.dirname(ruta_dest)
+        dest_dir_real = os.path.realpath(dest_dir)
+
+        # Confinamiento de destino
+        if not (dest_dir_real == pendrive_raiz or dest_dir_real.startswith(pendrive_raiz + os.sep)):
+            raise ErrorSeguridadBandeja(f"Violación de confinamiento en destino del pendrive: '{ruta_dest}'")
+
+        if os.path.exists(ruta_dest):
+            raise RuntimeError(f"Colisión en destino antes de copiar: '{ruta_dest}' ya existe. Transferencia abortada.")
+
+        os.makedirs(dest_dir, exist_ok=True)
+        ruta_part = ruta_dest + ".part"
+
+        # Copia en bloques hacia .part calculando SHA-256
+        h_orig = hashlib.sha256()
+        h_part = hashlib.sha256()
+        try:
+            with open(ruta_orig, "rb") as f_in, open(ruta_part, "wb") as f_out:
+                while True:
+                    bloque = f_in.read(1048576)
+                    if not bloque:
+                        break
+                    h_orig.update(bloque)
+                    h_part.update(bloque)
+                    f_out.write(bloque)
+                f_out.flush()
+                os.fsync(f_out.fileno())
+        except Exception as e:
+            # El archivo .part NO se borra
+            raise RuntimeError(f"Fallo durante la escritura a '{ruta_part}': {e}. El archivo .part ha sido preservado en el pendrive.")
+
+        sha_in = h_orig.hexdigest().lower()
+        sha_out = h_part.hexdigest().lower()
+        sha_esperado = item["sha256"].lower()
+
+        if sha_in != sha_esperado or sha_out != sha_esperado:
+            raise RuntimeError(f"Discrepancia de SHA-256 durante la copia de '{ruta_orig}'. Esperado {sha_esperado}, calculado {sha_out}. El archivo .part ha sido preservado.")
+
+        if os.path.exists(ruta_dest):
+            raise RuntimeError(f"El destino final '{ruta_dest}' apareció inesperadamente antes del renombrado.")
+
+        # Renombrar de .part a destino final
+        os.rename(ruta_part, ruta_dest)
+
+        # Re-lectura para verificar integridad post-copia
+        sha_releido = calcular_sha256(ruta_dest).lower()
+        if sha_releido != sha_esperado:
+            raise RuntimeError(f"Discrepancia en la verificación post-copia de '{ruta_dest}'. Esperado {sha_esperado}, obtenido {sha_releido}.")
+
+        # Preservación del original en _enviados
+        sub_orig = item.get("subcarpeta_origen") or ("videos" if item["tipo"] == "crudo" else "fotos")
+        dir_enviados = os.path.join(base_origen, "_enviados", item["personaje"], item["capitulo"], sub_orig)
+        os.makedirs(dir_enviados, exist_ok=True)
+        nombre_arch = item["nombre"]
+        dest_enviados = os.path.join(dir_enviados, nombre_arch)
+        if os.path.exists(dest_enviados):
+            base_n, ext_n = os.path.splitext(nombre_arch)
+            suf = 1
+            while os.path.exists(dest_enviados):
+                dest_enviados = os.path.join(dir_enviados, f"{base_n}_{suf}{ext_n}")
+                suf += 1
+
+        os.rename(ruta_orig, dest_enviados)
+
+        if db:
+            try:
+                db.registrar_o_actualizar(
+                    hash_val=sha_esperado,
+                    ruta_actual=dest_enviados,
+                    estado="enviado_pendrive",
+                    personaje=item["personaje"],
+                    escena=item["capitulo"]
+                )
+            except Exception:
+                pass
+
+        archivos_transferidos.append({
+            "id_envio": id_envio,
+            "fecha": fecha_iso,
+            "equipo": equipo_host,
+            "pendrive_id": pendrive_id,
+            "personaje": item["personaje"],
+            "capitulo": item["capitulo"],
+            "tipo": item["tipo"],
+            "nombre": nombre_arch,
+            "subcarpeta_origen": sub_orig,
+            "ruta_relativa": rel_dest,
+            "sha256": sha_esperado,
+            "bytes": item["tamanio_bytes"],
+            "estado": "enviado",
+            "ruta_destino_absoluta": ruta_dest,
+            "ruta_origen_espera": ruta_orig,
+            "ruta_enviados": dest_enviados
+        })
+
+    # 3. Asentamiento append-only en manifiesto.jsonl del pendrive
+    dir_lucie = os.path.join(pendrive_raiz, ".lucie")
+    os.makedirs(dir_lucie, exist_ok=True)
+    ruta_manifiesto = os.path.join(dir_lucie, NOMBRE_MANIFIESTO_PENDRIVE)
+    with open(ruta_manifiesto, "a", encoding="utf-8") as f_man:
+        for r in archivos_transferidos:
+            ent = {
+                "id_envio": r["id_envio"],
+                "fecha": r["fecha"],
+                "equipo": r["equipo"],
+                "pendrive_id": r["pendrive_id"],
+                "personaje": r["personaje"],
+                "capitulo": r["capitulo"],
+                "tipo": r["tipo"],
+                "nombre": r["nombre"],
+                "ruta_relativa": r["ruta_relativa"],
+                "sha256": r["sha256"],
+                "bytes": r["bytes"],
+                "estado": "enviado"
+            }
+            f_man.write(json.dumps(ent, ensure_ascii=False) + "\n")
+        f_man.flush()
+        os.fsync(f_man.fileno())
+
+    # 4. Asentamiento en bitácora local
+    ruta_bitacora = getattr(movimientos, "ruta_bitacora", "bitacora_bandeja.jsonl") if movimientos else "bitacora_bandeja.jsonl"
+    os.makedirs(os.path.dirname(os.path.abspath(ruta_bitacora)), exist_ok=True)
+    evento_bitacora = {
+        "evento": "envio_pendrive",
+        "id_operacion": id_envio,
+        "fecha": fecha_iso,
+        "pendrive_id": pendrive_id,
+        "pendrive_montaje": pendrive_montaje,
+        "total_archivos": len(archivos_transferidos),
+        "bytes_totales": sum(r["bytes"] for r in archivos_transferidos),
+        "capitulos": sorted(list({r["capitulo"] for r in archivos_transferidos})),
+        "archivos": archivos_transferidos
+    }
+    with open(ruta_bitacora, "a", encoding="utf-8") as f_bit:
+        f_bit.write(json.dumps(evento_bitacora, ensure_ascii=False) + "\n")
+        f_bit.flush()
+
+    return {
+        "exito": True,
+        "id_envio": id_envio,
+        "fecha": fecha_iso,
+        "pendrive_id": pendrive_id,
+        "total_transferidos": len(archivos_transferidos),
+        "bytes_totales": sum(r["bytes"] for r in archivos_transferidos),
+        "capitulos": sorted(list({r["capitulo"] for r in archivos_transferidos})),
+        "archivos": [
+            {
+                "nombre": r["nombre"],
+                "personaje": r["personaje"],
+                "capitulo": r["capitulo"],
+                "ruta_relativa": r["ruta_relativa"],
+                "sha256": r["sha256"],
+                "bytes": r["bytes"]
+            }
+            for r in archivos_transferidos
+        ]
+    }
+
+
+def deshacer_envio_pendrive(id_operacion: str,
+                            operacion: Optional[Dict[str, Any]] = None,
+                            config: Optional[ConfiguracionBandeja] = None,
+                            db: Optional[GestorBaseDatosBandeja] = None,
+                            ruta_bitacora: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Revierte una operación de envío al pendrive sin borrar absolutamente nada:
+    1. Comprueba la bitácora local para encontrar la operación y validar que no fue revertida antes.
+    2. Localiza el pendrive correspondiente por ID.
+    3. Fase preventiva: verifica que cada archivo en el pendrive y en _enviados existe, y
+       COMPRUEBA ESTRICTAMENTE que la ruta de origen en la sala de espera NO ESTÉ OCUPADA.
+       Si algún destino en la sala de espera está ocupado, la reversión se NIEGA por completo.
+    4. Fase de ejecución:
+       - Mueve la copia en pendrive hacia LucieSinReglas/_revertidos/<id_envio>/<ruta_relativa> con os.rename.
+       - Restituye el original desde _enviados a la sala de espera con os.rename.
+    5. Registra el evento 'envio_revertido' en manifiesto.jsonl del pendrive y en bitacora_bandeja.jsonl.
+    """
+    cfg = config or ConfiguracionBandeja()
+    bit_path = ruta_bitacora or "bitacora_bandeja.jsonl"
+
+    op_encontrada = operacion
+    if not op_encontrada:
+        if not os.path.exists(bit_path):
+            raise ErrorDeshacer("No existe archivo de bitácora para deshacer operaciones.")
+        with open(bit_path, "r", encoding="utf-8") as f:
+            for linea in f:
+                linea = linea.strip()
+                if linea:
+                    try:
+                        d = json.loads(linea)
+                        if d.get("id_operacion") == id_operacion and d.get("evento") == "envio_pendrive":
+                            op_encontrada = d
+                    except Exception:
+                        pass
+
+    if not op_encontrada:
+        raise ErrorDeshacer(f"No se encontró la operación de envío '{id_operacion}' en la bitácora.")
+
+    # Validar que no haya sido ya deshecha
+    if os.path.exists(bit_path):
+        with open(bit_path, "r", encoding="utf-8") as f:
+            for linea in f:
+                linea = linea.strip()
+                if linea:
+                    try:
+                        d = json.loads(linea)
+                        if d.get("evento") == "deshacer" and d.get("id_operacion_revertida") == id_operacion:
+                            raise ErrorDeshacer(f"La operación de envío '{id_operacion}' ya fue deshecha previamente.")
+                    except ErrorDeshacer:
+                        raise
+                    except Exception:
+                        pass
+
+    # Localizar pendrive montado
+    pendrive_id = op_encontrada.get("pendrive_id", "")
+    info_pendrive = detectar_pendrive(cfg)
+    punto_montaje = None
+    if info_pendrive and info_pendrive.get("id") == pendrive_id:
+        punto_montaje = info_pendrive.get("punto_montaje") or info_pendrive.get("ruta_montaje")
+    elif op_encontrada.get("pendrive_montaje") and os.path.isdir(op_encontrada["pendrive_montaje"]):
+        m = leer_marcador_pendrive(op_encontrada["pendrive_montaje"])
+        if m and m.get("id") == pendrive_id:
+            punto_montaje = op_encontrada["pendrive_montaje"]
+
+    if not punto_montaje:
+        raise ErrorDeshacer(f"No se detectó el pendrive con ID '{pendrive_id}' necesario para revertir el envío.")
+
+    carpeta_raiz = getattr(cfg, "carpeta_raiz_pendrive", CARPETA_RAIZ_PENDRIVE_DEFECTO)
+    pendrive_raiz = os.path.realpath(os.path.join(punto_montaje, carpeta_raiz))
+    archivos = op_encontrada.get("archivos", [])
+    if not archivos:
+        raise ErrorDeshacer("La operación de envío no contiene archivos registrados.")
+
+    # Fase 1: Verificaciones preventivas estrictas
+    items_plan = []
+    for r in archivos:
+        rel_path = r["ruta_relativa"]
+        ruta_en_pendrive = os.path.join(pendrive_raiz, rel_path)
+        ruta_en_enviados = r["ruta_enviados"]
+        ruta_origen_espera = r["ruta_origen_espera"]
+        ruta_dest_revertido = os.path.join(pendrive_raiz, "_revertidos", id_operacion, rel_path)
+
+        if not os.path.exists(ruta_en_pendrive):
+            raise ErrorDeshacer(f"No se puede deshacer: el archivo en pendrive '{ruta_en_pendrive}' ya no existe o fue movido.")
+
+        if not os.path.exists(ruta_en_enviados):
+            raise ErrorDeshacer(f"No se puede deshacer: el archivo preservado en _enviados '{ruta_en_enviados}' ya no existe o fue alterado.")
+
+        # REGLA ESTRICTA 5.4: Si la ruta de origen en la sala de espera está ocupada, se niega terminantemente
+        if os.path.exists(ruta_origen_espera):
+            raise ErrorDeshacer(
+                f"No se puede deshacer: la ruta original en sala de espera '{ruta_origen_espera}' ya se encuentra ocupada por otro archivo. "
+                f"No se sobrescribe ni se altera ningún archivo."
+            )
+
+        if os.path.exists(ruta_dest_revertido):
+            raise ErrorDeshacer(f"No se puede deshacer: el destino en _revertidos '{ruta_dest_revertido}' ya se encuentra ocupado.")
+
+        items_plan.append((ruta_en_pendrive, ruta_dest_revertido, ruta_en_enviados, ruta_origen_espera, r))
+
+    # Fase 2: Ejecución de movimientos
+    for ruta_pendrive, ruta_revertido, ruta_enviados, ruta_espera, r in items_plan:
+        os.makedirs(os.path.dirname(ruta_revertido), exist_ok=True)
+        os.rename(ruta_pendrive, ruta_revertido)
+
+        os.makedirs(os.path.dirname(ruta_espera), exist_ok=True)
+        os.rename(ruta_enviados, ruta_espera)
+
+        if db:
+            try:
+                db.registrar_o_actualizar(
+                    hash_val=r["sha256"],
+                    ruta_actual=ruta_espera,
+                    estado="detectado",
+                    personaje=r.get("personaje"),
+                    escena=r.get("capitulo")
+                )
+            except Exception:
+                pass
+
+    # 5. Registro en manifiesto del pendrive
+    dir_lucie = os.path.join(pendrive_raiz, ".lucie")
+    ruta_manifiesto = os.path.join(dir_lucie, NOMBRE_MANIFIESTO_PENDRIVE)
+    try:
+        os.makedirs(dir_lucie, exist_ok=True)
+        with open(ruta_manifiesto, "a", encoding="utf-8") as f_man:
+            for _, _, _, _, r in items_plan:
+                ent = {
+                    "id_envio": id_operacion,
+                    "fecha": datetime.datetime.now().isoformat(),
+                    "equipo": platform.node() or "localhost",
+                    "pendrive_id": pendrive_id,
+                    "personaje": r.get("personaje", ""),
+                    "capitulo": r.get("capitulo", ""),
+                    "tipo": r.get("tipo", ""),
+                    "nombre": r["nombre"],
+                    "ruta_relativa": r["ruta_relativa"],
+                    "sha256": r["sha256"],
+                    "bytes": r.get("bytes", 0),
+                    "estado": "envio_revertido"
+                }
+                f_man.write(json.dumps(ent, ensure_ascii=False) + "\n")
+            f_man.flush()
+            os.fsync(f_man.fileno())
+    except Exception:
+        pass
+
+    # 6. Registro en bitácora local
+    evento_reversion = {
+        "evento": "deshacer",
+        "id_operacion_revertida": id_operacion,
+        "tipo_operacion": "envio_pendrive",
+        "fecha": datetime.datetime.now().isoformat(),
+        "total_revertidos": len(items_plan)
+    }
+    with open(bit_path, "a", encoding="utf-8") as f_bit:
+        f_bit.write(json.dumps(evento_reversion, ensure_ascii=False) + "\n")
+        f_bit.flush()
+
+    return {
+        "exito": True,
+        "id_operacion": id_operacion,
+        "total_revertidos": len(items_plan),
+        "mensaje": f"Envío '{id_operacion}' revertido exitosamente: archivos devueltos a la sala de espera y copias en pendrive preservadas en _revertidos."
+    }
+
+
 class VigilanteBandeja:
     """Hilo de vigilancia periódica (polling) de ~/Descargas."""
 
@@ -2279,6 +3648,7 @@ class VigilanteBandeja:
         self._sin_identificar_actuales: List[Dict[str, Any]] = []
         self._escenas_existentes_actuales: List[Dict[str, Any]] = []
         self._ultimo_conteo_lotes = 0
+        self._estado_pendrive: Dict[str, Any] = {"conectado": False, "sin_respuesta": False}
         self._lock = threading.Lock()
 
     def iniciar(self):
@@ -2574,11 +3944,18 @@ class VigilanteBandeja:
                     a["escena"] = ""
         lotes_anteriores.extend(lotes_extra_ant)
 
+        # Sondeo de estado del pendrive fuera del hilo HTTP (con timeout 3s)
+        try:
+            estado_pen = obtener_estado_pendrive(self.config, self.db, timeout_segundos=3.0)
+        except Exception:
+            estado_pen = {"conectado": False, "sin_respuesta": False}
+
         with self._lock:
             self._lotes_actuales = lotes_generados
             self._lotes_anteriores_actuales = lotes_anteriores
             self._sin_identificar_actuales = sin_identificar
             self._escenas_existentes_actuales = escenas_existentes
+            self._estado_pendrive = estado_pen
 
             # Notificar si hay nuevos lotes en la lista principal (NUNCA en Anteriores)
             lotes_principales = [l for l in lotes_generados if not l.get("es_anterior")]
@@ -2601,7 +3978,8 @@ class VigilanteBandeja:
                 "lotes": list(self._lotes_actuales),
                 "lotes_anteriores": list(self._lotes_anteriores_actuales),
                 "sin_identificar": list(self._sin_identificar_actuales),
-                "escenas": list(self._escenas_existentes_actuales)
+                "escenas": list(self._escenas_existentes_actuales),
+                "pendrive": dict(self._estado_pendrive)
             }
 
     def obtener_token_version(self) -> str:
@@ -2612,6 +3990,7 @@ class VigilanteBandeja:
         - Capítulos abiertos, cerrados y descartados.
         - Capítulo en foco y balance (pendientes/movidos).
         - Estado de alertas (olvidado).
+        - Estado de conexión y archivos pendientes del pendrive.
         """
         with self._lock:
             res_lotes = []
@@ -2626,6 +4005,11 @@ class VigilanteBandeja:
 
             res_sin_id = [(a.get("id_db"), a.get("hash"), a.get("nombre")) for a in self._sin_identificar_actuales]
             res_escenas = [(e.get("nombre"), e.get("personaje"), e.get("tipo")) for e in self._escenas_existentes_actuales]
+            pen_token = (
+                self._estado_pendrive.get("conectado"),
+                self._estado_pendrive.get("id"),
+                self._estado_pendrive.get("archivos_pendientes_conteo")
+            )
 
         res_db = self.db.obtener_resumen_version()
         alerta_olvidado = self.db.es_capitulo_olvidado(float(self.config.horas_alerta_capitulo_olvidado))
@@ -2645,7 +4029,8 @@ class VigilanteBandeja:
             alerta_olvidado,
             cap_foco.get("id"),
             cap_foco.get("en_foco"),
-            balance
+            balance,
+            pen_token
         )
         return hashlib.sha256(repr(raw_payload).encode("utf-8")).hexdigest()[:16]
 
@@ -2738,9 +4123,11 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._servir_html_spa()
         elif ruta == "/api/estado-version":
             token = self.vigilante.obtener_token_version()
+            estado_pen = getattr(self.vigilante, "_estado_pendrive", {})
             self._enviar_json({
                 "version": token,
-                "refresco_panel_segundos": getattr(self.config, "refresco_panel_segundos", 4)
+                "refresco_panel_segundos": getattr(self.config, "refresco_panel_segundos", 4),
+                "banner_pendrive": estado_pen.get("banner_reactivo")
             })
         elif ruta == "/api/lotes":
             estado = self.vigilante.obtener_estado()
@@ -2780,8 +4167,17 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         elif ruta == "/api/capitulo-activo":
             cap_activo = self.db.obtener_capitulo_activo()
             self._enviar_json({"capitulo_activo": cap_activo})
+        elif ruta == "/api/pendrive/estado":
+            self._handle_pendrive_estado()
         else:
             self._enviar_error(HTTPStatus.NOT_FOUND, "Ruta no encontrada.")
+
+    def _handle_pendrive_estado(self):
+        try:
+            res = obtener_estado_pendrive(self.config, self.db, timeout_segundos=3.0)
+            self._enviar_json(res)
+        except Exception as e:
+            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al consultar estado de pendrive: {e}")
 
     def _handle_capitulos_estado(self):
         cap_foco = self.db.obtener_capitulo_en_foco()
@@ -2896,8 +4292,88 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._handle_mover_lote(body)
         elif ruta == "/api/deshacer":
             self._handle_deshacer(body)
+        elif ruta == "/api/pendrive/vincular-simular":
+            self._handle_pendrive_vincular_simular(body)
+        elif ruta == "/api/pendrive/vincular":
+            self._handle_pendrive_vincular(body)
+        elif ruta == "/api/pendrive/envio-simular":
+            self._handle_pendrive_envio_simular(body)
+        elif ruta == "/api/pendrive/envio":
+            self._handle_pendrive_envio(body)
         else:
             self._enviar_error(HTTPStatus.NOT_FOUND, "Endpoint POST no encontrado.")
+
+    def _handle_pendrive_envio_simular(self, body: Dict[str, Any]):
+        capitulos = body.get("capitulos")
+        if isinstance(capitulos, str):
+            capitulos = [capitulos]
+        elif not isinstance(capitulos, list):
+            capitulos = None
+        try:
+            res = simular_envio_capitulos(capitulos, self.config, self.db)
+            self._enviar_json(res)
+        except Exception as e:
+            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al simular envío: {e}")
+
+    def _handle_pendrive_envio(self, body: Dict[str, Any]):
+        capitulos = body.get("capitulos")
+        simulacion = body.get("simulacion")
+        if isinstance(capitulos, str):
+            capitulos = [capitulos]
+        elif not isinstance(capitulos, list):
+            capitulos = None
+
+        arg = simulacion if simulacion else capitulos
+        try:
+            res = ejecutar_envio_pendrive(arg, self.config, self.db, self.movimientos)
+            if self.vigilante:
+                try:
+                    self.vigilante.escanear()
+                except Exception:
+                    pass
+            self._enviar_json(res)
+        except ValueError as e:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, str(e))
+        except ErrorSeguridadBandeja as e:
+            self._enviar_error(HTTPStatus.FORBIDDEN, str(e))
+        except Exception as e:
+            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al ejecutar envío: {e}")
+
+    def _handle_pendrive_vincular_simular(self, body: Dict[str, Any]):
+        punto = str(body.get("punto_montaje", "")).strip()
+        if not punto:
+            cand = detectar_unidad_candidata_sin_vincular(self.config)
+            if cand:
+                punto = cand["punto_montaje"]
+            else:
+                self._enviar_error(HTTPStatus.BAD_REQUEST, "No se especificó 'punto_montaje' y no se detectaron unidades candidatas sin vincular.")
+                return
+        try:
+            res = simular_vinculacion_pendrive(punto, self.config)
+            self._enviar_json(res)
+        except (ValueError, FileNotFoundError) as e:
+            self._enviar_error(HTTPStatus.BAD_REQUEST if isinstance(e, FileNotFoundError) else HTTPStatus.CONFLICT, str(e))
+        except Exception as e:
+            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al simular vinculación: {e}")
+
+    def _handle_pendrive_vincular(self, body: Dict[str, Any]):
+        punto = str(body.get("punto_montaje", "")).strip()
+        if not punto:
+            cand = detectar_unidad_candidata_sin_vincular(self.config)
+            if cand:
+                punto = cand["punto_montaje"]
+            else:
+                self._enviar_error(HTTPStatus.BAD_REQUEST, "No se especificó 'punto_montaje' y no se detectaron unidades candidatas sin vincular.")
+                return
+        try:
+            res = vincular_pendrive(punto, self.config)
+            if hasattr(self, "vigilante") and self.vigilante:
+                self.vigilante.escanear()
+            self._enviar_json(res)
+        except ValueError as e:
+            self._enviar_error(HTTPStatus.CONFLICT, str(e))
+        except Exception as e:
+            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al vincular pendrive: {e}")
 
     def _handle_capitulos_empezar(self, body: Dict[str, Any]):
         personaje = str(body.get("personaje", "lucie")).strip().lower()
@@ -3849,12 +5325,24 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     </div>
   </div>
 
+  <div id="banner-pendrive-detectado" class="banner-aviso" style="display:none; background:#1e3a8a; border-bottom:2px solid #3b82f6;">
+    <div class="banner-aviso-texto">
+      <span style="font-size:1.2rem;">💾</span>
+      <span id="banner-pendrive-texto">Pendrive detectado</span>
+    </div>
+    <div class="banner-aviso-acciones">
+      <button class="btn-deshacer-aviso" style="background:#38bdf8; color:#000;" onclick="abrirModalPlanEnvio()">Ver plan</button>
+      <button class="btn-cerrar-aviso" onclick="cerrarBannerPendrive()" title="Cerrar aviso">&times;</button>
+    </div>
+  </div>
+
   <nav>
     <button class="nav-btn active" id="nav-btn-lotes" onclick="mostrarPestana('lotes', event)">Lotes Detectados</button>
     <button class="nav-btn" id="nav-btn-sin-identificar" onclick="mostrarPestana('sin-identificar', event)">Sin Identificar</button>
     <button class="nav-btn" id="nav-btn-capitulos-abiertos" onclick="mostrarPestana('capitulos-abiertos', event)">Capítulos Abiertos (<span id="conteo-nav-abiertos">0</span>)</button>
     <button class="nav-btn" id="nav-btn-capitulos-cerrados" onclick="mostrarPestana('capitulos-cerrados', event)">Capítulos Cerrados</button>
     <button class="nav-btn" id="nav-btn-descartados" onclick="mostrarPestana('descartados', event)">Descartados</button>
+    <button class="nav-btn" id="nav-btn-pendrive" onclick="mostrarPestana('pendrive', event)">Pendrive</button>
     <button class="nav-btn" id="nav-btn-historial" onclick="mostrarPestana('historial', event)">Historial</button>
     <button class="nav-btn" onclick="recargarVistaActual()">Refrescar</button>
   </nav>
@@ -3884,6 +5372,9 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         </div>
       </div>
       <div style="display:flex; gap:10px; align-items:center;">
+        <button class="btn-sm" id="btn-enviar-capitulo-activo" onclick="iniciarEnvioCapituloActivo()" style="background:#10b981; color:#000; font-weight:600; padding:8px 16px; border:none; border-radius:4px; cursor:pointer;" title="Enviar material del capítulo en foco al pendrive">
+          Enviar al pendrive
+        </button>
         <button class="btn-sm" id="btn-descartar-capitulo-activo" onclick="descartarCapituloActivo()" style="background:#4b5563; color:#fff; font-weight:600; padding:8px 16px; border:none; border-radius:4px; cursor:pointer;">
           Descartar capítulo
         </button>
@@ -4039,6 +5530,55 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         <div id="contenedor-historial">Cargando historial...</div>
       </div>
     </section>
+
+    <section id="sec-pendrive" style="display:none;">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h2>Unidad Pendrive</h2>
+            <small style="color:var(--text-muted)">Detección y envío seguro hacia la estructura aislada LucieSinReglas/</small>
+          </div>
+          <div style="display:flex; gap:10px; align-items:center;">
+            <button class="btn-sm" onclick="cargarVistaPendrive()">Actualizar estado</button>
+            <button class="btn-sm" id="btn-vincular-pendrive" onclick="abrirModalVincularPendrive()" style="display:none; background:var(--accent); color:#000; font-weight:600;">Vincular pendrive</button>
+          </div>
+        </div>
+        <div id="contenedor-estado-pendrive">Cargando estado del pendrive...</div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h2>Capítulos listos para enviar al pendrive</h2>
+            <small style="color:var(--text-muted)">Material clasificado en la sala de espera (~/Descargas/_lucie/)</small>
+          </div>
+          <button class="btn-sm" id="btn-enviar-todos-pendrive" onclick="abrirModalPlanEnvio()" style="background:var(--teal); color:#000; font-weight:600; padding:6px 14px;">
+            Enviar todos al pendrive
+          </button>
+        </div>
+        <div id="contenedor-capitulos-pendrive">Cargando capítulos...</div>
+      </div>
+
+      <div class="card" id="card-part-pendrive" style="display:none;">
+        <div class="card-header">
+          <div>
+            <h2 style="color:var(--danger)">Archivos incompletos (.part huérfanos)</h2>
+            <small style="color:var(--text-muted)">Archivos interrumpidos durante copias previas. Quedan visibles en el pendrive y NO se borran.</small>
+          </div>
+        </div>
+        <div id="contenedor-part-pendrive"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h2>Historial de envíos al pendrive</h2>
+            <small style="color:var(--text-muted)">Últimas operaciones de envío con capacidad de deshacer sin borrar nada</small>
+          </div>
+        </div>
+        <div id="contenedor-historial-pendrive">Cargando historial de envíos...</div>
+      </div>
+    </section>
   </main>
 
   <!-- Modal para Terminar Capítulo con Resumen de Balance -->
@@ -4096,6 +5636,35 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     </div>
   </div>
 
+  <!-- Modal de Plan de Envío al Pendrive -->
+  <div id="modal-plan-envio" class="modal-overlay">
+    <div class="modal-content" style="max-width:980px;">
+      <h2>Plan de Envío al Pendrive</h2>
+      <p style="color:var(--text-muted); margin-bottom:12px;">
+        Verificá los archivos a transferir, el espacio libre y las comprobaciones de integridad antes de confirmar.
+      </p>
+      <div id="contenido-plan-envio">Cargando simulación del envío...</div>
+      <div class="modal-actions">
+        <button class="btn-cancelar" onclick="cerrarModalPlanEnvio()">Cancelar</button>
+        <button class="btn-confirmar" id="btn-confirmar-envio-pendrive" onclick="confirmarEnvioPendrive()" disabled style="opacity:0.5; cursor:not-allowed;">Confirmar y enviar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal para Vincular Pendrive -->
+  <div id="modal-vincular-pendrive" class="modal-overlay">
+    <div class="modal-content" style="max-width:650px;">
+      <h2>Vincular Pendrive a Proyecto Lucie</h2>
+      <div id="contenido-vincular-pendrive" style="margin:16px 0; font-size:0.95rem; line-height:1.6;">
+        Cargando datos de la unidad...
+      </div>
+      <div class="modal-actions">
+        <button class="btn-cancelar" onclick="cerrarModalVincularPendrive()">Cancelar</button>
+        <button class="btn-confirmar" id="btn-confirmar-vincular" onclick="confirmarVincularPendrive()">Confirmar y vincular</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const CSRF_TOKEN = "{self.token_csrf}";
     const REFRESCO_PANEL_SEGUNDOS = {getattr(self.config, "refresco_panel_segundos", 4)};
@@ -4116,6 +5685,33 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     let pestanaActual = 'lotes';
     let historialActual = [];
     let operacionAvisoActual = null;
+
+    let bannerPendriveDescartado = false;
+    let ultimoTextoBannerPendrive = null;
+
+    function mostrarBannerPendrive(texto) {{
+      if (texto !== ultimoTextoBannerPendrive) {{
+        bannerPendriveDescartado = false;
+        ultimoTextoBannerPendrive = texto;
+      }}
+      if (bannerPendriveDescartado) return;
+      const b = document.getElementById('banner-pendrive-detectado');
+      const t = document.getElementById('banner-pendrive-texto');
+      if (b && t) {{
+        t.innerText = texto;
+        b.style.display = 'flex';
+      }}
+    }}
+
+    function ocultarBannerPendrive() {{
+      const b = document.getElementById('banner-pendrive-detectado');
+      if (b) b.style.display = 'none';
+    }}
+
+    function cerrarBannerPendrive() {{
+      ocultarBannerPendrive();
+      bannerPendriveDescartado = true;
+    }}
 
     function mostrarToastLlegada(mensaje) {{
       const toast = document.getElementById('toast-llegada');
@@ -4139,7 +5735,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     }}
 
     function hayModalAbierto() {{
-      const idsModales = ['modal-simulacion', 'modal-terminar-capitulo', 'modal-descartar-capitulo'];
+      const idsModales = ['modal-simulacion', 'modal-terminar-capitulo', 'modal-descartar-capitulo', 'modal-plan-envio', 'modal-vincular-pendrive'];
       return idsModales.some(id => {{
         const el = document.getElementById(id);
         return el && el.style.display && el.style.display !== 'none';
@@ -4355,10 +5951,13 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       document.getElementById('sec-capitulos-abiertos').style.display = (pestana === 'capitulos-abiertos') ? 'block' : 'none';
       document.getElementById('sec-capitulos-cerrados').style.display = (pestana === 'capitulos-cerrados') ? 'block' : 'none';
       document.getElementById('sec-descartados').style.display = (pestana === 'descartados') ? 'block' : 'none';
+      document.getElementById('sec-pendrive').style.display = (pestana === 'pendrive') ? 'block' : 'none';
       document.getElementById('sec-historial').style.display = (pestana === 'historial') ? 'block' : 'none';
 
       if (pestana === 'historial') {{
         cargarHistorial();
+      }} else if (pestana === 'pendrive') {{
+        cargarVistaPendrive();
       }} else if (pestana === 'capitulos-abiertos') {{
         cargarCapitulosAbiertos();
       }} else if (pestana === 'capitulos-cerrados') {{
@@ -4371,6 +5970,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     async function recargarVistaActual() {{
       if (pestanaActual === 'historial') {{
         await cargarHistorial();
+      }} else if (pestanaActual === 'pendrive') {{
+        await cargarVistaPendrive();
       }} else if (pestanaActual === 'capitulos-abiertos') {{
         await cargarCapitulosAbiertos();
       }} else if (pestanaActual === 'capitulos-cerrados') {{
@@ -4513,6 +6114,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
           await cargarCapitulosCerrados();
         }} else if (pestanaActual === 'descartados') {{
           await cargarCapitulosDescartados();
+        }} else if (pestanaActual === 'pendrive') {{
+          await cargarVistaPendrive();
         }} else if (pestanaActual === 'historial') {{
           await cargarHistorial();
         }}
@@ -4552,6 +6155,16 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       sondeoEnCurso = true;
       try {{
         const res = await apiFetch('/api/estado-version');
+
+        if (res.banner_pendrive) {{
+          if (typeof res.banner_pendrive === 'string') {{
+            mostrarBannerPendrive(res.banner_pendrive);
+          }} else if (res.banner_pendrive.mensaje) {{
+            mostrarBannerPendrive(res.banner_pendrive.mensaje);
+          }}
+        }} else {{
+          ocultarBannerPendrive();
+        }}
 
         if (desconectado) {{
           desconectado = false;
@@ -4794,6 +6407,9 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
                     <td style="text-align:center;">
                       <div style="display:flex; gap:6px; justify-content:center; align-items:center; flex-wrap:wrap;">
                         ${{btnFoco}}
+                        <button class="btn-sm" onclick="abrirModalPlanEnvio('${{escapeHTML(c.personaje)}}/${{escapeHTML(c.nombre)}}')" style="background:#10b981; color:#000; font-weight:600; padding:4px 8px; border-radius:4px; border:none; cursor:pointer;" title="Enviar material al pendrive">
+                          Enviar al pendrive
+                        </button>
                         <button class="btn-sm" onclick="abrirModalTerminarCapitulo(${{c.id}})" style="background:#ef4444; color:#fff; font-weight:600; padding:4px 8px; border-radius:4px; border:none; cursor:pointer;">
                           Terminar
                         </button>
@@ -4956,7 +6572,10 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
                   <td style="color:var(--text-muted);">${{(c.fecha_fin || '').replace('T', ' ').slice(0, 19)}}</td>
                   <td style="text-align:center;"><strong>${{c.archivos_movidos || 0}}</strong></td>
                   <td style="text-align:center;">
-                    <button class="btn-sm" onclick="reabrirCapitulo(${{c.id}})" style="background:var(--teal); color:#000; font-weight:600; padding:4px 10px; border-radius:4px; border:none; cursor:pointer;">
+                    <button class="btn-sm" onclick="abrirModalPlanEnvio('${{escapeHTML(c.personaje)}}/${{escapeHTML(c.nombre)}}')" style="background:#10b981; color:#000; font-weight:600; padding:4px 8px; border-radius:4px; border:none; cursor:pointer;" title="Enviar material al pendrive">
+                      Enviar al pendrive
+                    </button>
+                    <button class="btn-sm" onclick="reabrirCapitulo(${{c.id}})" style="background:var(--teal); color:#000; font-weight:600; padding:4px 10px; border-radius:4px; border:none; cursor:pointer; margin-left:6px;">
                       Reabrir
                     </button>
                     <button class="btn-sm" onclick="abrirModalDescartarCapitulo(${{c.id}}, '${{escapeHTML(c.nombre)}}', '${{escapeHTML(c.personaje)}}')" style="background:#4b5563; color:#fff; font-weight:600; padding:4px 10px; border-radius:4px; border:none; cursor:pointer; margin-left:6px;">
@@ -5925,6 +7544,442 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
       if (b < 1024) return b + ' B';
       if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
       return (b / 1048576).toFixed(1) + ' MB';
+    }}
+
+    function iniciarEnvioCapituloActivo() {{
+      const cap = datosEstado.capitulo_foco || datosEstado.capitulo_activo;
+      if (!cap || !cap.nombre) {{
+        mostrarError("No hay un capítulo activo en foco para enviar.");
+        return;
+      }}
+      abrirModalPlanEnvio(`${{cap.personaje}}/${{cap.nombre}}`);
+    }}
+
+    let planEnvioActivo = null;
+
+    async function abrirModalPlanEnvio(capitulo = null) {{
+      try {{
+        const modal = document.getElementById('modal-plan-envio');
+        const cont = document.getElementById('contenido-plan-envio');
+        const btnConfirm = document.getElementById('btn-confirmar-envio-pendrive');
+
+        btnConfirm.disabled = true;
+        btnConfirm.style.cursor = 'not-allowed';
+        btnConfirm.style.opacity = '0.5';
+
+        cont.innerHTML = '<p style="color:var(--text-muted); padding:20px 0;">Calculando simulación de envío y verificando pendrive...</p>';
+        modal.style.display = 'flex';
+
+        const body = capitulo ? {{ capitulos: [capitulo] }} : {{}};
+        const sim = await apiFetch('/api/pendrive/envio-simular', {{
+          method: 'POST',
+          body: JSON.stringify(body)
+        }});
+
+        planEnvioActivo = sim;
+
+        let alertasHtml = '';
+        if (sim.capitulo_abierto) {{
+          alertasHtml += `
+            <div style="background:rgba(245, 158, 11, 0.15); border:1px solid #f59e0b; color:#fef3c7; padding:10px 14px; border-radius:6px; margin-bottom:12px; font-weight:500;">
+              ⚠️ <strong>Atención:</strong> Uno o más capítulos seleccionados siguen abiertos en el panel; podrían recibirse más archivos luego.
+            </div>
+          `;
+        }}
+
+        if (sim.advertencias && sim.advertencias.length > 0) {{
+          alertasHtml += `
+            <div style="background:rgba(207, 102, 121, 0.15); border:1px solid var(--danger); color:var(--danger); padding:10px 14px; border-radius:6px; margin-bottom:12px; font-size:0.9rem;">
+              <strong>Advertencias del sistema:</strong>
+              <ul style="margin:6px 0 0 18px;">
+                ${{sim.advertencias.map(a => `<li>${{escapeHTML(a)}}</li>`).join('')}}
+              </ul>
+            </div>
+          `;
+        }}
+
+        if (sim.archivos_omitidos && sim.archivos_omitidos.length > 0) {{
+          alertasHtml += `
+            <div style="background:rgba(14, 165, 233, 0.15); border:1px solid #0ea5e9; color:#bae6fd; padding:10px 14px; border-radius:6px; margin-bottom:12px; font-size:0.9rem;">
+              <strong>ℹ️ Archivos omitidos (ya enviados anteriormente o no multimedia):</strong>
+              <ul style="margin:6px 0 0 18px;">
+                ${{sim.archivos_omitidos.map(o => `<li><code>${{escapeHTML(o.nombre)}}</code>: ${{escapeHTML(o.motivo)}}</li>`).join('')}}
+              </ul>
+            </div>
+          `;
+        }}
+
+        const infoPendrive = `
+          <div style="display:flex; flex-wrap:wrap; gap:16px; background:var(--card-alt); padding:12px 16px; border-radius:6px; margin-bottom:14px; font-size:0.85rem;">
+            <div><strong>Pendrive ID:</strong> <code>${{escapeHTML((sim.pendrive_id || '').slice(0, 8))}}...</code></div>
+            <div><strong>Punto montaje:</strong> <code>${{escapeHTML(sim.punto_montaje || '')}}</code></div>
+            <div><strong>Filesystem:</strong> <code>${{escapeHTML(sim.sistema_archivos || '')}}</code></div>
+            <div><strong>Espacio libre:</strong> ${{escapeHTML(sim.espacio_libre_fmt || '0 B')}} (Margen: ${{escapeHTML(sim.margen_libre_fmt || '1 GiB')}})</div>
+            <div><strong>Total a enviar:</strong> <strong>${{sim.total_archivos_a_enviar}} archivo(s)</strong> (${{escapeHTML(sim.bytes_a_enviar_fmt || '0 B')}})</div>
+          </div>
+        `;
+
+        let tablaArchivos = '';
+        if (sim.archivos && sim.archivos.length > 0) {{
+          tablaArchivos = `
+            <table class="modal-tabla">
+              <thead>
+                <tr>
+                  <th style="width:25%;">Archivo</th>
+                  <th style="width:12%;">Tipo</th>
+                  <th style="width:13%;">Tamaño</th>
+                  <th style="width:35%;">Destino relativo en pendrive</th>
+                  <th style="width:15%;">Estado</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${{sim.archivos.map(a => {{
+                  const tagTipo = a.tipo === 'video' ? '<span class="tag-tipo tag-video">VIDEO</span>' : '<span class="tag-tipo tag-imagen">IMAGEN</span>';
+                  const badgeEstado = a.conflicto
+                    ? '<span style="color:var(--danger); font-weight:bold;">⚠️ Conflicto (hash distinto)</span>'
+                    : '<span style="color:var(--teal); font-weight:600;">Listo para enviar</span>';
+                  return `
+                    <tr style="${{a.conflicto ? 'background:rgba(207, 102, 121, 0.1);' : ''}}">
+                      <td><strong>${{escapeHTML(a.nombre)}}</strong></td>
+                      <td>${{tagTipo}}</td>
+                      <td>${{escapeHTML(a.tamanio_fmt || formatearBytes(a.tamanio_bytes))}}</td>
+                      <td class="ruta-celda"><code style="color:var(--teal)">${{escapeHTML(a.destino_relativo)}}</code></td>
+                      <td>${{badgeEstado}}</td>
+                    </tr>
+                  `;
+                }}).join('')}}
+              </tbody>
+            </table>
+          `;
+        }} else {{
+          tablaArchivos = '<p style="color:var(--text-muted); padding:16px 0;">No hay archivos pendientes de transferir en los capítulos seleccionados.</p>';
+        }}
+
+        cont.innerHTML = alertasHtml + infoPendrive + tablaArchivos;
+
+        if (sim.puede_enviar && sim.total_archivos_a_enviar > 0) {{
+          btnConfirm.disabled = false;
+          btnConfirm.style.cursor = 'pointer';
+          btnConfirm.style.opacity = '1';
+        }} else {{
+          btnConfirm.disabled = true;
+          btnConfirm.style.cursor = 'not-allowed';
+          btnConfirm.style.opacity = '0.5';
+        }}
+      }} catch (e) {{
+        mostrarError(e.message);
+        cerrarModalPlanEnvio();
+      }}
+    }}
+
+    function cerrarModalPlanEnvio() {{
+      const modal = document.getElementById('modal-plan-envio');
+      if (modal) modal.style.display = 'none';
+      planEnvioActivo = null;
+      programarSiguienteSondeo(500);
+    }}
+
+    async function confirmarEnvioPendrive() {{
+      if (!planEnvioActivo || !planEnvioActivo.puede_enviar) return;
+      const btn = document.getElementById('btn-confirmar-envio-pendrive');
+      if (btn) {{
+        btn.disabled = true;
+        btn.innerText = 'Enviando...';
+      }}
+      try {{
+        const res = await apiFetch('/api/pendrive/envio', {{
+          method: 'POST',
+          body: JSON.stringify({{ simulacion: planEnvioActivo }})
+        }});
+        cerrarModalPlanEnvio();
+        mostrarToastLlegada(`Envío exitoso: ${{res.total_archivos_enviados}} archivo(s) transferidos al pendrive`);
+        await cargarDatos();
+        if (pestanaActual === 'pendrive') {{
+          await cargarVistaPendrive();
+        }} else if (pestanaActual === 'historial') {{
+          await cargarHistorial();
+        }}
+      }} catch (e) {{
+        mostrarError(`Error al enviar material al pendrive: ${{e.message}}`);
+        if (btn) {{
+          btn.disabled = false;
+          btn.innerText = 'Confirmar y enviar';
+        }}
+      }}
+    }}
+
+    async function cargarVistaPendrive() {{
+      const contEstado = document.getElementById('contenedor-estado-pendrive');
+      const contCaps = document.getElementById('contenedor-capitulos-pendrive');
+      const cardPart = document.getElementById('card-part-pendrive');
+      const contPart = document.getElementById('contenedor-part-pendrive');
+      const contHist = document.getElementById('contenedor-historial-pendrive');
+      const btnVincular = document.getElementById('btn-vincular-pendrive');
+      const btnEnviarTodos = document.getElementById('btn-enviar-todos-pendrive');
+
+      if (!contEstado) return;
+
+      try {{
+        const [estadoPen, histRes] = await Promise.all([
+          apiFetch('/api/pendrive/estado'),
+          apiFetch('/api/historial').catch(() => ({{ historial: [] }}))
+        ]);
+
+        // 1. Tarjeta Estado Físico
+        if (estadoPen.sin_respuesta) {{
+          contEstado.innerHTML = `
+            <div style="background:rgba(245, 158, 11, 0.15); border:1px solid #f59e0b; padding:16px; border-radius:6px; color:#fef3c7;">
+              <h3 style="display:flex; align-items:center; gap:8px;">⚠️ Pendrive sin respuesta</h3>
+              <p style="margin-top:6px; font-size:0.9rem;">El dispositivo montado no responde a las solicitudes de lectura dentro del tiempo límite de 3 segundos.</p>
+            </div>
+          `;
+          if (btnVincular) btnVincular.style.display = 'none';
+          if (btnEnviarTodos) btnEnviarTodos.disabled = true;
+        }} else if (!estadoPen.conectado) {{
+          const cand = estadoPen.unidad_candidata;
+          if (cand) {{
+            contEstado.innerHTML = `
+              <div style="background:rgba(99, 102, 241, 0.1); border:1px solid #6366f1; padding:16px; border-radius:6px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <div>
+                    <h3 style="color:#e0e7ff;">Unidad candidata detectada (sin vincular)</h3>
+                    <p style="color:var(--text-muted); font-size:0.85rem; margin-top:4px;">
+                      Punto de montaje: <code>${{escapeHTML(cand.punto_montaje)}}</code> &bull; Filesystem: <code>${{escapeHTML(cand.sistema_archivos || 'desconocido')}}</code> &bull; Libre: ${{escapeHTML(cand.espacio_libre_fmt)}}
+                    </p>
+                  </div>
+                  <button class="btn-sm" onclick="abrirModalVincularPendrive('${{escapeHTML(cand.punto_montaje)}}')" style="background:var(--accent); color:#000; font-weight:700; padding:8px 18px; border:none; border-radius:4px; cursor:pointer;">
+                    Vincular pendrive
+                  </button>
+                </div>
+              </div>
+            `;
+            if (btnVincular) btnVincular.style.display = 'none';
+          }} else {{
+            contEstado.innerHTML = `
+              <div style="background:var(--card-alt); padding:16px; border-radius:6px; color:var(--text-muted);">
+                <p>🔌 Ningún pendrive vinculado detectado en el sistema.</p>
+                <small>Conectá tu pendrive para transferir el material o vincularlo por primera vez.</small>
+              </div>
+            `;
+            if (btnVincular) btnVincular.style.display = 'inline-block';
+          }}
+          if (btnEnviarTodos) btnEnviarTodos.disabled = true;
+        }} else {{
+          // Pendrive Conectado y Vinculado
+          if (btnVincular) btnVincular.style.display = 'none';
+          if (btnEnviarTodos) btnEnviarTodos.disabled = (estadoPen.archivos_pendientes_conteo === 0);
+
+          contEstado.innerHTML = `
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px;">
+              <div style="background:var(--card-alt); padding:12px; border-radius:6px; border:1px solid var(--border);">
+                <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Estado</div>
+                <div style="font-size:1.1rem; font-weight:700; color:var(--teal); margin-top:4px;">● Conectado y Vinculado</div>
+              </div>
+              <div style="background:var(--card-alt); padding:12px; border-radius:6px; border:1px solid var(--border);">
+                <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">ID Marcador</div>
+                <div style="font-size:0.95rem; font-family:monospace; margin-top:4px;" title="${{escapeHTML(estadoPen.id)}}">${{escapeHTML((estadoPen.id || '').slice(0, 13))}}...</div>
+              </div>
+              <div style="background:var(--card-alt); padding:12px; border-radius:6px; border:1px solid var(--border);">
+                <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Punto de Montaje</div>
+                <div style="font-size:0.85rem; font-family:monospace; margin-top:4px; word-break:break-all;" title="${{escapeHTML(estadoPen.punto_montaje)}}">${{escapeHTML(estadoPen.punto_montaje)}}</div>
+              </div>
+              <div style="background:var(--card-alt); padding:12px; border-radius:6px; border:1px solid var(--border);">
+                <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Sistema de Archivos</div>
+                <div style="font-size:1rem; font-weight:600; margin-top:4px;">${{escapeHTML(estadoPen.sistema_archivos || 'N/D')}}</div>
+              </div>
+              <div style="background:var(--card-alt); padding:12px; border-radius:6px; border:1px solid var(--border);">
+                <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Espacio Disponible</div>
+                <div style="font-size:1rem; font-weight:600; color:#38bdf8; margin-top:4px;">
+                  ${{escapeHTML(estadoPen.espacio_libre_fmt)}} <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;">/ ${{escapeHTML(estadoPen.espacio_total_fmt)}}</span>
+                </div>
+              </div>
+            </div>
+          `;
+        }}
+
+        // 2. Capítulos Pendientes
+        const capsPendientes = estadoPen.capitulos_pendientes || [];
+        if (!capsPendientes.length) {{
+          contCaps.innerHTML = '<p style="color:var(--text-muted); padding:16px;">No hay archivos en la sala de espera listos para transferir.</p>';
+        }} else {{
+          contCaps.innerHTML = `
+            <table class="tabla-historial">
+              <thead>
+                <tr>
+                  <th style="width:15%;">Personaje</th>
+                  <th style="width:25%;">Capítulo</th>
+                  <th style="width:12%; text-align:center;">Videos</th>
+                  <th style="width:12%; text-align:center;">Fotos</th>
+                  <th style="width:16%;">Tamaño</th>
+                  <th style="width:20%; text-align:center;">Acción</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${{capsPendientes.map(c => `
+                  <tr>
+                    <td><code>${{escapeHTML(c.personaje)}}</code></td>
+                    <td><strong>${{escapeHTML(c.capitulo)}}</strong></td>
+                    <td style="text-align:center;"><span class="tag-tipo tag-video">${{c.videos}}</span></td>
+                    <td style="text-align:center;"><span class="tag-tipo tag-imagen">${{c.fotos}}</span></td>
+                    <td>${{escapeHTML(c.bytes_totales_fmt)}}</td>
+                    <td style="text-align:center;">
+                      <button class="btn-sm" onclick="abrirModalPlanEnvio('${{escapeHTML(c.personaje)}}/${{escapeHTML(c.capitulo)}}')" style="background:#10b981; color:#000; font-weight:600; padding:6px 14px; border:none; border-radius:4px; cursor:pointer;" title="Enviar este capítulo">
+                        Enviar al pendrive
+                      </button>
+                    </td>
+                  </tr>
+                `).join('')}}
+              </tbody>
+            </table>
+          `;
+        }}
+
+        // 3. Archivos .part huérfanos
+        const parts = estadoPen.archivos_part_huerfanos || [];
+        if (parts.length > 0) {{
+          cardPart.style.display = 'block';
+          contPart.innerHTML = `
+            <table class="tabla-historial">
+              <thead>
+                <tr>
+                  <th>Archivo .part</th>
+                  <th>Ubicación relativa</th>
+                  <th>Tamaño</th>
+                  <th>Modificado</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${{parts.map(p => `
+                  <tr>
+                    <td><strong style="color:var(--danger)">${{escapeHTML(p.nombre)}}</strong></td>
+                    <td class="ruta-celda"><code>${{escapeHTML(p.ruta_relativa)}}</code></td>
+                    <td>${{escapeHTML(p.tamanio_fmt)}}</td>
+                    <td><small style="color:var(--text-muted)">${{escapeHTML((p.fecha_modificacion || '').replace('T', ' ').slice(0, 19))}}</small></td>
+                  </tr>
+                `).join('')}}
+              </tbody>
+            </table>
+          `;
+        }} else {{
+          cardPart.style.display = 'none';
+          contPart.innerHTML = '';
+        }}
+
+        // 4. Historial de envíos
+        const hist = histRes.historial || [];
+        const enviosPendrive = hist.filter(h => h.evento === 'envio_pendrive');
+        if (!enviosPendrive.length) {{
+          contHist.innerHTML = '<p style="color:var(--text-muted); padding:16px;">Aún no se registraron transferencias al pendrive en la bitácora.</p>';
+        }} else {{
+          contHist.innerHTML = `
+            <table class="tabla-historial">
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>Capítulo</th>
+                  <th>Archivos</th>
+                  <th>Bytes</th>
+                  <th>Estado</th>
+                  <th style="text-align:center;">Acción</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${{enviosPendrive.map(e => `
+                  <tr>
+                    <td><small>${{escapeHTML(e.fecha)}}</small></td>
+                    <td><strong>${{escapeHTML(e.personaje || '')}}/${{escapeHTML(e.capitulo || '')}}</strong></td>
+                    <td>${{e.total_archivos || (e.archivos ? e.archivos.length : 1)}} archivo(s)</td>
+                    <td>${{formatearBytes(e.total_bytes || 0)}}</td>
+                    <td><span class="${{e.estado === 'deshecho' ? 'badge-deshecho' : 'badge-movido'}}">${{escapeHTML(e.estado)}}</span></td>
+                    <td style="text-align:center;">
+                      ${{e.estado !== 'deshecho' ? `
+                        <button class="btn-sm" onclick="deshacerEnvio('${{escapeHTML(e.id_operacion)}}')" style="background:var(--card-alt); border:1px solid var(--border); color:var(--text); padding:4px 10px; border-radius:4px; cursor:pointer;">
+                          Deshacer envío
+                        </button>
+                      ` : '<span style="color:var(--text-muted)">Revertido</span>'}}
+                    </td>
+                  </tr>
+                `).join('')}}
+              </tbody>
+            </table>
+          `;
+        }}
+      }} catch (e) {{
+        contEstado.innerHTML = `<p style="color:var(--danger)">Error al cargar vista de pendrive: ${{escapeHTML(e.message)}}</p>`;
+      }}
+    }}
+
+    async function deshacerEnvio(idOperacion) {{
+      if (!confirm("¿Confirmás deshacer este envío al pendrive? La copia en el pendrive se moverá a _revertidos/ y los archivos originales regresarán a la sala de espera si sus ubicaciones siguen libres.")) {{
+        return;
+      }}
+      try {{
+        await apiFetch('/api/deshacer', {{
+          method: 'POST',
+          body: JSON.stringify({{ id_operacion: idOperacion }})
+        }});
+        mostrarToastLlegada("Envío revertido con éxito.");
+        await cargarVistaPendrive();
+        await cargarDatos();
+      }} catch (e) {{
+        mostrarError(`Error al deshacer envío: ${{e.message}}`);
+      }}
+    }}
+
+    let puntoMontajeVincular = null;
+
+    async function abrirModalVincularPendrive(punto = null) {{
+      try {{
+        puntoMontajeVincular = punto;
+        const modal = document.getElementById('modal-vincular-pendrive');
+        const cont = document.getElementById('contenido-vincular-pendrive');
+        cont.innerHTML = '<p style="color:var(--text-muted)">Inspeccionando unidad...</p>';
+        modal.style.display = 'flex';
+
+        const body = punto ? {{ punto_montaje: punto }} : {{}};
+        const sim = await apiFetch('/api/pendrive/vincular-simular', {{
+          method: 'POST',
+          body: JSON.stringify(body)
+        }});
+
+        puntoMontajeVincular = sim.punto_montaje;
+        cont.innerHTML = `
+          <div style="background:var(--card-alt); padding:16px; border-radius:6px; margin-bottom:12px;">
+            <p><strong>Punto de montaje:</strong> <code>${{escapeHTML(sim.punto_montaje)}}</code></p>
+            <p style="margin-top:6px;"><strong>Sistema de archivos:</strong> <code>${{escapeHTML(sim.sistema_archivos || 'desconocido')}}</code></p>
+            <p style="margin-top:6px;"><strong>Espacio libre:</strong> ${{escapeHTML(sim.espacio_libre_fmt)}} de ${{escapeHTML(sim.espacio_total_fmt)}}</p>
+          </div>
+          <p style="font-size:0.9rem; color:var(--text-muted);">
+            Al vincular, se creará el marcador de identidad <code>.lucie_pendrive.json</code> en la raíz y la estructura base <code>LucieSinReglas/</code> con sus subcarpetas.
+            <strong>Nada de lo que ya exista en el pendrive será modificado ni tocado.</strong>
+          </p>
+        `;
+      }} catch (e) {{
+        mostrarError(e.message);
+        cerrarModalVincularPendrive();
+      }}
+    }}
+
+    function cerrarModalVincularPendrive() {{
+      const modal = document.getElementById('modal-vincular-pendrive');
+      if (modal) modal.style.display = 'none';
+      puntoMontajeVincular = null;
+      programarSiguienteSondeo(500);
+    }}
+
+    async function confirmarVincularPendrive() {{
+      try {{
+        const body = puntoMontajeVincular ? {{ punto_montaje: puntoMontajeVincular }} : {{}};
+        await apiFetch('/api/pendrive/vincular', {{
+          method: 'POST',
+          body: JSON.stringify(body)
+        }});
+        cerrarModalVincularPendrive();
+        mostrarToastLlegada("Pendrive vinculado exitosamente.");
+        await cargarVistaPendrive();
+      }} catch (e) {{
+        mostrarError(`Error al vincular pendrive: ${{e.message}}`);
+      }}
     }}
 
     cargarDatos().then(() => {{

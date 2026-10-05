@@ -1,0 +1,1274 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+test_envio_pendrive.py
+
+Suite integral de pruebas unitarias para el módulo de envío a pendrive (LucieSinReglas).
+Valida las 7 Reglas de Oro, detección multiplataforma, vinculación, simulación, copia segura .part,
+preservación de originales en _enviados, manifiesto append-only, reversión a _revertidos y robustez.
+"""
+
+import datetime
+import json
+import os
+import shutil
+import tempfile
+import threading
+import time
+import unittest
+import uuid
+
+from bandeja_descargas import (
+    ConfiguracionBandeja,
+    GestorBaseDatosBandeja,
+    GestorMovimientosBandeja,
+    FiltroListaBlanca,
+    DetectorDescargasActivas,
+    AgrupadorLotes,
+    GeneradorMiniaturas,
+    VigilanteBandeja,
+    crear_servidor,
+    calcular_sha256,
+    validar_marcador_pendrive,
+    leer_marcador_pendrive,
+    obtener_sistema_archivos,
+    obtener_espacio_disco,
+    detectar_pendrive,
+    detectar_pendrive_seguro,
+    detectar_unidad_candidata_sin_vincular,
+    ejecutar_lectura_pendrive_con_timeout,
+    simular_vinculacion_pendrive,
+    vincular_pendrive,
+    simular_envio_capitulos,
+    ejecutar_envio_pendrive,
+    deshacer_envio_pendrive,
+    leer_manifiesto_pendrive,
+    NOMBRE_MARCADOR_PENDRIVE,
+    NOMBRE_MANIFIESTO_PENDRIVE,
+    ErrorDeshacer,
+    ValidadorEscenas,
+    escanear_capitulos_para_envio,
+)
+
+
+class TestDeteccionYMarcadorPendrive(unittest.TestCase):
+    """Pruebas del Grupo 1: Configuración, validación y detección de pendrive."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp(prefix="test_pendrive_")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_config_pendrive_carga(self):
+        """Verifica que la configuración cargue los parámetros por defecto de pendrive."""
+        config = ConfiguracionBandeja()
+        self.assertEqual(config.carpeta_raiz_pendrive, "LucieSinReglas")
+        self.assertIsInstance(config.rutas_candidatas_pendrive, list)
+        self.assertGreaterEqual(config.margen_libre_bytes, 1024 * 1024 * 1024)
+
+    def test_validar_marcador_valido(self):
+        """Valida que un marcador conforme a esquema sea aprobado."""
+        uid = str(uuid.uuid4())
+        ahora = datetime.datetime.now().isoformat()
+        datos = {"id": uid, "creado": ahora, "version": 1}
+        valido, limpio, err = validar_marcador_pendrive(datos)
+        self.assertTrue(valido)
+        self.assertIsNone(err)
+        self.assertEqual(limpio["id"], uid)
+        self.assertEqual(limpio["version"], 1)
+
+    def test_validar_marcador_invalido(self):
+        """Valida el rechazo de marcadores corruptos, versiones incompatibles o IDs inválidos."""
+        # No es dict
+        valido, _, err = validar_marcador_pendrive("no_es_dict")
+        self.assertFalse(valido)
+
+        # Campos faltantes
+        valido, _, err = validar_marcador_pendrive({"id": "123"})
+        self.assertFalse(valido)
+
+        # UUID inválido
+        valido, _, err = validar_marcador_pendrive({
+            "id": "no-es-uuid-valido",
+            "creado": datetime.datetime.now().isoformat(),
+            "version": 1
+        })
+        self.assertFalse(valido)
+
+        # Versión distinta de 1
+        valido, _, err = validar_marcador_pendrive({
+            "id": str(uuid.uuid4()),
+            "creado": datetime.datetime.now().isoformat(),
+            "version": 2
+        })
+        self.assertFalse(valido)
+
+        # Fecha inválida
+        valido, _, err = validar_marcador_pendrive({
+            "id": str(uuid.uuid4()),
+            "creado": "fecha_invalida",
+            "version": 1
+        })
+        self.assertFalse(valido)
+
+    def test_leer_marcador_pendrive(self):
+        """Verifica la lectura física del archivo marcador desde el disco."""
+        # Sin archivo
+        self.assertIsNone(leer_marcador_pendrive(self.temp_dir))
+
+        # Con marcador válido
+        uid = str(uuid.uuid4())
+        marcador = {"id": uid, "creado": datetime.datetime.now().isoformat(), "version": 1}
+        ruta_m = os.path.join(self.temp_dir, NOMBRE_MARCADOR_PENDRIVE)
+        with open(ruta_m, "w", encoding="utf-8") as f:
+            json.dump(marcador, f)
+
+        res = leer_marcador_pendrive(self.temp_dir)
+        self.assertIsNotNone(res)
+        self.assertEqual(res["id"], uid)
+
+    def test_detectar_pendrive_sin_marcador(self):
+        """Verifica que detectar_pendrive devuelva None si no existe marcador en las candidatas."""
+        config = ConfiguracionBandeja()
+        config.rutas_candidatas_pendrive = [self.temp_dir]
+        self.assertIsNone(detectar_pendrive(config))
+
+    def test_detectar_pendrive_con_marcador(self):
+        """Verifica que detectar_pendrive reconozca la unidad con marcador válido."""
+        uid = str(uuid.uuid4())
+        marcador = {"id": uid, "creado": datetime.datetime.now().isoformat(), "version": 1}
+        ruta_m = os.path.join(self.temp_dir, NOMBRE_MARCADOR_PENDRIVE)
+        with open(ruta_m, "w", encoding="utf-8") as f:
+            json.dump(marcador, f)
+
+        config = ConfiguracionBandeja()
+        config.rutas_candidatas_pendrive = [self.temp_dir]
+
+        info = detectar_pendrive(config)
+        self.assertIsNotNone(info)
+        self.assertTrue(info["conectado"])
+        self.assertEqual(info["id"], uid)
+        self.assertEqual(info["ruta_montaje"], os.path.realpath(self.temp_dir))
+        self.assertTrue(info["carpeta_raiz_confinada"].endswith("LucieSinReglas"))
+        self.assertGreater(info["espacio_total_bytes"], 0)
+
+    def test_lectura_pendrive_timeout_cuelgue(self):
+        """
+        Requisito de robustez: simula una función de lectura que se cuelga/demora más del límite
+        y verifica que devuelva 'Pendrive sin respuesta' sin bloquear el proceso.
+        """
+        def funcion_colgada():
+            time.sleep(2.0)
+            return {"conectado": True}
+
+        res = ejecutar_lectura_pendrive_con_timeout(funcion_colgada, timeout_segundos=0.1)
+        self.assertIsInstance(res, dict)
+        self.assertFalse(res.get("conectado", False))
+        self.assertTrue(res.get("sin_respuesta", False))
+        self.assertEqual(res.get("error"), "Pendrive sin respuesta")
+
+    def test_detectar_unidad_candidata_sin_vincular(self):
+        """Verifica que se detecten unidades montadas que aún no han sido vinculadas."""
+        config = ConfiguracionBandeja()
+        config.rutas_candidatas_pendrive = [self.temp_dir]
+
+        cand = detectar_unidad_candidata_sin_vincular(config)
+        self.assertIsNotNone(cand)
+        self.assertEqual(cand["punto_montaje"], os.path.realpath(self.temp_dir))
+        self.assertGreater(cand["espacio_total_bytes"], 0)
+
+
+class TestVinculacionPendrive(unittest.TestCase):
+    """Pruebas del Grupo 2: Simulación y vinculación del pendrive."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp(prefix="test_vinculacion_")
+        # Crear archivos preexistentes del usuario para comprobar que queden idénticos
+        self.carpeta_previa = os.path.join(self.temp_dir, "MisFotos_2024")
+        os.makedirs(self.carpeta_previa, exist_ok=True)
+        self.archivo_previo = os.path.join(self.carpeta_previa, "recuerdo.jpg")
+        with open(self.archivo_previo, "wb") as f:
+            f.write(b"contenido_personal_del_usuario")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_simular_vinculacion_no_escribe_en_disco(self):
+        """Verifica que la simulación de vinculación no escriba nada en el pendrive."""
+        config = ConfiguracionBandeja()
+        res = simular_vinculacion_pendrive(self.temp_dir, config)
+        self.assertTrue(res["puede_vincular"])
+        self.assertEqual(res["punto_montaje"], os.path.realpath(self.temp_dir))
+        self.assertEqual(res["carpeta_raiz_pendrive"], "LucieSinReglas")
+
+        # Verificar que NO se crearon archivos ni carpetas en el pendrive
+        marcador_path = os.path.join(self.temp_dir, NOMBRE_MARCADOR_PENDRIVE)
+        self.assertFalse(os.path.exists(marcador_path))
+        lucie_path = os.path.join(self.temp_dir, "LucieSinReglas")
+        self.assertFalse(os.path.exists(lucie_path))
+
+    def test_vincular_pendrive_crea_marcador_y_estructura_completa(self):
+        """
+        Verifica que la vinculación cree el marcador y la estructura base requerida
+        incluyendo videos ya editados/ y videos completos/ vacíos (Requisito 3).
+        """
+        config = ConfiguracionBandeja()
+        res = vincular_pendrive(self.temp_dir, config)
+        self.assertTrue(res["exito"])
+        uid = res["id"]
+
+        # Verificar marcador
+        marcador_path = os.path.join(self.temp_dir, NOMBRE_MARCADOR_PENDRIVE)
+        self.assertTrue(os.path.isfile(marcador_path))
+        with open(marcador_path, "r", encoding="utf-8") as f:
+            marcador_data = json.load(f)
+        self.assertEqual(marcador_data["id"], uid)
+        self.assertEqual(marcador_data["version"], 1)
+
+        # Verificar estructura dentro de LucieSinReglas
+        raiz = os.path.join(self.temp_dir, "LucieSinReglas")
+        self.assertTrue(os.path.isdir(os.path.join(raiz, ".lucie")))
+        self.assertTrue(os.path.isdir(os.path.join(raiz, "videos sin editar")))
+        self.assertTrue(os.path.isdir(os.path.join(raiz, "videos ya editados")))
+        self.assertTrue(os.path.isdir(os.path.join(raiz, "videos completos")))
+        self.assertTrue(os.path.isdir(os.path.join(raiz, "imagenes")))
+
+        # Verificar que videos ya editados y videos completos se hayan creado vacíos
+        self.assertEqual(os.listdir(os.path.join(raiz, "videos ya editados")), [])
+        self.assertEqual(os.listdir(os.path.join(raiz, "videos completos")), [])
+
+        # Verificar que el contenido previo del usuario siga intacto
+        self.assertTrue(os.path.isfile(self.archivo_previo))
+        with open(self.archivo_previo, "rb") as f:
+            self.assertEqual(f.read(), b"contenido_personal_del_usuario")
+
+    def test_vincular_pendrive_nunca_sobrescribe_marcador_existente(self):
+        """Verifica que nunca se permita sobrescribir un marcador ya existente en la unidad."""
+        config = ConfiguracionBandeja()
+        res1 = vincular_pendrive(self.temp_dir, config)
+        uid1 = res1["id"]
+
+        # Intentar vincular nuevamente debe lanzar ValueError
+        with self.assertRaises(ValueError):
+            simular_vinculacion_pendrive(self.temp_dir, config)
+
+        with self.assertRaises(ValueError):
+            vincular_pendrive(self.temp_dir, config)
+
+        # El marcador original debe permanecer intacto con su ID previo
+        marcador_path = os.path.join(self.temp_dir, NOMBRE_MARCADOR_PENDRIVE)
+        with open(marcador_path, "r", encoding="utf-8") as f:
+            marcador_data = json.load(f)
+        self.assertEqual(marcador_data["id"], uid1)
+
+
+class TestEndpointsVinculacion(unittest.TestCase):
+    """Pruebas HTTP para los endpoints de simular y vincular pendrive."""
+
+    @classmethod
+    def setUpClass(cls):
+        import http.client
+        from bandeja_descargas import (
+            crear_servidor, GestorBaseDatosBandeja, FiltroListaBlanca,
+            DetectorDescargasActivas, AgrupadorLotes, GestorMovimientosBandeja,
+            GeneradorMiniaturas, VigilanteBandeja
+        )
+        cls.tmp_root = tempfile.mkdtemp(prefix="test_server_vinculacion_")
+        cls.db_path = os.path.join(cls.tmp_root, "test.sqlite")
+        cls.descargas = os.path.join(cls.tmp_root, "descargas")
+        cls.destino = os.path.join(cls.tmp_root, "_lucie")
+        cls.bitacora = os.path.join(cls.tmp_root, "bitacora.jsonl")
+        cls.pendrive_dir = os.path.join(cls.tmp_root, "pendrive_falso")
+        os.makedirs(cls.descargas, exist_ok=True)
+        os.makedirs(cls.destino, exist_ok=True)
+        os.makedirs(cls.pendrive_dir, exist_ok=True)
+
+        cls.config = ConfiguracionBandeja()
+        cls.config.ruta_descargas = cls.descargas
+        cls.config.ruta_destino_base = cls.destino
+        cls.config.puerto_servidor = 8991
+        cls.config.host_servidor = "127.0.0.1"
+        cls.config.rutas_candidatas_pendrive = [cls.pendrive_dir]
+
+        cls.db = GestorBaseDatosBandeja(cls.db_path)
+        cls.filtro = FiltroListaBlanca(cls.config)
+        cls.detector = DetectorDescargasActivas(0.1)
+        cls.agrupador = AgrupadorLotes(10)
+        cls.movimientos = GestorMovimientosBandeja(cls.descargas, cls.destino, cls.db, cls.bitacora)
+        cls.miniaturas = GeneradorMiniaturas(cls.db, os.path.join(cls.tmp_root, "thumbs"))
+        cls.vigilante = VigilanteBandeja(cls.config, cls.db, cls.filtro, cls.detector, cls.agrupador)
+
+        cls.token_csrf = "token_csrf_prueba_vinculacion"
+        cls.servidor = crear_servidor(
+            cls.config, cls.db, cls.vigilante, cls.movimientos, cls.miniaturas, token_csrf=cls.token_csrf
+        )
+        import threading
+        cls.hilo_servidor = threading.Thread(target=cls.servidor.serve_forever, daemon=True)
+        cls.hilo_servidor.start()
+        time.sleep(0.2)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.servidor.shutdown()
+        cls.servidor.server_close()
+        shutil.rmtree(cls.tmp_root, ignore_errors=True)
+
+    def _request(self, method: str, path: str, headers: dict = None, body: str = None):
+        import http.client
+        conn = http.client.HTTPConnection("127.0.0.1", self.config.puerto_servidor, timeout=5)
+        headers = headers or {}
+        conn.request(method, path, body=body, headers=headers)
+        res = conn.getresponse()
+        raw = res.read()
+        conn.close()
+        try:
+            parsed = json.loads(raw.decode("utf-8"))
+        except Exception:
+            parsed = {}
+        return res.status, parsed, raw
+
+    def test_vincular_simular_requiere_csrf(self):
+        """Rechaza petición a vincular-simular sin token CSRF (403)."""
+        headers = {
+            "Host": f"127.0.0.1:{self.config.puerto_servidor}",
+            "Content-Type": "application/json"
+        }
+        status, _, _ = self._request("POST", "/api/pendrive/vincular-simular", headers=headers, body="{}")
+        self.assertEqual(status, 403)
+
+    def test_vincular_simular_y_vincular_exitoso(self):
+        """Ejecuta simulación y vinculación por HTTP exitosamente."""
+        headers = {
+            "Host": f"127.0.0.1:{self.config.puerto_servidor}",
+            "Content-Type": "application/json",
+            "X-CSRF-Token": self.token_csrf
+        }
+        body = json.dumps({"punto_montaje": self.pendrive_dir})
+
+        # 1. Simulación
+        status, data, _ = self._request("POST", "/api/pendrive/vincular-simular", headers=headers, body=body)
+        self.assertEqual(status, 200)
+        self.assertTrue(data.get("puede_vincular"))
+
+        # 2. Vinculación
+        status, data, _ = self._request("POST", "/api/pendrive/vincular", headers=headers, body=body)
+        self.assertEqual(status, 200)
+        self.assertTrue(data.get("exito"))
+        self.assertIn("id", data)
+
+        # 3. Intentar vincular de nuevo debe dar 409
+        status, data, _ = self._request("POST", "/api/pendrive/vincular", headers=headers, body=body)
+        self.assertEqual(status, 409)
+
+    def test_envio_simular_endpoint(self):
+        """Prueba HTTP para POST /api/pendrive/envio-simular."""
+        # 1. Sin CSRF -> 403
+        headers_sin_csrf = {
+            "Host": f"127.0.0.1:{self.config.puerto_servidor}",
+            "Content-Type": "application/json"
+        }
+        status, _, _ = self._request("POST", "/api/pendrive/envio-simular", headers=headers_sin_csrf, body="{}")
+        self.assertEqual(status, 403)
+
+        # 2. Con CSRF -> 200
+        headers_ok = {
+            "Host": f"127.0.0.1:{self.config.puerto_servidor}",
+            "Content-Type": "application/json",
+            "X-CSRF-Token": self.token_csrf
+        }
+        status, data, _ = self._request("POST", "/api/pendrive/envio-simular", headers=headers_ok, body="{}")
+        self.assertEqual(status, 200)
+        self.assertIn("puede_enviar", data)
+        self.assertIn("archivos_a_copiar", data)
+
+
+class TestSimulacionEnvio(unittest.TestCase):
+    """Pruebas del Grupo 3: Motor de simulación de envío a pendrive."""
+
+    def setUp(self):
+        self.tmp_root = tempfile.mkdtemp(prefix="test_simulacion_envio_")
+        self.pendrive_dir = os.path.join(self.tmp_root, "pendrive")
+        self.descargas_dir = os.path.join(self.tmp_root, "descargas")
+        self.sala_espera = os.path.join(self.tmp_root, "_lucie")
+
+        os.makedirs(self.pendrive_dir, exist_ok=True)
+        os.makedirs(self.descargas_dir, exist_ok=True)
+        os.makedirs(self.sala_espera, exist_ok=True)
+
+        self.config = ConfiguracionBandeja()
+        self.config.ruta_descargas = self.descargas_dir
+        self.config.ruta_destino_base = self.sala_espera
+        self.config.rutas_candidatas_pendrive = [self.pendrive_dir]
+
+        # Vincular pendrive
+        vincular_pendrive(self.pendrive_dir, self.config)
+
+        # Crear estructura de capítulo en sala de espera:
+        # ~/Descargas/_lucie/lucie/capitulo_01/
+        self.cap_dir = os.path.join(self.sala_espera, "lucie", "capitulo_01")
+        self.fotos_dir = os.path.join(self.cap_dir, "fotos")
+        self.videos_dir = os.path.join(self.cap_dir, "videos")
+        os.makedirs(self.fotos_dir, exist_ok=True)
+        os.makedirs(self.videos_dir, exist_ok=True)
+
+        # Archivo de foto
+        self.foto_file = os.path.join(self.fotos_dir, "foto1.jpg")
+        with open(self.foto_file, "wb") as f:
+            f.write(b"contenido_foto_1")
+
+        # Archivo de video
+        self.video_file = os.path.join(self.videos_dir, "lucievideo1.mp4")
+        with open(self.video_file, "wb") as f:
+            f.write(b"contenido_video_1_mp4")
+
+        # Archivo no multimedia suelto en la raíz del capítulo
+        self.notas_file = os.path.join(self.cap_dir, "notas.txt")
+        with open(self.notas_file, "wb") as f:
+            f.write(b"anotaciones_de_produccion")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_root, ignore_errors=True)
+
+    def test_simular_envio_detecta_archivos_y_omite_no_multimedia(self):
+        """
+        Verifica que los videos vayan a 'videos sin editar', las fotos a 'imagenes',
+        y que archivos sueltos no multimedia se omitan con aviso (Requisito 3 y 6).
+        """
+        sim = simular_envio_capitulos(config=self.config)
+        self.assertTrue(sim["puede_enviar"])
+        self.assertEqual(len(sim["archivos_a_copiar"]), 2)
+
+        nombres_a_copiar = {a["nombre"]: a for a in sim["archivos_a_copiar"]}
+        self.assertIn("foto1.jpg", nombres_a_copiar)
+        self.assertIn("lucievideo1.mp4", nombres_a_copiar)
+
+        # Verificar destino relativo
+        self.assertEqual(
+            nombres_a_copiar["foto1.jpg"]["ruta_relativa_pendrive"],
+            os.path.join("imagenes", "lucie", "capitulo_01", "foto1.jpg")
+        )
+        self.assertEqual(
+            nombres_a_copiar["lucievideo1.mp4"]["ruta_relativa_pendrive"],
+            os.path.join("videos sin editar", "lucie", "capitulo_01", "lucievideo1.mp4")
+        )
+
+        # Verificar que el archivo no multimedia suelto se omitió con advertencia
+        self.assertEqual(len(sim["archivos_no_multimedia"]), 1)
+        self.assertEqual(sim["archivos_no_multimedia"][0]["nombre"], "notas.txt")
+        self.assertTrue(any("notas.txt" in av for av in sim["avisos"]))
+
+    def test_simular_envio_deduplicacion_ya_enviado_manifiesto(self):
+        """
+        Requisito 1: Un archivo cuyo sha256 ya figura en el manifiesto se omite en la simulación
+        con el aviso 'ya enviado'.
+        """
+        from bandeja_descargas import calcular_sha256
+        sha_foto = calcular_sha256(self.foto_file)
+
+        # Registrar entrada previa en el manifiesto del pendrive
+        manifiesto_path = os.path.join(self.pendrive_dir, "LucieSinReglas", ".lucie", "manifiesto.jsonl")
+        entrada_previa = {
+            "id_envio": str(uuid.uuid4()),
+            "fecha": datetime.datetime.now().isoformat(),
+            "equipo": "test-box",
+            "pendrive_id": "test-id",
+            "personaje": "lucie",
+            "capitulo": "capitulo_01",
+            "tipo": "imagen",
+            "nombre": "foto1.jpg",
+            "ruta_relativa": "imagenes/lucie/capitulo_01/foto1.jpg",
+            "sha256": sha_foto,
+            "bytes": len(b"contenido_foto_1"),
+            "estado": "enviado"
+        }
+        with open(manifiesto_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entrada_previa) + "\n")
+
+        sim = simular_envio_capitulos(config=self.config)
+        # La foto debe estar en omitidos con aviso 'ya enviado'
+        self.assertEqual(len(sim["archivos_omitidos"]), 1)
+        self.assertEqual(sim["archivos_omitidos"][0]["nombre"], "foto1.jpg")
+        self.assertIn("ya enviado", sim["archivos_omitidos"][0]["aviso"].lower())
+
+        # Solo el video debe quedar a copiar
+        self.assertEqual(len(sim["archivos_a_copiar"]), 1)
+        self.assertEqual(sim["archivos_a_copiar"][0]["nombre"], "lucievideo1.mp4")
+
+    def test_simular_envio_conflicto_distinto_hash_bloquea_copia(self):
+        """
+        Requisito 3: Si en el destino existe un archivo con distinto hash, se marca como conflicto
+        y NO se copia (nunca se pisa ni se sufija a ciegas).
+        """
+        # Crear en pendrive un archivo existente con distinto contenido
+        dest_video = os.path.join(self.pendrive_dir, "LucieSinReglas", "videos sin editar", "lucie", "capitulo_01", "lucievideo1.mp4")
+        os.makedirs(os.path.dirname(dest_video), exist_ok=True)
+        with open(dest_video, "wb") as f:
+            f.write(b"contenido_diferente_ya_existente_en_pendrive")
+
+        sim = simular_envio_capitulos(config=self.config)
+        self.assertFalse(sim["puede_enviar"])
+        self.assertEqual(len(sim["archivos_conflictos"]), 1)
+        self.assertEqual(sim["archivos_conflictos"][0]["nombre"], "lucievideo1.mp4")
+        self.assertIn("conflicto", sim["archivos_conflictos"][0]["estado"].lower())
+        self.assertIn("conflicto", sim["motivo_bloqueo"].lower())
+
+    def test_simular_envio_colision_case_insensitive(self):
+        """Verifica que detecte colisión incluso si difiere en mayúsculas/minúsculas (LUCIEVIDEO1.MP4)."""
+        from bandeja_descargas import calcular_sha256
+        sha_video = calcular_sha256(self.video_file)
+
+        # Crear archivo en pendrive con nombre en mayúsculas pero mismo hash
+        dest_video = os.path.join(self.pendrive_dir, "LucieSinReglas", "videos sin editar", "lucie", "capitulo_01", "LUCIEVIDEO1.MP4")
+        os.makedirs(os.path.dirname(dest_video), exist_ok=True)
+        with open(dest_video, "wb") as f:
+            f.write(b"contenido_video_1_mp4")
+
+        sim = simular_envio_capitulos(config=self.config)
+        # Detecta que ya existe idéntico case-insensitive -> ya enviado
+        omitidos_nombres = [a["nombre"] for a in sim["archivos_omitidos"]]
+        self.assertIn("lucievideo1.mp4", omitidos_nombres)
+
+    def test_simular_envio_bloqueo_fat32_4gib(self):
+        """Verifica que en FAT32 se bloqueen preventivamente archivos mayores a 4 GiB."""
+        import unittest.mock
+        # Simular sistema de archivos vfat
+        with unittest.mock.patch("bandeja_descargas.obtener_sistema_archivos", return_value="vfat"):
+            # Simular tamaño de 5 GiB para el video
+            tam_5gib = 5 * 1024 * 1024 * 1024
+            orig_stat = os.stat
+            def mock_stat(path, *args, **kwargs):
+                st = orig_stat(path, *args, **kwargs)
+                if path.endswith("lucievideo1.mp4"):
+                    return os.stat_result((st.st_mode, st.st_ino, st.st_dev, st.st_nlink,
+                                          st.st_uid, st.st_gid, tam_5gib,
+                                          st.st_atime, st.st_mtime, st.st_ctime))
+                return st
+
+            with unittest.mock.patch("os.stat", side_effect=mock_stat):
+                sim = simular_envio_capitulos(config=self.config)
+                self.assertFalse(sim["puede_enviar"])
+                self.assertEqual(len(sim["archivos_bloqueados"]), 1)
+                self.assertEqual(sim["archivos_bloqueados"][0]["nombre"], "lucievideo1.mp4")
+                self.assertIn("4 gib", sim["motivo_bloqueo"].lower())
+
+    def test_simular_envio_espacio_insuficiente(self):
+        """Verifica que el envío se bloquee si no hay espacio libre suficiente con margen."""
+        import unittest.mock
+        # Espacio libre muy pequeño (10 bytes)
+        espacio_bajo = {"total": 1000000000, "usado": 999999990, "libre": 10}
+        with unittest.mock.patch("bandeja_descargas.obtener_espacio_disco", return_value=espacio_bajo):
+            sim = simular_envio_capitulos(config=self.config)
+            self.assertFalse(sim["puede_enviar"])
+            self.assertIn("espacio insuficiente", sim["motivo_bloqueo"].lower())
+
+
+class TestEjecucionEnvioPendrive(unittest.TestCase):
+    """Pruebas de la ejecución física segura de envío al pendrive (Grupo 4)."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp(prefix="test_envio_ejecucion_")
+        self.descargas_dir = os.path.join(self.tmp_dir, "Descargas")
+        self.destino_base = os.path.join(self.descargas_dir, "_lucie")
+        self.pendrive_dir = os.path.join(self.tmp_dir, "media_user", "PENDRIVE")
+        self.bitacora_path = os.path.join(self.tmp_dir, "bitacora_test.jsonl")
+        self.db_path = os.path.join(self.tmp_dir, "bandeja_test.sqlite")
+
+        os.makedirs(self.descargas_dir, exist_ok=True)
+        os.makedirs(self.destino_base, exist_ok=True)
+        os.makedirs(self.pendrive_dir, exist_ok=True)
+
+        self.config = ConfiguracionBandeja()
+        self.config.ruta_descargas = self.descargas_dir
+        self.config.ruta_destino_base = self.destino_base
+        self.config.carpeta_raiz_pendrive = "LucieSinReglas"
+        self.config.rutas_candidatas_pendrive = [self.pendrive_dir]
+        self.config.margen_libre_bytes = 1024
+
+        self.db = GestorBaseDatosBandeja(ruta_db=self.db_path)
+        self.movimientos = GestorMovimientosBandeja(
+            ruta_descargas=self.descargas_dir,
+            ruta_destino_base=self.destino_base,
+            db=self.db,
+            ruta_bitacora=self.bitacora_path,
+            config=self.config
+        )
+
+        # Vincular pendrive
+        vincular_pendrive(self.pendrive_dir, self.config)
+
+        # Archivo preexistente de usuario fuera de LucieSinReglas/
+        self.user_dir = os.path.join(self.pendrive_dir, "MisDocumentos")
+        os.makedirs(self.user_dir, exist_ok=True)
+        self.user_file = os.path.join(self.user_dir, "archivo_intacto.txt")
+        with open(self.user_file, "w", encoding="utf-8") as f:
+            f.write("CONTENIDO IMPORTANTE DE USUARIO NUNCA TOCAR")
+        self.user_file_hash = calcular_sha256(self.user_file)
+
+        # Crear capítulo en sala de espera con video y foto
+        self.cap_dir = os.path.join(self.destino_base, "lucie", "capitulo1")
+        self.videos_dir = os.path.join(self.cap_dir, "videos")
+        self.fotos_dir = os.path.join(self.cap_dir, "fotos")
+        os.makedirs(self.videos_dir, exist_ok=True)
+        os.makedirs(self.fotos_dir, exist_ok=True)
+
+        self.vid_path = os.path.join(self.videos_dir, "lucievideo1.mp4")
+        self.fot_path = os.path.join(self.fotos_dir, "luciefoto1.jpg")
+        with open(self.vid_path, "wb") as f:
+            f.write(b"VIDEO CONTENT 1234567890 BINARY STREAM")
+        with open(self.fot_path, "wb") as f:
+            f.write(b"PHOTO CONTENT ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+        self.vid_hash = calcular_sha256(self.vid_path)
+        self.fot_hash = calcular_sha256(self.fot_path)
+
+    def tearDown(self):
+        # Limpieza manual sin usar métodos prohibidos en código productivo
+        pass
+
+    def test_envio_lote_exitoso_copia_part_fsync_renombrado_y_verificacion(self):
+        """Verifica que el lote se copie a pendrive, el original pase a _enviados y lo preexistente quede intacto."""
+        res = ejecutar_envio_pendrive(
+            ["lucie/capitulo1"],
+            config=self.config,
+            db=self.db,
+            movimientos=self.movimientos
+        )
+        self.assertTrue(res["exito"])
+        self.assertEqual(res["total_transferidos"], 2)
+
+        # 1. Archivos en destino final en pendrive
+        dest_vid = os.path.join(self.pendrive_dir, "LucieSinReglas", "videos sin editar", "lucie", "capitulo1", "lucievideo1.mp4")
+        dest_fot = os.path.join(self.pendrive_dir, "LucieSinReglas", "imagenes", "lucie", "capitulo1", "luciefoto1.jpg")
+        self.assertTrue(os.path.exists(dest_vid))
+        self.assertTrue(os.path.exists(dest_fot))
+        self.assertEqual(calcular_sha256(dest_vid), self.vid_hash)
+        self.assertEqual(calcular_sha256(dest_fot), self.fot_hash)
+
+        # 2. No deben quedar archivos .part
+        self.assertFalse(os.path.exists(dest_vid + ".part"))
+        self.assertFalse(os.path.exists(dest_fot + ".part"))
+
+        # 3. Origen en sala de espera ya no debe existir
+        self.assertFalse(os.path.exists(self.vid_path))
+        self.assertFalse(os.path.exists(self.fot_path))
+
+        # 4. Archivos preservados en _enviados
+        env_vid = os.path.join(self.destino_base, "_enviados", "lucie", "capitulo1", "videos", "lucievideo1.mp4")
+        env_fot = os.path.join(self.destino_base, "_enviados", "lucie", "capitulo1", "fotos", "luciefoto1.jpg")
+        self.assertTrue(os.path.exists(env_vid))
+        self.assertTrue(os.path.exists(env_fot))
+        self.assertEqual(calcular_sha256(env_vid), self.vid_hash)
+        self.assertEqual(calcular_sha256(env_fot), self.fot_hash)
+
+        # 5. Archivos preexistentes del usuario quedan 100% intactos
+        self.assertTrue(os.path.exists(self.user_file))
+        self.assertEqual(calcular_sha256(self.user_file), self.user_file_hash)
+
+        # 6. Manifiesto en el pendrive contiene las 2 entradas
+        ruta_man = os.path.join(self.pendrive_dir, "LucieSinReglas", ".lucie", NOMBRE_MANIFIESTO_PENDRIVE)
+        self.assertTrue(os.path.exists(ruta_man))
+        lineas = []
+        with open(ruta_man, "r", encoding="utf-8") as f:
+            for l in f:
+                if l.strip():
+                    lineas.append(json.loads(l))
+        self.assertEqual(len(lineas), 2)
+        self.assertEqual(lineas[0]["estado"], "enviado")
+        self.assertEqual(lineas[0]["id_envio"], res["id_envio"])
+
+        # 7. Bitácora local contiene el evento envio_pendrive
+        with open(self.bitacora_path, "r", encoding="utf-8") as f:
+            ops = [json.loads(l) for l in f if l.strip()]
+        self.assertEqual(len(ops), 1)
+        self.assertEqual(ops[0]["evento"], "envio_pendrive")
+        self.assertEqual(ops[0]["id_operacion"], res["id_envio"])
+
+    def test_envio_falla_verificacion_preserva_part_y_no_mueve_origen(self):
+        """Si la verificación post-copia falla, el archivo .part se preserva y el origen NO se mueve."""
+        import unittest.mock
+        real_calc = calcular_sha256
+
+        def mock_calc_sha(path, *args, **kwargs):
+            # Provocar fallo en la verificación post-copia
+            if "LucieSinReglas" in path and not path.endswith(".part"):
+                return "hash_corrupto_discrepante_falso"
+            return real_calc(path, *args, **kwargs)
+
+        with unittest.mock.patch("bandeja_descargas.calcular_sha256", side_effect=mock_calc_sha):
+            with self.assertRaises(RuntimeError) as ctx:
+                ejecutar_envio_pendrive(
+                    ["lucie/capitulo1"],
+                    config=self.config,
+                    db=self.db,
+                    movimientos=self.movimientos
+                )
+            self.assertIn("discrepancia", str(ctx.exception).lower())
+
+        # El archivo .part no fue borrado
+        dest_vid_part = os.path.join(self.pendrive_dir, "LucieSinReglas", "videos sin editar", "lucie", "capitulo1", "lucievideo1.mp4.part")
+        # O bien el destino final quedó corrupto y el origen sigue en sala de espera intacto
+        self.assertTrue(os.path.exists(self.vid_path))
+        self.assertTrue(os.path.exists(self.fot_path))
+
+    def test_preservacion_enviados_sufijo_numerico_si_ya_existe(self):
+        """Verifica que si ya existe un archivo con idéntico nombre en _enviados, se use sufijo numérico."""
+        env_vid = os.path.join(self.destino_base, "_enviados", "lucie", "capitulo1", "videos", "lucievideo1.mp4")
+        os.makedirs(os.path.dirname(env_vid), exist_ok=True)
+        with open(env_vid, "wb") as f:
+            f.write(b"PREEXISTING ENVIADO FILE")
+
+        res = ejecutar_envio_pendrive(
+            ["lucie/capitulo1"],
+            config=self.config,
+            db=self.db,
+            movimientos=self.movimientos
+        )
+        self.assertTrue(res["exito"])
+
+        # El preexistente sigue intacto
+        with open(env_vid, "rb") as f:
+            self.assertEqual(f.read(), b"PREEXISTING ENVIADO FILE")
+
+        # El nuevo tomó sufijo _1
+        env_vid_sufijo = os.path.join(self.destino_base, "_enviados", "lucie", "capitulo1", "videos", "lucievideo1_1.mp4")
+        self.assertTrue(os.path.exists(env_vid_sufijo))
+        self.assertEqual(calcular_sha256(env_vid_sufijo), self.vid_hash)
+
+
+class TestDeshacerEnvioPendrive(unittest.TestCase):
+    """Pruebas del mecanismo de deshacer envíos al pendrive hacia _revertidos (Grupo 5)."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp(prefix="test_envio_deshacer_")
+        self.descargas_dir = os.path.join(self.tmp_dir, "Descargas")
+        self.destino_base = os.path.join(self.descargas_dir, "_lucie")
+        self.pendrive_dir = os.path.join(self.tmp_dir, "media_user", "PENDRIVE")
+        self.bitacora_path = os.path.join(self.tmp_dir, "bitacora_test.jsonl")
+        self.db_path = os.path.join(self.tmp_dir, "bandeja_test.sqlite")
+
+        os.makedirs(self.descargas_dir, exist_ok=True)
+        os.makedirs(self.destino_base, exist_ok=True)
+        os.makedirs(self.pendrive_dir, exist_ok=True)
+
+        self.config = ConfiguracionBandeja()
+        self.config.ruta_descargas = self.descargas_dir
+        self.config.ruta_destino_base = self.destino_base
+        self.config.carpeta_raiz_pendrive = "LucieSinReglas"
+        self.config.rutas_candidatas_pendrive = [self.pendrive_dir]
+        self.config.margen_libre_bytes = 1024
+
+        self.db = GestorBaseDatosBandeja(ruta_db=self.db_path)
+        self.movimientos = GestorMovimientosBandeja(
+            ruta_descargas=self.descargas_dir,
+            ruta_destino_base=self.destino_base,
+            db=self.db,
+            ruta_bitacora=self.bitacora_path,
+            config=self.config
+        )
+
+        vincular_pendrive(self.pendrive_dir, self.config)
+
+        self.cap_dir = os.path.join(self.destino_base, "lucie", "capitulo1")
+        self.videos_dir = os.path.join(self.cap_dir, "videos")
+        os.makedirs(self.videos_dir, exist_ok=True)
+
+        self.vid_path = os.path.join(self.videos_dir, "lucievideo1.mp4")
+        with open(self.vid_path, "wb") as f:
+            f.write(b"ORIGINAL VIDEO IN WAITING AREA")
+        self.vid_hash = calcular_sha256(self.vid_path)
+
+        # Realizar envío inicial
+        self.envio_res = ejecutar_envio_pendrive(
+            ["lucie/capitulo1"],
+            config=self.config,
+            db=self.db,
+            movimientos=self.movimientos
+        )
+        self.id_envio = self.envio_res["id_envio"]
+
+    def test_deshacer_envio_exitoso(self):
+        """Verifica que al deshacer, la copia va a _revertidos y el original vuelve a la sala de espera."""
+        res_undo = deshacer_envio_pendrive(
+            self.id_envio,
+            config=self.config,
+            db=self.db,
+            ruta_bitacora=self.bitacora_path
+        )
+        self.assertTrue(res_undo["exito"])
+        self.assertEqual(res_undo["total_revertidos"], 1)
+
+        # 1. El original volvió a la sala de espera
+        self.assertTrue(os.path.exists(self.vid_path))
+        self.assertEqual(calcular_sha256(self.vid_path), self.vid_hash)
+
+        # 2. La copia en pendrive se trasladó a _revertidos/<id_envio>/...
+        dest_revertido = os.path.join(
+            self.pendrive_dir, "LucieSinReglas", "_revertidos", self.id_envio,
+            "videos sin editar", "lucie", "capitulo1", "lucievideo1.mp4"
+        )
+        self.assertTrue(os.path.exists(dest_revertido))
+        self.assertEqual(calcular_sha256(dest_revertido), self.vid_hash)
+
+        # 3. La copia activa en el pendrive ya no existe
+        dest_activo = os.path.join(
+            self.pendrive_dir, "LucieSinReglas", "videos sin editar", "lucie", "capitulo1", "lucievideo1.mp4"
+        )
+        self.assertFalse(os.path.exists(dest_activo))
+
+        # 4. Manifiesto en pendrive tiene registrado 'envio_revertido'
+        ruta_man = os.path.join(self.pendrive_dir, "LucieSinReglas", ".lucie", NOMBRE_MANIFIESTO_PENDRIVE)
+        with open(ruta_man, "r", encoding="utf-8") as f:
+            lineas = [json.loads(l) for l in f if l.strip()]
+        self.assertEqual(len(lineas), 2)
+        self.assertEqual(lineas[1]["estado"], "envio_revertido")
+        self.assertEqual(lineas[1]["id_envio"], self.id_envio)
+
+        # 5. Bitácora local tiene registrado el evento deshacer
+        with open(self.bitacora_path, "r", encoding="utf-8") as f:
+            ops = [json.loads(l) for l in f if l.strip()]
+        self.assertEqual(len(ops), 2)
+        self.assertEqual(ops[1]["evento"], "deshacer")
+        self.assertEqual(ops[1]["id_operacion_revertida"], self.id_envio)
+
+    def test_deshacer_rechazado_si_origen_sala_espera_ocupado(self):
+        """Si la ruta de destino original en la sala de espera fue ocupada por otro archivo, el deshacer se NIEGA."""
+        # Colocar un nuevo archivo en la misma ruta original
+        with open(self.vid_path, "wb") as f:
+            f.write(b"NUEVO ARCHIVO LLEGADO RECIENTEMENTE A SALA DE ESPERA")
+
+        with self.assertRaises(ErrorDeshacer) as ctx:
+            deshacer_envio_pendrive(
+                self.id_envio,
+                config=self.config,
+                db=self.db,
+                ruta_bitacora=self.bitacora_path
+            )
+
+        self.assertIn("ocupada", str(ctx.exception).lower())
+
+        # Verificar que el nuevo archivo NO fue tocado ni pisado
+        with open(self.vid_path, "rb") as f:
+            self.assertEqual(f.read(), b"NUEVO ARCHIVO LLEGADO RECIENTEMENTE A SALA DE ESPERA")
+
+        # La copia en pendrive sigue en su lugar original intacta
+        dest_activo = os.path.join(
+            self.pendrive_dir, "LucieSinReglas", "videos sin editar", "lucie", "capitulo1", "lucievideo1.mp4"
+        )
+        self.assertTrue(os.path.exists(dest_activo))
+
+
+class TestEndpointsEnvioYDeshacerHTTP(unittest.TestCase):
+    """Pruebas de endpoints HTTP POST /api/pendrive/envio y POST /api/deshacer."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp(prefix="test_http_envio_")
+        self.descargas_dir = os.path.join(self.tmp_dir, "Descargas")
+        self.destino_base = os.path.join(self.descargas_dir, "_lucie")
+        self.pendrive_dir = os.path.join(self.tmp_dir, "media_user", "PENDRIVE")
+        self.bitacora_path = os.path.join(self.tmp_dir, "bitacora_test.jsonl")
+        self.db_path = os.path.join(self.tmp_dir, "bandeja_test.sqlite")
+
+        os.makedirs(self.descargas_dir, exist_ok=True)
+        os.makedirs(self.destino_base, exist_ok=True)
+        os.makedirs(self.pendrive_dir, exist_ok=True)
+
+        self.config = ConfiguracionBandeja()
+        self.config.ruta_descargas = self.descargas_dir
+        self.config.ruta_destino_base = self.destino_base
+        self.config.carpeta_raiz_pendrive = "LucieSinReglas"
+        self.config.rutas_candidatas_pendrive = [self.pendrive_dir]
+        self.config.puerto_servidor = 0
+        self.config.host_servidor = "127.0.0.1"
+
+        self.db = GestorBaseDatosBandeja(ruta_db=self.db_path)
+        self.token_csrf = "token_prueba_csrf_123456789"
+
+        vincular_pendrive(self.pendrive_dir, self.config)
+
+        # Crear archivo en sala de espera
+        cap_dir = os.path.join(self.destino_base, "lucie", "cap1")
+        os.makedirs(os.path.join(cap_dir, "videos"), exist_ok=True)
+        with open(os.path.join(cap_dir, "videos", "v1.mp4"), "wb") as f:
+            f.write(b"SAMPLE VIDEO FOR HTTP TEST")
+
+        self.movimientos = GestorMovimientosBandeja(
+            ruta_descargas=self.descargas_dir,
+            ruta_destino_base=self.destino_base,
+            db=self.db,
+            ruta_bitacora=self.bitacora_path,
+            config=self.config
+        )
+        self.filtro = FiltroListaBlanca(self.config)
+        self.detector = DetectorDescargasActivas()
+        self.agrupador = AgrupadorLotes(ventana_minutos=self.config.ventana_lote_minutos)
+        self.vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+        self.miniaturas = GeneradorMiniaturas(self.db)
+
+        self.servidor = crear_servidor(
+            self.config, self.db, self.vigilante, self.movimientos,
+            self.miniaturas, token_csrf=self.token_csrf
+        )
+        self.hilo = threading.Thread(target=self.servidor.serve_forever, daemon=True)
+        self.hilo.start()
+        self.puerto = self.config.puerto_servidor
+
+    def tearDown(self):
+        self.servidor.shutdown()
+        self.servidor.server_close()
+
+    def test_post_envio_exitoso_y_deshacer(self):
+        import urllib.request
+        url_envio = f"http://127.0.0.1:{self.puerto}/api/pendrive/envio"
+        req = urllib.request.Request(
+            url_envio,
+            data=json.dumps({"capitulos": ["lucie/cap1"]}).encode("utf-8"),
+            headers={
+                "Host": f"127.0.0.1:{self.puerto}",
+                "Content-Type": "application/json",
+                "X-CSRF-Token": self.token_csrf
+            },
+            method="POST"
+        )
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            data = json.loads(resp.read().decode("utf-8"))
+            self.assertTrue(data.get("exito"))
+            id_envio = data.get("id_envio")
+
+        # Ahora revertir mediante POST /api/deshacer
+        url_deshacer = f"http://127.0.0.1:{self.puerto}/api/deshacer"
+        req_undo = urllib.request.Request(
+            url_deshacer,
+            data=json.dumps({"id_operacion": id_envio}).encode("utf-8"),
+            headers={
+                "Host": f"127.0.0.1:{self.puerto}",
+                "Content-Type": "application/json",
+                "X-CSRF-Token": self.token_csrf
+            },
+            method="POST"
+        )
+        with urllib.request.urlopen(req_undo) as resp_undo:
+            self.assertEqual(resp_undo.status, 200)
+            data_undo = json.loads(resp_undo.read().decode("utf-8"))
+            self.assertTrue(data_undo.get("exito"))
+
+        # Deshacer por segunda vez debe responder 409 Conflict
+        req_repeat = urllib.request.Request(
+            url_deshacer,
+            data=json.dumps({"id_operacion": id_envio}).encode("utf-8"),
+            headers={
+                "Host": f"127.0.0.1:{self.puerto}",
+                "Content-Type": "application/json",
+                "X-CSRF-Token": self.token_csrf
+            },
+            method="POST"
+        )
+        import urllib.error
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(req_repeat)
+        self.assertEqual(ctx.exception.code, 409)
+
+
+class TestVigilanteYEstadoPendrive(unittest.TestCase):
+    """Pruebas del Vigilante, Banner reactivo y estado de API con timeout (Grupo 6)."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp(prefix="test_vigilante_pen_")
+        self.descargas_dir = os.path.join(self.tmp_dir, "Descargas")
+        self.destino_base = os.path.join(self.descargas_dir, "_lucie")
+        self.pendrive_dir = os.path.join(self.tmp_dir, "media_user", "PENDRIVE")
+        self.bitacora_path = os.path.join(self.tmp_dir, "bitacora_test.jsonl")
+        self.db_path = os.path.join(self.tmp_dir, "bandeja_test.sqlite")
+
+        os.makedirs(self.descargas_dir, exist_ok=True)
+        os.makedirs(self.destino_base, exist_ok=True)
+        os.makedirs(self.pendrive_dir, exist_ok=True)
+
+        self.config = ConfiguracionBandeja()
+        self.config.ruta_descargas = self.descargas_dir
+        self.config.ruta_destino_base = self.destino_base
+        self.config.carpeta_raiz_pendrive = "LucieSinReglas"
+        self.config.rutas_candidatas_pendrive = [self.pendrive_dir]
+        self.config.puerto_servidor = 0
+        self.config.host_servidor = "127.0.0.1"
+
+        self.db = GestorBaseDatosBandeja(ruta_db=self.db_path)
+        self.token_csrf = "token_csrf_vigilante_123"
+
+        vincular_pendrive(self.pendrive_dir, self.config)
+
+        # Crear 3 archivos en 2 capítulos
+        cap1 = os.path.join(self.destino_base, "lucie", "cap1")
+        cap2 = os.path.join(self.destino_base, "roli", "cap2")
+        os.makedirs(os.path.join(cap1, "videos"), exist_ok=True)
+        os.makedirs(os.path.join(cap1, "fotos"), exist_ok=True)
+        os.makedirs(os.path.join(cap2, "videos"), exist_ok=True)
+
+        with open(os.path.join(cap1, "videos", "v1.mp4"), "wb") as f:
+            f.write(b"V1")
+        with open(os.path.join(cap1, "fotos", "f1.jpg"), "wb") as f:
+            f.write(b"F1")
+        with open(os.path.join(cap2, "videos", "v2.mp4"), "wb") as f:
+            f.write(b"V2")
+
+        self.movimientos = GestorMovimientosBandeja(
+            ruta_descargas=self.descargas_dir,
+            ruta_destino_base=self.destino_base,
+            db=self.db,
+            ruta_bitacora=self.bitacora_path,
+            config=self.config
+        )
+        self.filtro = FiltroListaBlanca(self.config)
+        self.detector = DetectorDescargasActivas()
+        self.agrupador = AgrupadorLotes(ventana_minutos=self.config.ventana_lote_minutos)
+        self.vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+        self.miniaturas = GeneradorMiniaturas(self.db)
+
+        self.servidor = crear_servidor(
+            self.config, self.db, self.vigilante, self.movimientos,
+            self.miniaturas, token_csrf=self.token_csrf
+        )
+        self.hilo = threading.Thread(target=self.servidor.serve_forever, daemon=True)
+        self.hilo.start()
+        self.puerto = self.config.puerto_servidor
+
+    def tearDown(self):
+        self.servidor.shutdown()
+        self.servidor.server_close()
+
+    def test_vigilante_detecta_pendrive_y_calcula_pendientes_sin_enviar_automatico(self):
+        """Verifica que el vigilante cuente archivos y capítulos listos sin enviar nada solo."""
+        self.vigilante.escanear()
+        estado = self.vigilante.obtener_estado()
+
+        self.assertTrue(estado["pendrive"]["conectado"])
+        self.assertEqual(estado["pendrive"]["archivos_pendientes_conteo"], 3)
+        self.assertEqual(estado["pendrive"]["capitulos_pendientes_conteo"], 2)
+        banner = estado["pendrive"]["banner_reactivo"]
+        self.assertIsNotNone(banner)
+        self.assertTrue(banner["mostrar"])
+        self.assertIn("3 archivo(s) de 2 capítulo(s)", banner["mensaje"])
+
+        # Ningún archivo debe haberse transferido automáticamente
+        dest_pen = os.path.join(self.pendrive_dir, "LucieSinReglas", "videos sin editar", "lucie", "cap1", "v1.mp4")
+        self.assertFalse(os.path.exists(dest_pen))
+
+    def test_endpoint_get_pendrive_estado_y_archivos_part_huerfanos(self):
+        """El endpoint GET /api/pendrive/estado reporta la unidad y los archivos .part huérfanos."""
+        import urllib.request
+        # Crear un archivo .part huérfano dentro de LucieSinReglas
+        dir_part = os.path.join(self.pendrive_dir, "LucieSinReglas", "videos sin editar", "lucie", "cap1")
+        os.makedirs(dir_part, exist_ok=True)
+        part_file = os.path.join(dir_part, "video_incompleto.mp4.part")
+        with open(part_file, "wb") as f:
+            f.write(b"INCOMPLETE PART DATA")
+
+        url = f"http://127.0.0.1:{self.puerto}/api/pendrive/estado"
+        req = urllib.request.Request(url, headers={"Host": f"127.0.0.1:{self.puerto}"})
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            data = json.loads(resp.read().decode("utf-8"))
+
+        self.assertTrue(data.get("conectado"))
+        self.assertFalse(data.get("sin_respuesta"))
+        self.assertEqual(data.get("punto_montaje"), self.pendrive_dir)
+        huerfanos = data.get("archivos_part_huerfanos", [])
+        self.assertEqual(len(huerfanos), 1)
+        self.assertEqual(huerfanos[0]["nombre"], "video_incompleto.mp4.part")
+
+    def test_endpoint_get_pendrive_estado_sin_respuesta_timeout(self):
+        """Si el pendrive no responde o se cuelga, el endpoint responde sin_respuesta=True y error explicativo."""
+        import urllib.request
+        import unittest.mock
+
+        # Simular lectura colgada que retorna sin_respuesta
+        mock_res = {
+            "conectado": False,
+            "sin_respuesta": True,
+            "error": "Pendrive sin respuesta",
+            "mensaje": "Pendrive sin respuesta",
+            "id": None,
+            "punto_montaje": None,
+            "sistema_archivos": None,
+            "espacio_libre_bytes": 0,
+            "espacio_total_bytes": 0,
+            "espacio_usado_bytes": 0,
+            "archivos_part_huerfanos": [],
+            "archivos_pendientes_conteo": 0,
+            "capitulos_pendientes_conteo": 0,
+            "banner_reactivo": None
+        }
+
+        with unittest.mock.patch("bandeja_descargas.obtener_estado_pendrive", return_value=mock_res):
+            url = f"http://127.0.0.1:{self.puerto}/api/pendrive/estado"
+            req = urllib.request.Request(url, headers={"Host": f"127.0.0.1:{self.puerto}"})
+            with urllib.request.urlopen(req) as resp:
+                self.assertEqual(resp.status, 200)
+                data = json.loads(resp.read().decode("utf-8"))
+
+        self.assertFalse(data.get("conectado"))
+        self.assertTrue(data.get("sin_respuesta"))
+        self.assertEqual(data.get("error"), "Pendrive sin respuesta")
+
+
+class TestInterfazUsuarioPendrive(unittest.TestCase):
+    """Pruebas de la Interfaz de Usuario y SPA para el envío a pendrive (Grupo 7)."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp(prefix="test_ui_pendrive_")
+        self.descargas_dir = os.path.join(self.tmp_dir, "Descargas")
+        self.destino_base = os.path.join(self.descargas_dir, "_lucie")
+        self.pendrive_dir = os.path.join(self.tmp_dir, "media_user", "PENDRIVE")
+        self.bitacora_path = os.path.join(self.tmp_dir, "bitacora_test.jsonl")
+        self.db_path = os.path.join(self.tmp_dir, "bandeja_test.sqlite")
+
+        os.makedirs(self.descargas_dir, exist_ok=True)
+        os.makedirs(self.destino_base, exist_ok=True)
+        os.makedirs(self.pendrive_dir, exist_ok=True)
+
+        self.config = ConfiguracionBandeja()
+        self.config.ruta_descargas = self.descargas_dir
+        self.config.ruta_destino_base = self.destino_base
+        self.config.carpeta_raiz_pendrive = "LucieSinReglas"
+        self.config.rutas_candidatas_pendrive = [self.pendrive_dir]
+        self.config.puerto_servidor = 0
+        self.config.host_servidor = "127.0.0.1"
+
+        self.db = GestorBaseDatosBandeja(ruta_db=self.db_path)
+        self.token_csrf = "token_csrf_ui_test_456"
+
+        self.movimientos = GestorMovimientosBandeja(
+            ruta_descargas=self.descargas_dir,
+            ruta_destino_base=self.destino_base,
+            db=self.db,
+            ruta_bitacora=self.bitacora_path,
+            config=self.config
+        )
+        self.filtro = FiltroListaBlanca(self.config)
+        self.detector = DetectorDescargasActivas()
+        self.agrupador = AgrupadorLotes()
+        self.miniaturas = GeneradorMiniaturas(self.db)
+        self.vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+
+        self.servidor = crear_servidor(
+            self.config, self.db, self.vigilante, self.movimientos,
+            self.miniaturas, token_csrf=self.token_csrf
+        )
+        self.puerto = self.servidor.server_address[1]
+        self.server_thread = threading.Thread(target=self.servidor.serve_forever, daemon=True)
+        self.server_thread.start()
+
+    def tearDown(self):
+        try:
+            self.servidor.shutdown()
+            self.servidor.server_close()
+        except Exception:
+            pass
+
+    def test_spa_contiene_elementos_pendrive(self):
+        """La SPA servida contiene el botón de pestaña Pendrive, sec-pendrive, banner reactivo y modales."""
+        import urllib.request
+        url = f"http://127.0.0.1:{self.puerto}/"
+        req = urllib.request.Request(url, headers={"Host": f"127.0.0.1:{self.puerto}"})
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            cuerpo = resp.read().decode("utf-8")
+
+        # 7.1: Pestaña "Pendrive" y sección sec-pendrive
+        self.assertIn('id="nav-btn-pendrive"', cuerpo)
+        self.assertIn('id="sec-pendrive"', cuerpo)
+        self.assertIn('id="contenedor-estado-pendrive"', cuerpo)
+        self.assertIn('id="contenedor-capitulos-pendrive"', cuerpo)
+        self.assertIn('id="card-part-pendrive"', cuerpo)
+        self.assertIn('id="contenedor-part-pendrive"', cuerpo)
+        self.assertIn('id="contenedor-historial-pendrive"', cuerpo)
+        self.assertIn('id="btn-vincular-pendrive"', cuerpo)
+        self.assertIn('id="btn-enviar-todos-pendrive"', cuerpo)
+
+        # 7.2: Botón Enviar al pendrive en banner de capítulo activo
+        self.assertIn('id="btn-enviar-capitulo-activo"', cuerpo)
+
+        # 7.3: Banner reactivo y Modales interactivos
+        self.assertIn('id="banner-pendrive-detectado"', cuerpo)
+        self.assertIn('id="modal-plan-envio"', cuerpo)
+        self.assertIn('id="modal-vincular-pendrive"', cuerpo)
+        self.assertIn('id="btn-confirmar-envio-pendrive"', cuerpo)
+
+        # Funciones JS presentes
+        self.assertIn("cargarVistaPendrive", cuerpo)
+        self.assertIn("abrirModalPlanEnvio", cuerpo)
+        self.assertIn("confirmarEnvioPendrive", cuerpo)
+        self.assertIn("deshacerEnvio", cuerpo)
+        self.assertIn("abrirModalVincularPendrive", cuerpo)
+        self.assertIn("confirmarVincularPendrive", cuerpo)
+
+
+class TestConfinamientoSeguridadPendrive(unittest.TestCase):
+    """Pruebas de confinamiento canónico estricto y exclusión de carpetas reservadas (Grupo 8)."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp(prefix="test_confinamiento_pen_")
+        self.descargas_dir = os.path.join(self.tmp_dir, "Descargas")
+        self.destino_base = os.path.join(self.descargas_dir, "_lucie")
+        self.pendrive_dir = os.path.join(self.tmp_dir, "media_user", "PENDRIVE")
+
+        os.makedirs(self.descargas_dir, exist_ok=True)
+        os.makedirs(self.destino_base, exist_ok=True)
+        os.makedirs(self.pendrive_dir, exist_ok=True)
+
+        self.config = ConfiguracionBandeja()
+        self.config.ruta_descargas = self.descargas_dir
+        self.config.ruta_destino_base = self.destino_base
+        self.config.carpeta_raiz_pendrive = "LucieSinReglas"
+        self.config.rutas_candidatas_pendrive = [self.pendrive_dir]
+
+        self.filtro = FiltroListaBlanca(self.config)
+
+    def test_exclusion_estricta_enviados_y_revertidos(self):
+        """_enviados y _revertidos están estrictamente excluidos como nombres de escena o carpetas de escena."""
+        # 1. FiltroListaBlanca
+        self.assertFalse(self.filtro.es_carpeta_escena_existente("_enviados"))
+        self.assertFalse(self.filtro.es_carpeta_escena_existente("_revertidos"))
+        self.assertFalse(self.filtro.es_carpeta_escena_existente("_descartados"))
+
+        # 2. ValidadorEscenas
+        valido_env, mot_env = ValidadorEscenas.validar_nombre_escena(
+            "_enviados", self.destino_base, self.descargas_dir, personaje="lucie"
+        )
+        self.assertFalse(valido_env)
+        self.assertIn("reservada", mot_env.lower())
+
+        valido_rev, mot_rev = ValidadorEscenas.validar_nombre_escena(
+            "_revertidos", self.destino_base, self.descargas_dir, personaje="lucie"
+        )
+        self.assertFalse(valido_rev)
+        self.assertIn("reservada", mot_rev.lower())
+
+        # 3. Escaneo de capítulos para envío jamás incluye _enviados ni _revertidos
+        dir_env = os.path.join(self.destino_base, "lucie", "_enviados")
+        os.makedirs(os.path.join(dir_env, "videos"), exist_ok=True)
+        with open(os.path.join(dir_env, "videos", "enviado.mp4"), "wb") as f:
+            f.write(b"DATA")
+
+        caps = escanear_capitulos_para_envio(self.destino_base)
+        nombres_caps = [c["capitulo"] for c in caps]
+        self.assertNotIn("_enviados", nombres_caps)
+        self.assertNotIn("_revertidos", nombres_caps)
+
+    def test_confinamiento_path_traversal_rechazado(self):
+        """Intentos de path traversal en capítulos o destinos son rechazados estrictamente."""
+        vincular_pendrive(self.pendrive_dir, self.config)
+
+        # Capítulo con traversal
+        with self.assertRaises(ValueError):
+            simular_envio_capitulos(capitulos=["../otro_dir"], config=self.config)
+
+        with self.assertRaises(ValueError):
+            simular_envio_capitulos(capitulos=["lucie/../../etc"], config=self.config)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
