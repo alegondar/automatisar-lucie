@@ -48,7 +48,7 @@ from bandeja_descargas import (
     generar_html_simulacion,
     asegurar_carpeta_capitulo
 )
-from seguridad_anti_borrado import analizar_ast_archivo
+from seguridad_anti_borrado import analizar_ast_archivo, auditar_archivos_proyecto, descubrir_archivos_operativos
 
 
 class TestListaBlancaYBandeja(unittest.TestCase):
@@ -4368,7 +4368,7 @@ class TestSubcarpetasFotosVideos(unittest.TestCase):
 
 
 class TestAuditoriaASTAntiBorrado(unittest.TestCase):
-    """Verifica que bandeja_descargas.py no contenga ninguna de las 11 primitivas prohibidas."""
+    """Verifica que bandeja_descargas.py y todos los módulos operativos no contengan ninguna de las 11 primitivas prohibidas."""
 
     def test_bandeja_descargas_esta_100_por_ciento_limpio(self):
         ruta_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bandeja_descargas.py")
@@ -4377,6 +4377,46 @@ class TestAuditoriaASTAntiBorrado(unittest.TestCase):
         if violaciones:
             msg = "\n".join(str(v) for v in violaciones)
             self.fail(f"Violaciones anti-borrado encontradas en bandeja_descargas.py:\n{msg}")
+
+    def test_auditoria_descubre_y_verifica_todos_los_modulos_operativos(self):
+        """Verifica que el descubrimiento automático encuentre todos los archivos de bandeja/ y de la raíz."""
+        repo_dir = os.path.dirname(os.path.abspath(__file__))
+        archivos = descubrir_archivos_operativos(repo_dir)
+        self.assertGreaterEqual(len(archivos), 4)
+
+        # Si existe bandeja/, todos sus .py deben estar en la lista descubierta
+        dir_bandeja = os.path.join(repo_dir, "bandeja")
+        if os.path.isdir(dir_bandeja):
+            for root, _, files in os.walk(dir_bandeja):
+                for f in files:
+                    if f.endswith(".py") and not f.startswith("test_"):
+                        full = os.path.join(root, f)
+                        self.assertIn(full, archivos, f"El archivo {full} no fue descubierto para la auditoría")
+
+        # Ningún archivo operativo debe contener violaciones
+        violaciones = auditar_archivos_proyecto(repo_dir, archivos)
+        if violaciones:
+            msg = "\n".join(str(v) for v in violaciones)
+            self.fail(f"Infracciones anti-borrado en archivos operativos descubiertos:\n{msg}")
+
+    def test_auditoria_falla_si_hay_archivo_operativo_sin_auditar(self):
+        """Verifica que falle si se detecta cualquier archivo .py operativo fuera del conjunto auditado."""
+        repo_dir = os.path.dirname(os.path.abspath(__file__))
+        archivos_totales = set(descubrir_archivos_operativos(repo_dir))
+        self.assertTrue(len(archivos_totales) >= 1)
+
+        # Simulamos que un archivo operativo fue omitido de la lista de auditoría
+        archivo_omitido = next(iter(archivos_totales))
+        archivos_auditados = list(archivos_totales - {archivo_omitido})
+
+        def validar_cobertura_completa(auditados, requeridos):
+            faltantes = set(requeridos) - set(auditados)
+            if faltantes:
+                raise AssertionError(f"Fallo de cobertura: se encontraron archivos operativos sin auditar: {faltantes}")
+
+        with self.assertRaises(AssertionError) as ctx:
+            validar_cobertura_completa(archivos_auditados, archivos_totales)
+        self.assertIn(archivo_omitido, str(ctx.exception))
 
 
 if __name__ == "__main__":

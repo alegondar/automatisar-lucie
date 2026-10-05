@@ -1,0 +1,1 @@
+{"activo": false, "capitulo": {"habilitado": false, "id": null, "personaje": null, "nombre": "", "estado": "cerrado", "fecha_inicio": null, "fecha_ultimo_aviso": null, "archivos_movidos": 0, "en_foco": 0}, "capitulo_foco": null, "capitulos_abiertos": [], "cantidad_abiertos": 0, "alerta_olvidado": false, "horas_limite": 12, "balance": {"pendientes": 0, "movidos": 0}}

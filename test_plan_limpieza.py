@@ -38,6 +38,7 @@ from seguridad_anti_borrado import (
     analizar_ast_codigo,
     analizar_ast_archivo,
     auditar_archivos_proyecto,
+    descubrir_archivos_operativos,
 )
 
 
@@ -76,12 +77,8 @@ class TestSeguridadAntiBorradoAST(unittest.TestCase):
     def test_codigo_operativo_del_proyecto_esta_limpio_de_borrado(self):
         """Verifica que ningún archivo .py operativo del proyecto contenga llamadas de borrado."""
         repo_dir = os.path.dirname(os.path.abspath(__file__))
-        archivos_operativos = [
-            os.path.join(repo_dir, "plan_limpieza.py"),
-            os.path.join(repo_dir, "inventario_pendrive.py"),
-            os.path.join(repo_dir, "seguridad_anti_borrado.py"),
-            os.path.join(repo_dir, "bandeja_descargas.py"),
-        ]
+        archivos_operativos = descubrir_archivos_operativos(repo_dir)
+        self.assertGreaterEqual(len(archivos_operativos), 4)
         violaciones = auditar_archivos_proyecto(repo_dir, archivos_a_incluir=archivos_operativos)
         if violaciones:
             mensaje = "\n".join([str(v) for v in violaciones])

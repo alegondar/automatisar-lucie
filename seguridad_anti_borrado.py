@@ -171,24 +171,69 @@ def analizar_ast_archivo(ruta_archivo: str) -> List[ViolacionAntiBorrado]:
     return analizar_ast_codigo(contenido, nombre_archivo=ruta_archivo)
 
 
+def descubrir_archivos_operativos(directorio_raiz: str) -> List[str]:
+    """
+    Descubre automáticamente todos los archivos .py operativos del proyecto:
+    1. Archivos .py en la raíz del proyecto (excluyendo aquellos que comiencen con 'test_').
+    2. Archivos .py dentro del paquete 'bandeja/' (recursivamente).
+    Omite carpetas del sistema, entornos virtuales, tests y temporales.
+    Retorna una lista ordenada de rutas absolutas sin duplicados.
+    """
+    raiz_abs = os.path.abspath(directorio_raiz)
+    carpetas_ignoradas = {".git", "__pycache__", ".cache", ".agents", "venv", ".venv", "node_modules", "frontend", ".golden_ref"}
+    archivos_operativos = set()
+
+    # 1. Archivos en la raíz
+    try:
+        entradas_raiz = os.listdir(raiz_abs)
+    except OSError:
+        entradas_raiz = []
+
+    for entrada in entradas_raiz:
+        ruta = os.path.join(raiz_abs, entrada)
+        if os.path.isfile(ruta) and entrada.endswith(".py") and not entrada.startswith("test_"):
+            archivos_operativos.add(ruta)
+
+    # 2. Archivos dentro del paquete bandeja/
+    dir_bandeja = os.path.join(raiz_abs, "bandeja")
+    if os.path.isdir(dir_bandeja):
+        for root, dirs, files in os.walk(dir_bandeja):
+            dirs[:] = [d for d in dirs if d not in carpetas_ignoradas]
+            for file in files:
+                if file.endswith(".py") and not file.startswith("test_"):
+                    archivos_operativos.add(os.path.join(root, file))
+
+    return sorted(list(archivos_operativos))
+
+
 def auditar_archivos_proyecto(directorio_raiz: str, archivos_a_incluir: List[str] = None) -> List[ViolacionAntiBorrado]:
     """
     Audita los archivos operativos del proyecto para verificar que no contengan
     ninguna operación de borrado ni pisado destructivo.
+    Si no se especifican archivos_a_incluir, descubre y audita automáticamente
+    todos los archivos operativos mediante descubrir_archivos_operativos().
     """
     todas_infracciones = []
-    if archivos_a_incluir:
-        for arch in archivos_a_incluir:
-            if arch.endswith(".py") and os.path.exists(arch):
-                todas_infracciones.extend(analizar_ast_archivo(arch))
-    else:
-        for root, dirs, files in os.walk(directorio_raiz):
-            # Omitir carpetas de control de versiones y virtuales
-            dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", ".cache", ".agents", "venv", ".venv")]
-            for file in files:
-                if file.endswith(".py"):
-                    # Los archivos de test pueden limpiar sus propios tempfiles de prueba,
-                    # por lo que el test anti-borrado audita el código operativo del proyecto
-                    ruta_completa = os.path.join(root, file)
-                    todas_infracciones.extend(analizar_ast_archivo(ruta_completa))
+    archivos = archivos_a_incluir if archivos_a_incluir is not None else descubrir_archivos_operativos(directorio_raiz)
+    for arch in archivos:
+        if arch.endswith(".py") and os.path.exists(arch):
+            todas_infracciones.extend(analizar_ast_archivo(arch))
     return todas_infracciones
+
+
+if __name__ == "__main__":
+    import sys
+    directorio = sys.argv[1] if len(sys.argv) > 1 else "."
+    archivos = descubrir_archivos_operativos(directorio)
+    print(f"[*] Auditando {len(archivos)} archivos operativos descubiertos:")
+    for a in archivos:
+        print(f"  - {os.path.relpath(a, directorio)}")
+    violaciones = auditar_archivos_proyecto(directorio, archivos)
+    if violaciones:
+        print(f"[!] Se encontraron {len(violaciones)} infracciones anti-borrado:")
+        for v in violaciones:
+            print(f"    {v}")
+        sys.exit(1)
+    else:
+        print("[+] 0 infracciones detectadas. Auditoría exitosa.")
+        sys.exit(0)
