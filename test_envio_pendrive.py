@@ -533,7 +533,7 @@ class TestSimulacionEnvio(unittest.TestCase):
         """Verifica que en FAT32 se bloqueen preventivamente archivos mayores a 4 GiB."""
         import unittest.mock
         # Simular sistema de archivos vfat
-        with unittest.mock.patch("bandeja_descargas.obtener_sistema_archivos", return_value="vfat"):
+        with unittest.mock.patch("bandeja.pendrive.obtener_sistema_archivos", return_value="vfat"):
             # Simular tamaño de 5 GiB para el video
             tam_5gib = 5 * 1024 * 1024 * 1024
             orig_stat = os.stat
@@ -557,7 +557,7 @@ class TestSimulacionEnvio(unittest.TestCase):
         import unittest.mock
         # Espacio libre muy pequeño (10 bytes)
         espacio_bajo = {"total": 1000000000, "usado": 999999990, "libre": 10}
-        with unittest.mock.patch("bandeja_descargas.obtener_espacio_disco", return_value=espacio_bajo):
+        with unittest.mock.patch("bandeja.pendrive.obtener_espacio_disco", return_value=espacio_bajo):
             sim = simular_envio_capitulos(config=self.config)
             self.assertFalse(sim["puede_enviar"])
             self.assertIn("espacio insuficiente", sim["motivo_bloqueo"].lower())
@@ -695,7 +695,7 @@ class TestEjecucionEnvioPendrive(unittest.TestCase):
                 return "hash_corrupto_discrepante_falso"
             return real_calc(path, *args, **kwargs)
 
-        with unittest.mock.patch("bandeja_descargas.calcular_sha256", side_effect=mock_calc_sha):
+        with unittest.mock.patch("bandeja.pendrive.calcular_sha256", side_effect=mock_calc_sha):
             with self.assertRaises(RuntimeError) as ctx:
                 ejecutar_envio_pendrive(
                     ["lucie/capitulo1"],
