@@ -932,7 +932,10 @@ class TestServidorHTTPYSeguridad(unittest.TestCase):
         # 4. El panel SPA servido tiene estilos de ensanchamiento y word-break sin desborde
         status_page, _, page_raw = self._request("GET", "/", headers={"Host": f"127.0.0.1:{self.config.puerto_servidor}"})
         self.assertEqual(status_page, 200)
-        page_html = page_raw.decode("utf-8")
+        self.assertIn(b"/panel.css", page_raw)
+        status_css, _, css_raw = self._request("GET", "/panel.css", headers={"Host": f"127.0.0.1:{self.config.puerto_servidor}"})
+        self.assertEqual(status_css, 200)
+        page_html = css_raw.decode("utf-8")
         self.assertIn("90vw", page_html)
         self.assertIn("1200px", page_html)
         self.assertIn("word-break: break-word", page_html)
@@ -3558,9 +3561,12 @@ class TestCortePorFechaDeLlegada(unittest.TestCase):
 
     def test_banner_en_foco_incluye_marca_visual_de_foco(self):
         """El banner en foco incluye la marca visual de foco."""
-        ruta_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bandeja_descargas.py")
-        with open(ruta_script, "r", encoding="utf-8") as f:
-            contenido = f.read()
+        ruta_web = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bandeja", "web")
+        with open(os.path.join(ruta_web, "panel.html"), "r", encoding="utf-8") as f:
+            contenido_html = f.read()
+        with open(os.path.join(ruta_web, "panel.css"), "r", encoding="utf-8") as f:
+            contenido_css = f.read()
+        contenido = contenido_html + contenido_css
 
         self.assertIn("⭐ EN FOCO", contenido)
         self.assertIn("#f59e0b", contenido)
@@ -3790,6 +3796,19 @@ class TestRefrescoAutomaticoPanel(unittest.TestCase):
         self.assertIn('id="banner-desconexion"', html_code)
         self.assertIn('id="toast-llegada"', html_code)
         self.assertIn('REFRESCO_PANEL_SEGUNDOS = 4', html_code)
+        self.assertIn('/panel.js', html_code)
+        self.assertIn('/panel.css', html_code)
+
+        # Validar entrega y sintaxis del archivo modular panel.js
+        status_js, resp_js = self._peticion_http("GET", "/panel.js")
+        self.assertEqual(status_js, 200)
+        js_code = resp_js.get("raw", "")
+        self.assertIn("cargarDatos", js_code)
+        self.assertIn("restaurarEstadoUI", js_code)
+
+        ruta_web_js = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bandeja", "web", "panel.js")
+        check_proc = subprocess.run(["node", "--check", ruta_web_js], capture_output=True, text=True)
+        self.assertEqual(check_proc.returncode, 0, f"Error de sintaxis en panel.js: {check_proc.stderr}")
 
         # Script de prueba en Node para verificar la lógica SPA
         js_test = f"""

@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bandeja de Descargas - Proyecto Lucie</title>
+  <link rel="stylesheet" href="/panel.css">
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Bandeja de Descargas &bull; Proyecto Lucie</h1>
+      <small style="color:var(--text-muted)">Confinado estrictamente a ~/Descargas</small>
+    </div>
+    <span class="badge">127.0.0.1:__PUERTO__</span>
+  </header>
+
+  <div id="banner-desconexion" class="banner-desconexion" style="display:none;">
+    <span>⚠️ Sin conexión con la bandeja de descargas. Reintentando reconectar...</span>
+  </div>
+
+  <div id="banner-aviso" class="banner-aviso" style="display:none;">
+    <div class="banner-aviso-texto">
+      <span style="color:var(--teal); font-weight:bold;">&#10003;</span>
+      <span id="banner-aviso-msg"></span>
+    </div>
+    <div class="banner-aviso-acciones">
+      <button class="btn-deshacer-aviso" id="btn-banner-deshacer" onclick="deshacerDesdeAviso()">Deshacer</button>
+      <button class="btn-cerrar-aviso" id="btn-banner-cerrar" onclick="cerrarAviso()" title="Cerrar aviso">&times;</button>
+    </div>
+  </div>
+
+  <div id="banner-pendrive-detectado" class="banner-aviso" style="display:none; background:#1e3a8a; border-bottom:2px solid #3b82f6;">
+    <div class="banner-aviso-texto">
+      <span style="font-size:1.2rem;">💾</span>
+      <span id="banner-pendrive-texto">Pendrive detectado</span>
+    </div>
+    <div class="banner-aviso-acciones">
+      <button class="btn-deshacer-aviso" style="background:#38bdf8; color:#000;" onclick="abrirModalPlanEnvio()">Ver plan</button>
+      <button class="btn-cerrar-aviso" onclick="cerrarBannerPendrive()" title="Cerrar aviso">&times;</button>
+    </div>
+  </div>
+
+  <nav>
+    <button class="nav-btn active" id="nav-btn-lotes" onclick="mostrarPestana('lotes', event)">Lotes Detectados</button>
+    <button class="nav-btn" id="nav-btn-sin-identificar" onclick="mostrarPestana('sin-identificar', event)">Sin Identificar</button>
+    <button class="nav-btn" id="nav-btn-capitulos-abiertos" onclick="mostrarPestana('capitulos-abiertos', event)">Capítulos Abiertos (<span id="conteo-nav-abiertos">0</span>)</button>
+    <button class="nav-btn" id="nav-btn-capitulos-cerrados" onclick="mostrarPestana('capitulos-cerrados', event)">Capítulos Cerrados</button>
+    <button class="nav-btn" id="nav-btn-descartados" onclick="mostrarPestana('descartados', event)">Descartados</button>
+    <button class="nav-btn" id="nav-btn-pendrive" onclick="mostrarPestana('pendrive', event)">Pendrive</button>
+    <button class="nav-btn" id="nav-btn-historial" onclick="mostrarPestana('historial', event)">Historial</button>
+    <button class="nav-btn" onclick="recargarVistaActual()">Refrescar</button>
+  </nav>
+
+  <main>
+    <!-- Alerta de capítulo olvidado (>12h) -->
+    <div id="banner-capitulo-olvidado" class="banner-capitulo-olvidado" style="display:none;">
+      <div id="banner-olvidado-texto" style="font-weight:600; font-size:0.95rem;">
+        ⚠️ ¿Sigue activo este capítulo?
+      </div>
+      <div style="display:flex; gap:10px; align-items:center;">
+        <button class="btn-sm" onclick="posponerAlertaCapitulo()" style="background:#f59e0b; color:#000; font-weight:600; padding:6px 14px;">Seguir</button>
+        <button class="btn-sm" onclick="abrirModalTerminarCapitulo()" style="background:var(--error); color:#fff; font-weight:600; padding:6px 14px;">Terminar</button>
+      </div>
+    </div>
+
+    <!-- Banner superior permanente cuando el capítulo está en foco -->
+    <div id="banner-capitulo-activo" class="banner-capitulo-activo" style="display:none;">
+      <div>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span class="badge-capitulo-activo">⭐ EN FOCO</span>
+          <span id="banner-capitulo-titulo" style="font-weight:700; font-size:1.1rem; color:#e0e7ff;">Capítulo en foco:</span>
+          <span id="banner-otros-abiertos" style="font-size:0.85rem; color:#a5b4fc; cursor:pointer; text-decoration:underline;" onclick="mostrarPestana('capitulos-abiertos')"></span>
+        </div>
+        <div id="banner-capitulo-subtitulo" style="font-size:0.85rem; color:#a5b4fc; margin-top:4px;">
+          Cargando detalles...
+        </div>
+      </div>
+      <div style="display:flex; gap:10px; align-items:center;">
+        <button class="btn-sm" id="btn-enviar-capitulo-activo" onclick="iniciarEnvioCapituloActivo()" style="background:#10b981; color:#000; font-weight:600; padding:8px 16px; border:none; border-radius:4px; cursor:pointer;" title="Enviar material del capítulo en foco al pendrive">
+          Enviar al pendrive
+        </button>
+        <button class="btn-sm" id="btn-descartar-capitulo-activo" onclick="descartarCapituloActivo()" style="background:#4b5563; color:#fff; font-weight:600; padding:8px 16px; border:none; border-radius:4px; cursor:pointer;">
+          Descartar capítulo
+        </button>
+        <button class="btn-sm" id="btn-terminar-capitulo" onclick="abrirModalTerminarCapitulo()" style="background:#ef4444; color:#fff; font-weight:600; padding:8px 16px; border:none; border-radius:4px; cursor:pointer;">
+          Terminar capítulo
+        </button>
+      </div>
+    </div>
+
+    <!-- Banner aviso cuando hay capítulos abiertos pero ninguno en foco -->
+    <div id="banner-sin-foco" class="banner-capitulo-olvidado" style="display:none; background:#1e1b4b; border:1px solid #6366f1;">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <span style="font-size:1.2rem;">ℹ️</span>
+        <div>
+          <div style="font-weight:700; color:#e0e7ff;">Ningún capítulo en foco</div>
+          <div style="font-size:0.85rem; color:#a5b4fc;">El material nuevo se clasifica por alias inicial. Podés elegir cuál poner en foco en la pestaña Capítulos Abiertos.</div>
+        </div>
+      </div>
+      <div>
+        <button class="btn-sm" onclick="mostrarPestana('capitulos-abiertos')" style="background:var(--accent); color:#000; font-weight:600; padding:6px 14px; border:none; border-radius:4px; cursor:pointer;">
+          Ver capítulos abiertos
+        </button>
+      </div>
+    </div>
+
+    <!-- Controles para Empezar Capítulo (cuando no hay capítulo activo) -->
+    <div id="card-empezar-capitulo" class="card-capitulo" style="display:none;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="font-weight:600; font-size:0.95rem;">Empezar Capítulo:</span>
+          <span class="badge-capitulo-inactivo">Sin capítulo activo</span>
+        </div>
+        <div style="font-size:0.8rem; color:var(--text-muted);">
+          Modo de respaldo activo (se asignará por alias al inicio del nombre).
+        </div>
+      </div>
+      <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
+        <label style="font-size:0.85rem;">Personaje:
+          <select id="sel-capitulo-personaje">
+            <option value="lucie">Lucie</option>
+            <option value="roli">Roli</option>
+            <option value="mailen">Mailen</option>
+          </select>
+        </label>
+        <input type="text" id="txt-capitulo-nombre" placeholder="Nombre del nuevo capítulo" style="min-width:240px;">
+        <button class="btn-sm" id="btn-empezar-capitulo" onclick="empezarCapitulo()" style="background:var(--accent); color:#000; font-weight:600; padding:6px 16px;">
+          Empezar capítulo
+        </button>
+        <span id="error-capitulo-activo" class="error-inline" style="display:none;"></span>
+      </div>
+    </div>
+
+    <div id="alert-box" style="display:none;" class="alert-error"></div>
+
+    <section id="sec-lotes">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+        <h2 style="font-size:1.15rem;">Lotes Detectados</h2>
+        <button id="btn-mover-lotes-listos" class="btn-accion" onclick="simularMoverLotesListos()" style="margin-left:0;">
+          Mover lotes listos
+        </button>
+      </div>
+      <div id="contenedor-lotes">Cargando lotes...</div>
+
+      <div id="sec-lotes-anteriores" style="display:none; margin-top:24px;">
+        <details id="details-anteriores" style="background:var(--card-bg, #1a1a1a); border:1px solid #333; border-radius:8px; padding:12px 16px;">
+          <summary style="font-size:1.05rem; font-weight:600; cursor:pointer; color:var(--text-muted, #aaa);">
+            Anteriores al capítulo (<span id="conteo-lotes-anteriores">0</span>)
+          </summary>
+          <p style="font-size:0.85rem; color:var(--text-muted, #888); margin:8px 0 16px 0;">
+            Material descargado antes del inicio del capítulo activo. No está preasignado ni seleccionado.
+          </p>
+          <div id="contenedor-lotes-anteriores"></div>
+        </details>
+      </div>
+    </section>
+
+    <section id="sec-sin-identificar" style="display:none;">
+      <div class="card">
+        <h2>Archivos multimedia sin clasificar</h2>
+        <p style="color:var(--text-muted); margin-bottom:16px;">
+          Archivos de media sin patrón conocido. Marcá si corresponden al proyecto o ignorar. La decisión se recuerda por hash.
+        </p>
+        <div id="contenedor-sin-identificar">Cargando...</div>
+      </div>
+    </section>
+
+    <section id="sec-capitulos-abiertos" style="display:none;">
+      <div class="card" style="margin-bottom:20px;">
+        <div class="card-header">
+          <div>
+            <h2>Capítulos Abiertos</h2>
+            <small style="color:var(--text-muted)">Historias en paralelo. El capítulo en foco recibe las descargas nuevas automáticamente.</small>
+          </div>
+          <button class="btn-sm" onclick="cargarCapitulosAbiertos()">Actualizar</button>
+        </div>
+        <div id="contenedor-capitulos-abiertos">Cargando capítulos abiertos...</div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-bottom:12px; font-size:1rem;">Empezar nuevo capítulo en paralelo</h3>
+        <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
+          <label style="font-size:0.85rem;">Personaje:
+            <select id="sel-nuevo-capitulo-pers">
+              <option value="lucie">Lucie</option>
+              <option value="roli">Roli</option>
+              <option value="mailen">Mailen</option>
+            </select>
+          </label>
+          <input type="text" id="txt-nuevo-capitulo-nom" placeholder="Nombre del nuevo capítulo" style="min-width:240px;">
+          <button class="btn-sm" onclick="empezarCapituloSecundario()" style="background:var(--accent); color:#000; font-weight:600; padding:6px 16px;">
+            Empezar capítulo
+          </button>
+          <span id="error-nuevo-capitulo" class="error-inline" style="display:none;"></span>
+        </div>
+      </div>
+    </section>
+
+    <section id="sec-capitulos-cerrados" style="display:none;">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h2>Capítulos Cerrados</h2>
+            <small style="color:var(--text-muted)">Historial de capítulos finalizados. Podés reabrir cualquiera para seguir agregando archivos.</small>
+          </div>
+          <button class="btn-sm" onclick="cargarCapitulosCerrados()">Actualizar</button>
+        </div>
+        <div id="contenedor-capitulos-cerrados">Cargando capítulos...</div>
+      </div>
+    </section>
+
+    <section id="sec-descartados" style="display:none;">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h2>Capítulos Descartados</h2>
+            <small style="color:var(--text-muted)">Capítulos en cuarentena dentro de _descartados. Los archivos no fueron borrados y se pueden consultar o restaurar.</small>
+          </div>
+          <button class="btn-sm" onclick="cargarCapitulosDescartados()">Actualizar</button>
+        </div>
+        <div id="contenedor-capitulos-descartados">Cargando descartados...</div>
+      </div>
+    </section>
+
+    <section id="sec-historial" style="display:none;">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h2>Historial de movimientos</h2>
+            <small style="color:var(--text-muted)">Últimos 50 movimientos registrados en la bitácora</small>
+          </div>
+          <button class="btn-sm" id="btn-deshacer-ultimo-lote" onclick="deshacerUltimoLote()" style="background:var(--accent); color:#000; font-weight:600; padding:6px 14px;">Deshacer último lote</button>
+        </div>
+        <div id="contenedor-historial">Cargando historial...</div>
+      </div>
+    </section>
+
+    <section id="sec-pendrive" style="display:none;">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h2>Unidad Pendrive</h2>
+            <small style="color:var(--text-muted)">Detección y envío seguro hacia la estructura aislada LucieSinReglas/</small>
+          </div>
+          <div style="display:flex; gap:10px; align-items:center;">
+            <button class="btn-sm" onclick="cargarVistaPendrive()">Actualizar estado</button>
+            <button class="btn-sm" id="btn-vincular-pendrive" onclick="abrirModalVincularPendrive()" style="display:none; background:var(--accent); color:#000; font-weight:600;">Vincular pendrive</button>
+          </div>
+        </div>
+        <div id="contenedor-estado-pendrive">Cargando estado del pendrive...</div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h2>Capítulos listos para enviar al pendrive</h2>
+            <small style="color:var(--text-muted)">Material clasificado en la sala de espera (~/Descargas/_lucie/)</small>
+          </div>
+          <button class="btn-sm" id="btn-enviar-todos-pendrive" onclick="abrirModalPlanEnvio()" style="background:var(--teal); color:#000; font-weight:600; padding:6px 14px;">
+            Enviar todos al pendrive
+          </button>
+        </div>
+        <div id="contenedor-capitulos-pendrive">Cargando capítulos...</div>
+      </div>
+
+      <div class="card" id="card-part-pendrive" style="display:none;">
+        <div class="card-header">
+          <div>
+            <h2 style="color:var(--danger)">Archivos incompletos (.part huérfanos)</h2>
+            <small style="color:var(--text-muted)">Archivos interrumpidos durante copias previas. Quedan visibles en el pendrive y NO se borran.</small>
+          </div>
+        </div>
+        <div id="contenedor-part-pendrive"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h2>Historial de envíos al pendrive</h2>
+            <small style="color:var(--text-muted)">Últimas operaciones de envío con capacidad de deshacer sin borrar nada</small>
+          </div>
+        </div>
+        <div id="contenedor-historial-pendrive">Cargando historial de envíos...</div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Modal para Terminar Capítulo con Resumen de Balance -->
+  <div id="modal-terminar-capitulo" class="modal-overlay">
+    <div class="modal-content" style="max-width:550px;">
+      <h2>Terminar Capítulo</h2>
+      <div id="modal-terminar-resumen" style="margin:16px 0; font-size:1rem; line-height:1.6;">
+        Cargando resumen...
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:20px; flex-wrap:wrap;">
+        <button class="btn-sm" onclick="cerrarModalTerminarCapitulo()">Cancelar</button>
+        <button class="btn-sm" id="btn-terminar-sin-mover" onclick="ejecutarTerminarCapitulo(false)" style="background:var(--card-alt); color:var(--text); border:1px solid var(--border);">Terminar sin mover</button>
+        <button class="btn-sm" id="btn-mover-y-terminar" onclick="ejecutarMoverYTerminar()" style="background:var(--accent); color:#000; font-weight:600;">Mover pendientes y terminar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal para Descartar Capítulo con Simulación y Confirmación por Nombre -->
+  <div id="modal-descartar-capitulo" class="modal-overlay">
+    <div class="modal-content" style="max-width:620px;">
+      <h2 style="color:var(--text); margin-bottom:12px;">Descartar Capítulo</h2>
+      <div id="modal-descartar-detalles" style="margin:16px 0; font-size:0.95rem; line-height:1.6;">
+        Cargando detalles de descarte...
+      </div>
+      <div id="modal-descartar-aviso" style="background:rgba(245, 158, 11, 0.15); border:1px solid #f59e0b; color:#fef3c7; padding:12px 16px; border-radius:6px; margin:16px 0; font-weight:500;">
+        ⚠️ Esto NO borra: mueve a _descartados y se puede deshacer.
+      </div>
+      <div id="modal-descartar-confirmacion-box" style="margin:16px 0;">
+        <label for="txt-confirmar-descartar" style="display:block; font-size:0.9rem; margin-bottom:6px;">
+          Para confirmar, escribí el nombre exacto del capítulo (<strong id="nombre-capitulo-esperado" style="color:var(--teal)"></strong>):
+        </label>
+        <input type="text" id="txt-confirmar-descartar" placeholder="Nombre exacto del capítulo" style="width:100%; padding:8px 12px; background:var(--card-alt); border:1px solid var(--border); color:var(--text); border-radius:4px;" oninput="validarConfirmacionDescartar()">
+        <span id="error-confirmar-descartar" class="error-inline" style="display:none; color:var(--danger); font-size:0.8rem; margin-top:4px;"></span>
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:20px;">
+        <button class="btn-cancelar" onclick="cerrarModalDescartarCapitulo()">Cancelar</button>
+        <button class="btn-sm" id="btn-confirmar-descartar" onclick="ejecutarDescarteCapitulo()" disabled style="background:#ef4444; color:#fff; font-weight:600; padding:8px 18px; border:none; border-radius:4px; cursor:not-allowed; opacity:0.5;">
+          Descartar capítulo
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-simulacion" class="modal-overlay">
+    <div class="modal-content">
+      <h2>Simulación previa de movimientos</h2>
+      <p style="color:var(--text-muted); margin-bottom:12px;">
+        Verificá el origen y destino exacto antes de autorizar.
+      </p>
+      <div id="simulacion-contenido"></div>
+      <div class="modal-actions">
+        <button class="btn-cancelar" onclick="cerrarModal()">Cancelar</button>
+        <button class="btn-confirmar" id="btn-ejecutar-mover">Confirmar y Mover</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de Plan de Envío al Pendrive -->
+  <div id="modal-plan-envio" class="modal-overlay">
+    <div class="modal-content" style="max-width:980px;">
+      <h2>Plan de Envío al Pendrive</h2>
+      <p style="color:var(--text-muted); margin-bottom:12px;">
+        Verificá los archivos a transferir, el espacio libre y las comprobaciones de integridad antes de confirmar.
+      </p>
+      <div id="contenido-plan-envio">Cargando simulación del envío...</div>
+      <div class="modal-actions">
+        <button class="btn-cancelar" onclick="cerrarModalPlanEnvio()">Cancelar</button>
+        <button class="btn-confirmar" id="btn-confirmar-envio-pendrive" onclick="confirmarEnvioPendrive()" disabled style="opacity:0.5; cursor:not-allowed;">Confirmar y enviar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal para Vincular Pendrive -->
+  <div id="modal-vincular-pendrive" class="modal-overlay">
+    <div class="modal-content" style="max-width:650px;">
+      <h2>Vincular Pendrive a Proyecto Lucie</h2>
+      <div id="contenido-vincular-pendrive" style="margin:16px 0; font-size:0.95rem; line-height:1.6;">
+        Cargando datos de la unidad...
+      </div>
+      <div class="modal-actions">
+        <button class="btn-cancelar" onclick="cerrarModalVincularPendrive()">Cancelar</button>
+        <button class="btn-confirmar" id="btn-confirmar-vincular" onclick="confirmarVincularPendrive()">Confirmar y vincular</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    const CSRF_TOKEN = "__TOKEN_CSRF__";
+    const REFRESCO_PANEL_SEGUNDOS = __REFRESCO__;
+  </script>
+  <script src="/panel.js"></script>
+  <div id="toast-llegada" class="toast-llegada"></div>
+</body>
+</html>

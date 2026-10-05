@@ -1100,7 +1100,7 @@ class TestVigilanteYEstadoPendrive(unittest.TestCase):
             "banner_reactivo": None
         }
 
-        with unittest.mock.patch("bandeja_descargas.obtener_estado_pendrive", return_value=mock_res):
+        with unittest.mock.patch("bandeja.servidor.obtener_estado_pendrive", return_value=mock_res):
             url = f"http://127.0.0.1:{self.puerto}/api/pendrive/estado"
             req = urllib.request.Request(url, headers={"Host": f"127.0.0.1:{self.puerto}"})
             with urllib.request.urlopen(req) as resp:
@@ -1195,13 +1195,19 @@ class TestInterfazUsuarioPendrive(unittest.TestCase):
         self.assertIn('id="modal-vincular-pendrive"', cuerpo)
         self.assertIn('id="btn-confirmar-envio-pendrive"', cuerpo)
 
-        # Funciones JS presentes
-        self.assertIn("cargarVistaPendrive", cuerpo)
-        self.assertIn("abrirModalPlanEnvio", cuerpo)
-        self.assertIn("confirmarEnvioPendrive", cuerpo)
-        self.assertIn("deshacerEnvio", cuerpo)
-        self.assertIn("abrirModalVincularPendrive", cuerpo)
-        self.assertIn("confirmarVincularPendrive", cuerpo)
+        # Funciones JS presentes en panel.js
+        url_js = f"http://127.0.0.1:{self.puerto}/panel.js"
+        req_js = urllib.request.Request(url_js, headers={"Host": f"127.0.0.1:{self.puerto}"})
+        with urllib.request.urlopen(req_js) as resp_js:
+            self.assertEqual(resp_js.status, 200)
+            cuerpo_js = resp_js.read().decode("utf-8")
+
+        self.assertIn("cargarVistaPendrive", cuerpo_js)
+        self.assertIn("abrirModalPlanEnvio", cuerpo_js)
+        self.assertIn("confirmarEnvioPendrive", cuerpo_js)
+        self.assertIn("deshacerEnvio", cuerpo_js)
+        self.assertIn("abrirModalVincularPendrive", cuerpo_js)
+        self.assertIn("confirmarVincularPendrive", cuerpo_js)
 
 
 class TestConfinamientoSeguridadPendrive(unittest.TestCase):
