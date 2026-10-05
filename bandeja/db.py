@@ -571,67 +571,14 @@ class GestorBaseDatosBandeja:
             con.commit()
 
     def calcular_balance_capitulo(self, personaje: str, nombre: str, verificar_disco: bool = False) -> Dict[str, int]:
-        """
-        Calcula la cantidad de archivos pendientes y ya movidos para un personaje y capítulo.
-        """
-        with self._lock, self._conectar() as con:
-            cur = con.cursor()
-            cur.execute("""
-            SELECT ruta_actual FROM bandeja_archivos
-            WHERE personaje = ? AND escena = ? AND estado IN ('detectado', 'clasificado')
-            """, (personaje, nombre))
-            filas = cur.fetchall()
-            if verificar_disco:
-                pendientes = sum(1 for f in filas if os.path.exists(f["ruta_actual"]))
-            else:
-                pendientes = len(filas)
-
-            cur.execute("""
-            SELECT archivos_movidos FROM bandeja_capitulos
-            WHERE personaje = ? AND nombre = ?
-            ORDER BY id DESC LIMIT 1
-            """, (personaje, nombre))
-            row_cap = cur.fetchone()
-            mov_cap = row_cap["archivos_movidos"] if row_cap and row_cap["archivos_movidos"] is not None else 0
-
-            cur.execute("""
-            SELECT COUNT(*) as c FROM bandeja_archivos
-            WHERE personaje = ? AND escena = ? AND estado = 'movido'
-            """, (personaje, nombre))
-            mov_arch = cur.fetchone()["c"]
-
-            mov_disco = 0
-            if verificar_disco and self.ruta_destino_base:
-                carpeta_cap = os.path.join(self.ruta_destino_base, personaje, nombre)
-                if os.path.exists(carpeta_cap) and os.path.isdir(carpeta_cap):
-                    for _, _, files in os.walk(carpeta_cap):
-                        mov_disco += len(files)
-
-            return {
-                "pendientes": pendientes,
-                "movidos": max(mov_cap, mov_arch, mov_disco)
-            }
+        """Calcula la cantidad de archivos pendientes y ya movidos para un personaje y capítulo."""
+        from bandeja.capitulos import calcular_balance_capitulo
+        return calcular_balance_capitulo(self, personaje, nombre, verificar_disco, self.ruta_destino_base)
 
     def es_capitulo_olvidado(self, horas_limite: float = 12.0, ahora: Optional[datetime.datetime] = None) -> bool:
-        """
-        Determina si el capítulo activo excede las horas límite configuradas.
-        """
-        cap = self.obtener_capitulo_activo()
-        if not cap or not cap.get("habilitado") or cap.get("estado") != "activo":
-            return False
-
-        fecha_ref_str = cap.get("fecha_ultimo_aviso") or cap.get("fecha_inicio")
-        if not fecha_ref_str:
-            return False
-
-        try:
-            fecha_ref = datetime.datetime.fromisoformat(fecha_ref_str)
-        except (ValueError, TypeError):
-            return False
-
-        ahora_dt = ahora or datetime.datetime.now()
-        diferencia_horas = (ahora_dt - fecha_ref).total_seconds() / 3600.0
-        return diferencia_horas >= horas_limite
+        """Determina si el capítulo activo excede las horas límite configuradas."""
+        from bandeja.capitulos import es_capitulo_olvidado
+        return es_capitulo_olvidado(self, horas_limite, ahora)
 
     def obtener_resumen_version(self) -> Dict[str, Any]:
         """

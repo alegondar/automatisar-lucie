@@ -20,7 +20,7 @@
 
 ## 4. Módulos de ciclo de vida, movimientos y pendrive
 
-- [ ] 4.1 Extraer a `bandeja/capitulos.py` la lógica de ciclo de vida de capítulos, balance de medios, capítulos olvidados y descarte; verificar suite completa y AST
+- [x] 4.1 Extraer a `bandeja/capitulos.py` la lógica de ciclo de vida de capítulos, balance de medios, capítulos olvidados y descarte; verificar suite completa y AST
 - [ ] 4.2 Extraer a `bandeja/movimientos.py` la clase `GestorMovimientosBandeja`, simulación HTML, renombrado atómico y reversión; verificar suite completa y AST
 - [ ] 4.3 Extraer a `bandeja/pendrive.py` la detección de marcador `.lucie_pendrive.json`, vinculación, plan de envío seguro con `.part`, manifiesto append-only y deshacer envío; verificar suite completa y AST
 

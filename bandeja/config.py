@@ -47,6 +47,11 @@ class ErrorDeshacer(Exception):
     pass
 
 
+class ErrorMovimiento(Exception):
+    """Excepción al ocurrir un error durante el movimiento seguro de archivos o carpetas."""
+    pass
+
+
 def calcular_sha256(ruta_archivo: str, bloque: int = 65536) -> str:
     """Calcula el hash SHA-256 de un archivo de manera segura."""
     h = hashlib.sha256()

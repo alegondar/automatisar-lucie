@@ -80,6 +80,13 @@ from bandeja.lotes import (
     DetectorDescargasActivas,
     AgrupadorLotes,
 )
+from bandeja.capitulos import (
+    calcular_balance_capitulo,
+    es_capitulo_olvidado,
+    simular_descartar_capitulo,
+    ejecutar_descartar_capitulo,
+    revertir_descarte_capitulo,
+)
 
 
 
@@ -599,196 +606,27 @@ class GestorMovimientosBandeja:
         Simula el descarte de un capítulo moviéndolo hacia ~/Descargas/_lucie/_descartados/<personaje>/<escena>_<timestamp>/.
         Retorna origen, destino, conteo de archivos, peso total y aviso anti-borrado.
         """
-        cap = self.db.obtener_capitulo_por_id(capitulo_id)
-        if not cap:
-            raise ValueError(f"Capítulo con ID {capitulo_id} no encontrado.")
-
-        personaje = cap.get("personaje", "lucie").strip().lower()
-        nombre = cap.get("nombre", "").strip()
-
-        valido, motivo = ValidadorEscenas.validar_nombre_escena(
-            nombre, self.ruta_destino_base, self.ruta_descargas,
-            es_existente_descargas=False, personaje=personaje
+        return simular_descartar_capitulo(
+            db=self.db,
+            ruta_destino_base=self.ruta_destino_base,
+            ruta_descargas=self.ruta_descargas,
+            capitulo_id=capitulo_id,
         )
-        if not valido:
-            raise ErrorValidacionEscena(f"Nombre de capítulo inválido para descarte: {motivo}")
-
-        origen_carpeta = os.path.join(self.ruta_destino_base, personaje, nombre)
-        self._validar_confinamiento_destino_base(origen_carpeta)
-
-        # Destino dentro de _descartados
-        fecha_tag = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        nombre_dest = f"{nombre}_{fecha_tag}"
-        destino_base = os.path.join(self.ruta_destino_base, "_descartados", personaje, nombre_dest)
-        self._validar_confinamiento_destino_base(destino_base)
-
-        destino_carpeta = destino_base
-        sufijo = 1
-        while os.path.exists(destino_carpeta):
-            destino_carpeta = f"{destino_base} ({sufijo})"
-            sufijo += 1
-
-        carpeta_existe = os.path.exists(origen_carpeta) and os.path.isdir(origen_carpeta)
-        archivos_encontrados = []
-        peso_total = 0
-
-        if carpeta_existe:
-            if os.path.islink(origen_carpeta):
-                raise ErrorSeguridadBandeja(f"Violación de seguridad: '{origen_carpeta}' es un enlace simbólico.")
-            base_real = os.path.realpath(self.ruta_destino_base)
-            for root, dirs, files in os.walk(origen_carpeta):
-                for d in dirs:
-                    d_path = os.path.join(root, d)
-                    if os.path.islink(d_path):
-                        real_d = os.path.realpath(d_path)
-                        if not (real_d == base_real or real_d.startswith(base_real + os.sep)):
-                            raise ErrorSeguridadBandeja(f"Symlink saliente detectado en directorio: '{d_path}' -> '{real_d}'.")
-                for f in files:
-                    f_path = os.path.join(root, f)
-                    if os.path.islink(f_path):
-                        real_f = os.path.realpath(f_path)
-                        if not (real_f == base_real or real_f.startswith(base_real + os.sep)):
-                            raise ErrorSeguridadBandeja(f"Symlink saliente detectado en archivo: '{f_path}' -> '{real_f}'.")
-                    try:
-                        sz = os.path.getsize(f_path)
-                    except OSError:
-                        sz = 0
-                    peso_total += sz
-                    archivos_encontrados.append({
-                        "nombre": f,
-                        "ruta_relativa": os.path.relpath(f_path, origen_carpeta),
-                        "tamanio": sz
-                    })
-
-        total_archivos = len(archivos_encontrados)
-        carpeta_vacia = (total_archivos == 0)
-
-        if carpeta_existe:
-            if carpeta_vacia:
-                aviso = "La carpeta está vacía: se moverá a _descartados y se puede deshacer."
-            else:
-                aviso = "Esto NO borra: mueve a _descartados y se puede deshacer."
-        else:
-            aviso = "La carpeta no existe en disco. El capítulo se marcará como descartado en la base de datos."
-
-        return {
-            "valido": True,
-            "capitulo_id": capitulo_id,
-            "personaje": personaje,
-            "escena": nombre,
-            "origen_carpeta": origen_carpeta,
-            "destino_carpeta": destino_carpeta,
-            "total_archivos": total_archivos,
-            "peso_total": peso_total,
-            "peso_total_fmt": formatear_bytes(peso_total),
-            "carpeta_existe": carpeta_existe,
-            "carpeta_vacia": carpeta_vacia,
-            "aviso": aviso,
-            "archivos": archivos_encontrados
-        }
 
     def ejecutar_descartar_capitulo(self, simulacion: Dict[str, Any], nombre_confirmacion: str) -> Dict[str, Any]:
         """
         Ejecuta el descarte del capítulo trasladando su carpeta a _descartados con un único os.rename.
         Exige coincidencia exacta de nombre_confirmacion con el nombre del capítulo.
         """
-        escena_esperada = simulacion.get("escena", "")
-        if not nombre_confirmacion or nombre_confirmacion != escena_esperada:
-            raise ValueError(
-                f"Confirmación inválida: debe escribir exactamente '{escena_esperada}' para confirmar el descarte."
-            )
-
-        capitulo_id = simulacion["capitulo_id"]
-        personaje = simulacion["personaje"]
-        origen_carpeta = simulacion["origen_carpeta"]
-        destino_carpeta = simulacion["destino_carpeta"]
-        carpeta_existe = bool(simulacion.get("carpeta_existe"))
-        carpeta_vacia = bool(simulacion.get("carpeta_vacia"))
-
-        with self._lock:
-            # Revalidar confinamiento
-            self._validar_confinamiento_destino_base(origen_carpeta)
-            self._validar_confinamiento_destino_base(destino_carpeta)
-
-            movio_carpeta = False
-            hashes_antes = {}
-            if carpeta_existe:
-                if not os.path.exists(origen_carpeta):
-                    raise ErrorMovimiento(f"La carpeta origen '{origen_carpeta}' ya no existe.")
-                if os.path.exists(destino_carpeta):
-                    raise ErrorMovimiento(f"El destino '{destino_carpeta}' ya existe.")
-
-                # Calcular hashes antes del movimiento para verificar todo el árbol recursivamente
-                for root, _, files in os.walk(origen_carpeta):
-                    for f in files:
-                        p_orig = os.path.join(root, f)
-                        rel = os.path.relpath(p_orig, origen_carpeta)
-                        hashes_antes[rel] = calcular_sha256(p_orig)
-
-                os.makedirs(os.path.dirname(destino_carpeta), exist_ok=True)
-                os.rename(origen_carpeta, destino_carpeta)
-                movio_carpeta = True
-
-                # Verificar que los hashes post-movimiento coincidan exactamente en todo el árbol
-                for rel, h_esperado in hashes_antes.items():
-                    p_dest = os.path.join(destino_carpeta, rel)
-                    h_post = calcular_sha256(p_dest)
-                    if h_post != h_esperado:
-                        raise ErrorMovimiento(
-                            f"Fallo de integridad post-descarte: el hash de '{rel}' no coincide en '{p_dest}'."
-                        )
-
-                self.db.actualizar_rutas_archivos_descarte(origen_carpeta, destino_carpeta, es_reversion=False)
-
-            # Verificar si era el capítulo activo antes de marcarlo como descartado
-            era_activo = False
-            cap_activo = self.db.obtener_capitulo_activo()
-            if cap_activo and cap_activo.get("habilitado") and cap_activo.get("id") == capitulo_id:
-                era_activo = True
-
-            # Marcar en base de datos
-            self.db.marcar_capitulo_descartado(capitulo_id, descartado=True)
-
-            if era_activo:
-                self.db.guardar_capitulo_activo("", "", False)
-
-            # Escribir en bitácora
-            id_operacion = f"op_desc_{int(time.time())}_{secrets.token_hex(4)}"
-            fecha_iso = datetime.datetime.now().isoformat()
-            registro_bitacora = {
-                "evento": "descartar_capitulo",
-                "id_operacion": id_operacion,
-                "capitulo_id": capitulo_id,
-                "personaje": personaje,
-                "escena": escena_esperada,
-                "origen_carpeta": origen_carpeta if movio_carpeta else "",
-                "destino_carpeta": destino_carpeta if movio_carpeta else "",
-                "total_archivos": simulacion.get("total_archivos", 0),
-                "peso_total": simulacion.get("peso_total", 0),
-                "hashes_verificados": len(hashes_antes),
-                "fecha": fecha_iso
-            }
-            with open(self.ruta_bitacora, "a", encoding="utf-8") as f:
-                f.write(json.dumps(registro_bitacora, ensure_ascii=False) + "\n")
-
-            if movio_carpeta:
-                if carpeta_vacia:
-                    mensaje = f"Capítulo '{escena_esperada}' descartado. Se movió la carpeta vacía a _descartados."
-                else:
-                    mensaje = f"Capítulo '{escena_esperada}' descartado. Se movieron {simulacion.get('total_archivos', 0)} archivos a _descartados."
-            else:
-                mensaje = f"Capítulo '{escena_esperada}' descartado en la base de datos (no existía carpeta en disco)."
-
-            return {
-                "exito": True,
-                "id_operacion": id_operacion,
-                "capitulo_id": capitulo_id,
-                "personaje": personaje,
-                "escena": escena_esperada,
-                "mensaje": mensaje,
-                "total_archivos": simulacion.get("total_archivos", 0),
-                "destino": destino_carpeta if movio_carpeta else ""
-            }
+        return ejecutar_descartar_capitulo(
+            db=self.db,
+            ruta_destino_base=self.ruta_destino_base,
+            ruta_descargas=self.ruta_descargas,
+            ruta_bitacora=self.ruta_bitacora,
+            simulacion=simulacion,
+            nombre_confirmacion=nombre_confirmacion,
+            lock=self._lock,
+        )
 
     def deshacer_operacion(self, id_operacion: str) -> Dict[str, Any]:
         """
@@ -825,43 +663,12 @@ class GestorMovimientosBandeja:
 
             # Caso especial: Reversión de descarte de capítulo
             if operacion_encontrada.get("evento") == "descartar_capitulo":
-                origen_carpeta = operacion_encontrada.get("origen_carpeta", "")
-                destino_carpeta = operacion_encontrada.get("destino_carpeta", "")
-                cap_id = operacion_encontrada.get("capitulo_id")
-                total_archivos = operacion_encontrada.get("total_archivos", 0)
-
-                if origen_carpeta and destino_carpeta:
-                    if not os.path.exists(destino_carpeta):
-                        raise ErrorDeshacer(
-                            f"No se puede deshacer: la carpeta descartada '{destino_carpeta}' ya no existe o fue alterada externamente."
-                        )
-                    if os.path.exists(origen_carpeta):
-                        raise ErrorDeshacer(
-                            f"No se puede deshacer: la ruta original '{origen_carpeta}' ya se encuentra ocupada. "
-                            f"No se sobrescribe ni se altera ningún archivo."
-                        )
-                    os.makedirs(os.path.dirname(origen_carpeta), exist_ok=True)
-                    os.rename(destino_carpeta, origen_carpeta)
-                    self.db.actualizar_rutas_archivos_descarte(destino_carpeta, origen_carpeta, es_reversion=True)
-
-                if cap_id:
-                    self.db.marcar_capitulo_descartado(cap_id, descartado=False)
-
-                evento_reversion = {
-                    "evento": "deshacer",
-                    "id_operacion_revertida": id_operacion,
-                    "fecha": datetime.datetime.now().isoformat(),
-                    "total_revertidos": total_archivos
-                }
-                with open(self.ruta_bitacora, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(evento_reversion, ensure_ascii=False) + "\n")
-
-                return {
-                    "exito": True,
-                    "id_operacion": id_operacion,
-                    "total_revertidos": total_archivos,
-                    "mensaje": f"Capítulo '{operacion_encontrada.get('escena')}' restaurado exitosamente a su ubicación original."
-                }
+                return revertir_descarte_capitulo(
+                    db=self.db,
+                    ruta_bitacora=self.ruta_bitacora,
+                    operacion_encontrada=operacion_encontrada,
+                    id_operacion=id_operacion,
+                )
 
             # Caso especial 2: Reversión de envío al pendrive
             if operacion_encontrada.get("evento") == "envio_pendrive":
