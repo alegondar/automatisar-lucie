@@ -99,7 +99,7 @@ class ConfiguracionBandeja:
         self.patrones_ignorar = ["Screenshot_*", "Captura*"]
         self.horas_alerta_capitulo_olvidado = 12
         self.minutos_antes_inicio_capitulo = 0
-        self.horas_material_reciente = 0.0
+        self.horas_material_reciente = 168.0
         self.refresco_panel_segundos = 4
         self.subcarpeta_fotos = "fotos"
         self.subcarpeta_videos = "videos"

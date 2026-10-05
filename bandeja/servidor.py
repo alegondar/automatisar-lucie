@@ -216,13 +216,15 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._enviar_json({
                 "version": token,
                 "refresco_panel_segundos": getattr(self.config, "refresco_panel_segundos", 4),
-                "banner_pendrive": estado_pen.get("banner_reactivo")
+                "banner_pendrive": estado_pen.get("banner_reactivo"),
+                "horas_material_reciente": getattr(self.config, "horas_material_reciente", 168)
             })
         elif ruta == "/api/lotes":
             estado = self.vigilante.obtener_estado()
             self._enviar_json({
                 "lotes": estado["lotes"],
-                "lotes_anteriores": estado.get("lotes_anteriores", [])
+                "lotes_anteriores": estado.get("lotes_anteriores", []),
+                "horas_material_reciente": getattr(self.config, "horas_material_reciente", 168)
             })
         elif ruta == "/api/sin-identificar":
             estado = self.vigilante.obtener_estado()

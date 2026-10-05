@@ -349,6 +349,7 @@
         }
         datosEstado.lotes = lotesRes.lotes || [];
         datosEstado.lotes_anteriores = lotesRes.lotes_anteriores || [];
+        datosEstado.horas_material_reciente = lotesRes.horas_material_reciente || 168;
         datosEstado.sin_identificar = sinIdRes.sin_identificar || [];
         datosEstado.escenas = escenasRes.escenas || [];
         datosEstado.personajes = persRes.personajes || [];
@@ -389,6 +390,7 @@
 
         const nuevosLotes = lotesRes.lotes || [];
         const nuevosAnt = lotesRes.lotes_anteriores || [];
+        datosEstado.horas_material_reciente = lotesRes.horas_material_reciente || 168;
 
         const idsLotesPrevios = new Set((datosEstado.lotes || []).map(l => l.lote_id));
         const lotesNuevosEntrantes = nuevosLotes.filter(l => !l.es_anterior && !idsLotesPrevios.has(l.lote_id));
@@ -1174,39 +1176,48 @@
         .join('');
 
       const escenasOptions = optFoco + optsAbiertosSecundarios + optNueva + otrasEscenas;
+      const totalArchivosLote = (lote.archivos || []).length;
+      const archivosSeleccionadosIniciales = (lote.archivos || []).filter(a => !(a.duplicado && a.duplicado.es_duplicado)).length;
+      const todosTildados = totalArchivosLote > 0 && archivosSeleccionadosIniciales === totalArchivosLote;
 
       return `
         <div class="card" id="card-${lote.lote_id}">
           <div class="card-header">
             <div style="display:flex; align-items:center; gap:10px;">
-              <input type="checkbox" class="cb-lote-listo" data-lote-id="${lote.lote_id}" checked title="Tildar para mover con 'Mover lotes listos'">
+              <input type="checkbox" class="cb-lote-listo" data-lote-id="${lote.lote_id}" ${todosTildados ? 'checked' : ''} title="Tildar para mover con 'Mover lotes listos'" onchange="seleccionarTodosLote('${lote.lote_id}', this.checked)">
               <h3>Lote #${lote.numero} (${lote.total_archivos} archivos &bull; ${formatearBytes(lote.total_bytes)})</h3>
             </div>
             <span style="color:var(--text-muted);font-size:0.85rem">${lote.fecha}</span>
           </div>
           <div class="lote-toolbar">
-            <span id="lbl-sel-${lote.lote_id}" style="font-size:0.85rem; color:var(--text-muted);">${lote.archivos.length} seleccionados</span>
+            <span id="lbl-sel-${lote.lote_id}" style="font-size:0.85rem; color:var(--text-muted);">${archivosSeleccionadosIniciales} seleccionados</span>
             <div style="display:flex; gap:8px;">
               <button type="button" class="btn-sm" onclick="seleccionarTodosLote('${lote.lote_id}', true)">Seleccionar todos</button>
               <button type="button" class="btn-sm" onclick="seleccionarTodosLote('${lote.lote_id}', false)">Ninguno</button>
             </div>
           </div>
           <div class="archivos-grid">
-            ${lote.archivos.map(a => `
+            ${lote.archivos.map(a => {
+              const esDup = Boolean(a.duplicado && a.duplicado.es_duplicado);
+              const isChecked = !esDup;
+              const badgeDup = esDup ? `<span class="badge-duplicado" title="${escapeHTML(a.duplicado.mensaje || 'Archivo duplicado')}">Duplicado</span>` : '';
+              const detalleDup = esDup ? `<div class="archivo-duplicado-info" style="font-size:0.72rem; color:#ef4444; margin-top:2px;" title="${escapeHTML(a.duplicado.mensaje || '')}">${escapeHTML(a.duplicado.mensaje || 'Duplicado')}</div>` : '';
+              return `
               <div class="archivo-item" title="Archivo: ${a.nombre}&#10;Fecha llegada: ${a.fecha_llegada || a.fecha || ''}&#10;Fecha modificación: ${a.fecha || ''}&#10;Tamaño: ${formatearBytes(a.tamanio)}">
                 <div class="chk-container">
-                  <input type="checkbox" class="chk-archivo chk-lote-${lote.lote_id}" data-id="${a.id_db}" checked onchange="actualizarSeleccionLote('${lote.lote_id}')">
+                  <input type="checkbox" class="chk-archivo chk-lote-${lote.lote_id}" data-id="${a.id_db}" ${isChecked ? 'checked' : ''} onchange="actualizarSeleccionLote('${lote.lote_id}')">
                 </div>
                 <div class="miniatura-wrap">
                   <img src="/api/miniatura?id=${a.id_db}" alt="${a.nombre}" onerror="this.onerror=null;this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22><rect width=%22100%%22 height=%22100%%22 fill=%22%23222%22/><text x=%2250%%22 y=%2250%%22 fill=%22%23888%22 text-anchor=%22middle%22 dy=%22.3em%22>Media</text></svg>';">
                 </div>
                 <div class="archivo-meta">
-                  <div class="archivo-nombre" title="${a.nombre}">${a.nombre}</div>
+                  <div class="archivo-nombre" title="${a.nombre}">${escapeHTML(a.nombre)} ${badgeDup}</div>
                   <div class="archivo-peso">${formatearBytes(a.tamanio)}</div>
+                  ${detalleDup}
                   <div class="archivo-llegada" style="font-size:0.75rem; color:var(--text-muted);" title="Fecha de llegada: ${a.fecha_llegada || a.fecha || ''}">🕒 ${a.fecha_llegada || a.fecha || ''}</div>
                 </div>
               </div>
-            `).join('')}
+            `;}).join('')}
           </div>
           <div class="form-row">
             <label>Personaje: <select id="sel-pers-${lote.lote_id}">${persOptions}</select></label>
@@ -1216,10 +1227,10 @@
               </select>
             </label>
             <div class="campo-escena-wrap">
-              <input type="text" id="txt-nueva-escena-${lote.lote_id}" value="${esNueva ? escapeHTML(escenaPre) : ''}" placeholder="Nombre de escena nueva" style="max-width:200px; display:${esNueva ? 'inline-block' : 'none'};" oninput="validarInputEscena('${lote.lote_id}')">
+              <input type="text" id="txt-nueva-escena-${lote.lote_id}" value="${esNueva ? escapeHTML(escenaPre) : ''}" placeholder="Nombre de escena nueva" style="max-width:200px; display:${esNueva ? 'inline-block' : 'none'};" oninput="validarInputEscena('${lote.lote_id}', false)" onblur="validarInputEscena('${lote.lote_id}', true)">
               <span id="error-escena-${lote.lote_id}" class="error-inline" style="display:none;"></span>
             </div>
-            <button class="btn-accion" id="btn-mover-${lote.lote_id}" onclick="iniciarMover('${lote.lote_id}')">Mover seleccionados (${lote.archivos.length})</button>
+            <button class="btn-accion" id="btn-mover-${lote.lote_id}" onclick="iniciarMover('${lote.lote_id}')" ${archivosSeleccionadosIniciales === 0 ? 'disabled' : ''}>Mover seleccionados (${archivosSeleccionadosIniciales})</button>
           </div>
         </div>
       `;
@@ -1270,7 +1281,11 @@
             </div>
           </div>
           <div class="archivos-grid">
-            ${lote.archivos.map(a => `
+            ${lote.archivos.map(a => {
+              const esDup = Boolean(a.duplicado && a.duplicado.es_duplicado);
+              const badgeDup = esDup ? `<span class="badge-duplicado" title="${escapeHTML(a.duplicado.mensaje || 'Archivo duplicado')}">Duplicado</span>` : '';
+              const detalleDup = esDup ? `<div class="archivo-duplicado-info" style="font-size:0.72rem; color:#ef4444; margin-top:2px;" title="${escapeHTML(a.duplicado.mensaje || '')}">${escapeHTML(a.duplicado.mensaje || 'Duplicado')}</div>` : '';
+              return `
               <div class="archivo-item" title="Archivo: ${a.nombre}&#10;Fecha llegada: ${a.fecha_llegada || a.fecha || ''}&#10;Fecha modificación: ${a.fecha || ''}&#10;Tamaño: ${formatearBytes(a.tamanio)}">
                 <div class="chk-container">
                   <input type="checkbox" class="chk-archivo chk-lote-${lote.lote_id}" data-id="${a.id_db}" onchange="actualizarSeleccionLote('${lote.lote_id}')">
@@ -1279,12 +1294,13 @@
                   <img src="/api/miniatura?id=${a.id_db}" alt="${a.nombre}" onerror="this.onerror=null;this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22><rect width=%22100%%22 height=%22100%%22 fill=%22%23222%22/><text x=%2250%%22 y=%2250%%22 fill=%22%23888%22 text-anchor=%22middle%22 dy=%22.3em%22>Media</text></svg>';">
                 </div>
                 <div class="archivo-meta">
-                  <div class="archivo-nombre" title="${a.nombre}">${a.nombre}</div>
+                  <div class="archivo-nombre" title="${a.nombre}">${escapeHTML(a.nombre)} ${badgeDup}</div>
                   <div class="archivo-peso">${formatearBytes(a.tamanio)}</div>
+                  ${detalleDup}
                   <div class="archivo-llegada" style="font-size:0.75rem; color:var(--text-muted);" title="Fecha de llegada: ${a.fecha_llegada || a.fecha || ''}">🕒 ${a.fecha_llegada || a.fecha || ''}</div>
                 </div>
               </div>
-            `).join('')}
+            `;}).join('')}
           </div>
           <div class="form-row">
             <label>Personaje: <select id="sel-pers-${lote.lote_id}">${persOptions}</select></label>
@@ -1295,7 +1311,7 @@
               </select>
             </label>
             <div class="campo-escena-wrap">
-              <input type="text" id="txt-nueva-escena-${lote.lote_id}" value="" placeholder="Nombre de escena nueva" style="max-width:200px; display:inline-block;" oninput="validarInputEscena('${lote.lote_id}')">
+              <input type="text" id="txt-nueva-escena-${lote.lote_id}" value="" placeholder="Nombre de escena nueva" style="max-width:200px; display:inline-block;" oninput="validarInputEscena('${lote.lote_id}', false)" onblur="validarInputEscena('${lote.lote_id}', true)">
               <span id="error-escena-${lote.lote_id}" class="error-inline" style="display:none;"></span>
             </div>
             <button class="btn-accion" id="btn-mover-${lote.lote_id}" onclick="iniciarMover('${lote.lote_id}')" disabled>Mover seleccionados (0)</button>
@@ -1309,9 +1325,11 @@
       const lotesActivos = (datosEstado.lotes || []).filter(l => !l.es_anterior);
       if (!lotesActivos.length) {
         cont.innerHTML = '<div class="card"><p style="color:var(--text-muted)">No hay nuevos lotes de candidatos en ~/Descargas.</p></div>';
+        actualizarConteoGlobalSeleccion();
         return;
       }
       cont.innerHTML = lotesActivos.map(lote => generarHtmlCardLote(lote)).join('');
+      actualizarConteoGlobalSeleccion();
     }
 
     function renderLotesIncremental() {
@@ -1319,6 +1337,7 @@
       const lotesActivos = (datosEstado.lotes || []).filter(l => !l.es_anterior);
       if (!lotesActivos.length) {
         cont.innerHTML = '<div class="card"><p style="color:var(--text-muted)">No hay nuevos lotes de candidatos en ~/Descargas.</p></div>';
+        actualizarConteoGlobalSeleccion();
         return;
       }
       const pVacio = cont.querySelector('p');
@@ -1344,18 +1363,21 @@
           cont.appendChild(nuevaCard);
         }
       });
+      actualizarConteoGlobalSeleccion();
     }
 
     function renderLotesAnteriores() {
       const sec = document.getElementById('sec-lotes-anteriores');
       const cont = document.getElementById('contenedor-lotes-anteriores');
       const conteo = document.getElementById('conteo-lotes-anteriores');
+      const titulo = document.getElementById('titulo-lotes-anteriores');
+      const subtitulo = document.getElementById('subtitulo-lotes-anteriores');
       if (!sec || !cont) return;
 
       const capActivo = datosEstado.capitulo_activo && datosEstado.capitulo_activo.habilitado ? datosEstado.capitulo_activo : null;
       const lotesAnt = datosEstado.lotes_anteriores || [];
 
-      if (!capActivo || !lotesAnt.length) {
+      if (!lotesAnt.length) {
         sec.style.display = 'none';
         cont.innerHTML = '';
         if (conteo) conteo.innerText = '0';
@@ -1364,6 +1386,16 @@
 
       sec.style.display = 'block';
       if (conteo) conteo.innerText = String(lotesAnt.length);
+
+      const horasReciente = datosEstado.horas_material_reciente || 168;
+      if (capActivo) {
+        if (titulo) titulo.innerText = "Anteriores al capítulo";
+        if (subtitulo) subtitulo.innerText = "Material descargado antes del inicio del capítulo activo. No está preasignado ni seleccionado.";
+      } else {
+        if (titulo) titulo.innerText = "Anteriores";
+        if (subtitulo) subtitulo.innerText = `Material de más de ${horasReciente} horas: revisá antes de mover.`;
+      }
+
       cont.innerHTML = lotesAnt.map(lote => generarHtmlCardLoteAnterior(lote)).join('');
     }
 
@@ -1371,12 +1403,14 @@
       const sec = document.getElementById('sec-lotes-anteriores');
       const cont = document.getElementById('contenedor-lotes-anteriores');
       const conteo = document.getElementById('conteo-lotes-anteriores');
+      const titulo = document.getElementById('titulo-lotes-anteriores');
+      const subtitulo = document.getElementById('subtitulo-lotes-anteriores');
       if (!sec || !cont) return;
 
       const capActivo = datosEstado.capitulo_activo && datosEstado.capitulo_activo.habilitado ? datosEstado.capitulo_activo : null;
       const lotesAnt = datosEstado.lotes_anteriores || [];
 
-      if (!capActivo || !lotesAnt.length) {
+      if (!lotesAnt.length) {
         sec.style.display = 'none';
         cont.innerHTML = '';
         if (conteo) conteo.innerText = '0';
@@ -1385,6 +1419,15 @@
 
       sec.style.display = 'block';
       if (conteo) conteo.innerText = String(lotesAnt.length);
+
+      const horasReciente = datosEstado.horas_material_reciente || 168;
+      if (capActivo) {
+        if (titulo) titulo.innerText = "Anteriores al capítulo";
+        if (subtitulo) subtitulo.innerText = "Material descargado antes del inicio del capítulo activo. No está preasignado ni seleccionado.";
+      } else {
+        if (titulo) titulo.innerText = "Anteriores";
+        if (subtitulo) subtitulo.innerText = `Material de más de ${horasReciente} horas: revisá antes de mover.`;
+      }
 
       const idsAnt = new Set(lotesAnt.map(l => l.lote_id));
       const cardsExistentes = cont.querySelectorAll('[id^="card-"]');
@@ -1406,13 +1449,42 @@
       });
     }
 
+    function actualizarConteoGlobalSeleccion() {
+      const spanConteo = document.getElementById('conteo-global-seleccion');
+      if (!spanConteo) return;
+
+      const lotesActivos = (datosEstado.lotes || []).filter(l => !l.es_anterior);
+      let totalArchivos = 0;
+      let totalSeleccionados = 0;
+
+      lotesActivos.forEach(lote => {
+        totalArchivos += (lote.archivos || []).length;
+        const marcados = document.querySelectorAll(`.chk-lote-${lote.lote_id}:checked`).length;
+        totalSeleccionados += marcados;
+      });
+
+      spanConteo.innerText = `${totalSeleccionados} archivos seleccionados de ${totalArchivos}`;
+    }
+
+    function seleccionarTodoGlobal(marcar) {
+      const lotesActivos = (datosEstado.lotes || []).filter(l => !l.es_anterior);
+      lotesActivos.forEach(lote => {
+        const checkboxes = document.querySelectorAll(`.chk-lote-${lote.lote_id}`);
+        checkboxes.forEach(cb => { cb.checked = marcar; });
+        const cbMaestro = document.querySelector(`.cb-lote-listo[data-lote-id="${lote.lote_id}"]`);
+        if (cbMaestro) cbMaestro.checked = marcar;
+        actualizarSeleccionLote(lote.lote_id, false);
+      });
+      actualizarConteoGlobalSeleccion();
+    }
+
     function seleccionarTodosLote(loteId, marcar) {
       const checkboxes = document.querySelectorAll(`.chk-lote-${loteId}`);
       checkboxes.forEach(cb => { cb.checked = marcar; });
       actualizarSeleccionLote(loteId);
     }
 
-    function actualizarSeleccionLote(loteId) {
+    function actualizarSeleccionLote(loteId, actualizarGlobal = true) {
       const checkboxes = document.querySelectorAll(`.chk-lote-${loteId}`);
       let marcados = 0;
       checkboxes.forEach(cb => { if (cb.checked) marcados++; });
@@ -1426,6 +1498,16 @@
       if (btn) {
         btn.innerText = `Mover seleccionados (${marcados})`;
         btn.disabled = (marcados === 0);
+      }
+
+      const cbMaestro = document.querySelector(`.cb-lote-listo[data-lote-id="${loteId}"]`) ||
+                        document.querySelector(`.cb-lote-anterior[data-lote-id="${loteId}"]`);
+      if (cbMaestro) {
+        cbMaestro.checked = (checkboxes.length > 0 && marcados === checkboxes.length);
+      }
+
+      if (actualizarGlobal) {
+        actualizarConteoGlobalSeleccion();
       }
     }
 
@@ -1456,7 +1538,7 @@
       return null;
     }
 
-    function validarInputEscena(loteId) {
+    function validarInputEscena(loteId, forzarMostrarVacio = false) {
       const input = document.getElementById(`txt-nueva-escena-${loteId}`);
       const errSpan = document.getElementById(`error-escena-${loteId}`);
       if (!input || !errSpan) return true;
@@ -1468,7 +1550,20 @@
         return true;
       }
 
-      const error = validarNombreEscena(input.value);
+      const val = input.value;
+      if (!val || !val.trim()) {
+        if (forzarMostrarVacio) {
+          errSpan.innerText = "El nombre de la escena no puede estar vacío.";
+          errSpan.style.display = 'block';
+          return false;
+        } else {
+          errSpan.style.display = 'none';
+          errSpan.innerText = '';
+          return false;
+        }
+      }
+
+      const error = validarNombreEscena(val);
       if (error) {
         errSpan.innerText = error;
         errSpan.style.display = 'block';
@@ -1496,7 +1591,7 @@
 
       if (valor === '__nueva__') {
         txt.style.display = 'inline-block';
-        validarInputEscena(loteId);
+        validarInputEscena(loteId, false);
       } else {
         txt.style.display = 'none';
         if (errSpan) {
@@ -1667,7 +1762,7 @@
       let esExistenteDescargas = false;
 
       if (selEscena === '__nueva__') {
-        if (!validarInputEscena(loteId)) {
+        if (!validarInputEscena(loteId, true)) {
           const txt = document.getElementById(`txt-nueva-escena-${loteId}`);
           if (txt) txt.focus();
           return;
@@ -1725,7 +1820,7 @@
         let esExistenteDescargas = false;
 
         if (selEscena === '__nueva__') {
-          if (!validarInputEscena(loteId)) {
+          if (!validarInputEscena(loteId, true)) {
             const txt = document.getElementById(`txt-nueva-escena-${loteId}`);
             if (txt) txt.focus();
             return;

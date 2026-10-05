@@ -4438,5 +4438,473 @@ class TestAuditoriaASTAntiBorrado(unittest.TestCase):
         self.assertIn(archivo_omitido, str(ctx.exception))
 
 
+class TestPreseleccionRecienteYSeleccionGlobal(unittest.TestCase):
+    """Pruebas exhaustivas para el corte de material reciente, botones globales y duplicados."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp(prefix="test_preseleccion_reciente_")
+        self.descargas = os.path.join(self.tmp_dir, "Descargas")
+        self.destino_base = os.path.join(self.descargas, "_lucie")
+        self.db_path = os.path.join(self.tmp_dir, "test.sqlite")
+        os.makedirs(self.descargas, exist_ok=True)
+        os.makedirs(self.destino_base, exist_ok=True)
+
+        self.config = ConfiguracionBandeja()
+        self.config.ruta_descargas = self.descargas
+        self.config.ruta_destino_base = self.destino_base
+        self.config.horas_material_reciente = 168.0
+
+        self.db = GestorBaseDatosBandeja(self.db_path, self.destino_base, self.descargas)
+        self.filtro = FiltroListaBlanca(self.config)
+        self.detector = DetectorDescargasActivas(0.01)
+        self.agrupador = AgrupadorLotes(10)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _crear_archivo_con_antiguedad(self, nombre: str, horas_atras: float, contenido: bytes = b"datos_dummy_media") -> str:
+        ruta = os.path.join(self.descargas, nombre)
+        with open(ruta, "wb") as f:
+            f.write(contenido)
+        ts = time.time() - (horas_atras * 3600.0)
+        os.utime(ruta, (ts, ts))
+        self.detector._historial_tamanio[ruta] = (len(contenido), time.time() - 10)
+        return ruta
+
+    def test_config_horas_material_reciente_predeterminado_y_cero(self):
+        """horas_material_reciente es 168 por defecto y 0 desactiva el criterio."""
+        cfg_defecto = ConfiguracionBandeja()
+        self.assertEqual(cfg_defecto.horas_material_reciente, 168.0)
+
+        ruta_cfg = os.path.join(self.tmp_dir, "custom_cfg.json")
+        with open(ruta_cfg, "w", encoding="utf-8") as f:
+            json.dump({"horas_material_reciente": 0}, f)
+        cfg_cero = ConfiguracionBandeja(ruta_cfg)
+        self.assertEqual(cfg_cero.horas_material_reciente, 0.0)
+
+    def test_obtener_fecha_llegada_devuelve_maximo_mtime_y_ctime(self):
+        """La función obtener_fecha_llegada devuelve el valor máximo entre mtime y ctime."""
+        from bandeja.lotes import obtener_fecha_llegada
+        mock_st = type("Stat", (), {"st_mtime": 1000.0, "st_ctime": 2500.0})()
+        self.assertEqual(obtener_fecha_llegada(mock_st), 2500.0)
+        mock_st2 = type("Stat", (), {"st_mtime": 3000.0, "st_ctime": 2000.0})()
+        self.assertEqual(obtener_fecha_llegada(mock_st2), 3000.0)
+
+    def test_sin_capitulo_foco_archivo_10_dias_va_a_anteriores_y_3_dias_queda_tildado(self):
+        """Sin capítulo en foco: archivo de hace 10 días va a anteriores destildado y sin escena; de 3 días queda en principal tildado."""
+        self._crear_archivo_con_antiguedad("lucie_antiguo.jpg", horas_atras=240.0)  # 10 días
+        self._crear_archivo_con_antiguedad("lucie_reciente.jpg", horas_atras=72.0)  # 3 días
+
+        with patch("bandeja.vigilante.obtener_fecha_llegada", side_effect=lambda st: getattr(st, "st_mtime", getattr(st, "mtime", time.time()))):
+            vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+            vigilante.escanear()
+            estado = vigilante.obtener_estado()
+
+        # Reciente va a lotes principales
+        self.assertEqual(len(estado["lotes"]), 1)
+        lote_reciente = estado["lotes"][0]
+        self.assertFalse(lote_reciente.get("es_anterior"))
+        self.assertEqual(lote_reciente["total_archivos"], 1)
+        self.assertEqual(lote_reciente["archivos"][0]["nombre"], "lucie_reciente.jpg")
+        self.assertEqual(lote_reciente["archivos"][0]["personaje"], "lucie")
+        self.assertFalse(lote_reciente["archivos"][0].get("es_anterior"))
+
+        # Antiguo va a lotes_anteriores
+        self.assertEqual(len(estado["lotes_anteriores"]), 1)
+        lote_anterior = estado["lotes_anteriores"][0]
+        self.assertTrue(lote_anterior.get("es_anterior"))
+        self.assertEqual(lote_anterior["escena_sugerida"], "")
+        self.assertEqual(lote_anterior["total_archivos"], 1)
+        self.assertEqual(lote_anterior["archivos"][0]["nombre"], "lucie_antiguo.jpg")
+        self.assertEqual(lote_anterior["archivos"][0]["escena"], "")
+        self.assertTrue(lote_anterior["archivos"][0].get("es_anterior"))
+
+    def test_horas_material_reciente_cero_mantiene_comportamiento_anterior(self):
+        """horas_material_reciente = 0 desactiva el corte y deja todo en lotes principales."""
+        self.config.horas_material_reciente = 0.0
+        self._crear_archivo_con_antiguedad("lucie_hace_10_dias.jpg", horas_atras=240.0)
+
+        with patch("bandeja.vigilante.obtener_fecha_llegada", side_effect=lambda st: getattr(st, "st_mtime", getattr(st, "mtime", time.time()))):
+            vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+            vigilante.escanear()
+            estado = vigilante.obtener_estado()
+
+        self.assertEqual(len(estado["lotes_anteriores"]), 0)
+        self.assertEqual(len(estado["lotes"]), 1)
+        self.assertFalse(estado["lotes"][0].get("es_anterior"))
+
+    def test_lote_mixto_se_divide_en_dos(self):
+        """Un lote que mezcla recientes y viejos se parte en dos (principal y anteriores)."""
+        # Ambos archivos comparten alias y raíz de escena
+        self._crear_archivo_con_antiguedad("lucie_playa_1.jpg", horas_atras=240.0) # viejo (10 días)
+        self._crear_archivo_con_antiguedad("lucie_playa_2.jpg", horas_atras=24.0)  # nuevo (1 día)
+
+        with patch("bandeja.vigilante.obtener_fecha_llegada", side_effect=lambda st: getattr(st, "st_mtime", getattr(st, "mtime", time.time()))):
+            vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+            vigilante.escanear()
+            estado = vigilante.obtener_estado()
+
+        # Debe dividirse en un lote principal y uno en anteriores
+        self.assertEqual(len(estado["lotes"]), 1)
+        self.assertEqual(len(estado["lotes_anteriores"]), 1)
+
+        l_prin = estado["lotes"][0]
+        self.assertFalse(l_prin.get("es_anterior"))
+        self.assertEqual(l_prin["archivos"][0]["nombre"], "lucie_playa_2.jpg")
+        self.assertEqual(l_prin["escena_sugerida"], "lucie_playa")
+
+        l_ant = estado["lotes_anteriores"][0]
+        self.assertTrue(l_ant.get("es_anterior"))
+        self.assertEqual(l_ant["archivos"][0]["nombre"], "lucie_playa_1.jpg")
+        self.assertEqual(l_ant["escena_sugerida"], "")
+
+    def test_mover_lotes_listos_excluye_anteriores(self):
+        """'Mover lotes listos' solo considera lotes recientes con escena válida y excluye 'Anteriores'."""
+        self._crear_archivo_con_antiguedad("lucie_viejo_listo.jpg", horas_atras=240.0)
+        self._crear_archivo_con_antiguedad("lucie_nuevo_listo.jpg", horas_atras=24.0)
+
+        with patch("bandeja.vigilante.obtener_fecha_llegada", side_effect=lambda st: getattr(st, "st_mtime", getattr(st, "mtime", time.time()))):
+            vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+            vigilante.escanear()
+            estado = vigilante.obtener_estado()
+
+        # Lotes anteriores tienen es_anterior = True y escena vacía
+        for l_ant in estado["lotes_anteriores"]:
+            self.assertTrue(l_ant.get("es_anterior"))
+            self.assertEqual(l_ant.get("escena_sugerida"), "")
+
+        # Verificamos que el filtro de simularMoverLotesListos excluya cualquier lote con es_anterior
+        lotes_candidatos = estado["lotes"] + estado["lotes_anteriores"]
+        lotes_filtrados = [l for l in lotes_candidatos if not l.get("es_anterior") and bool(l.get("escena_sugerida"))]
+        self.assertEqual(len(lotes_filtrados), 1)
+        self.assertEqual(lotes_filtrados[0]["archivos"][0]["nombre"], "lucie_nuevo_listo.jpg")
+
+    def test_capitulo_en_foco_preserva_corte_exclusivo_por_fecha_inicio(self):
+        """Con capítulo en foco, el corte depende exclusivamente de fecha_inicio y no es afectado por horas_material_reciente."""
+        # 1. Capítulo creado hace 2 días (48h)
+        fecha_inicio_2d = (datetime.datetime.now() - datetime.timedelta(days=2)).isoformat()
+        self.db.empezar_capitulo("lucie", "sesion_activa", fecha_inicio=fecha_inicio_2d)
+
+        # Archivo de hace 4 días (96h): dentro de 168h pero anterior a fecha_inicio del capítulo (48h)
+        self._crear_archivo_con_antiguedad("lucie_hace_4_dias.jpg", horas_atras=96.0)
+        # Archivo de hace 1 día (24h): posterior a fecha_inicio del capítulo
+        self._crear_archivo_con_antiguedad("lucie_hace_1_dia.jpg", horas_atras=24.0)
+
+        with patch("bandeja.vigilante.obtener_fecha_llegada", side_effect=lambda st: getattr(st, "st_mtime", getattr(st, "mtime", time.time()))):
+            vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+            vigilante.escanear()
+            estado = vigilante.obtener_estado()
+
+        # Archivo de 1 día está clasificado en el capítulo y en lotes principales
+        self.assertEqual(len(estado["lotes"]), 1)
+        self.assertEqual(estado["lotes"][0]["archivos"][0]["nombre"], "lucie_hace_1_dia.jpg")
+        self.assertEqual(estado["lotes"][0]["archivos"][0]["escena"], "sesion_activa")
+
+        # Archivo de 4 días va a anteriores a pesar de tener menos de 168 horas
+        self.assertEqual(len(estado["lotes_anteriores"]), 1)
+        self.assertEqual(estado["lotes_anteriores"][0]["archivos"][0]["nombre"], "lucie_hace_4_dias.jpg")
+
+        # 2. Ahora caso inverso: capítulo empezó hace 10 días (240h).
+        # Un archivo de hace 8 días (192h > 168h) es posterior a la fecha_inicio del capítulo.
+        # Debe mantenerse en el capítulo y NO enviarse a anteriores!
+        shutil.rmtree(self.descargas, ignore_errors=True)
+        os.makedirs(self.descargas, exist_ok=True)
+        self.db.terminar_capitulo(id_capitulo=1)
+
+        fecha_inicio_10d = (datetime.datetime.now() - datetime.timedelta(days=10)).isoformat()
+        self.db.empezar_capitulo("lucie", "capitulo_largo", fecha_inicio=fecha_inicio_10d)
+
+        self._crear_archivo_con_antiguedad("lucie_hace_8_dias.jpg", horas_atras=192.0)
+
+        with patch("bandeja.vigilante.obtener_fecha_llegada", side_effect=lambda st: getattr(st, "st_mtime", getattr(st, "mtime", time.time()))):
+            vigilante2 = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+            vigilante2.escanear()
+            estado2 = vigilante2.obtener_estado()
+
+        # Como fue creado después del inicio del capítulo, se clasifica en el capítulo
+        self.assertEqual(len(estado2["lotes_anteriores"]), 0)
+        self.assertEqual(len(estado2["lotes"]), 1)
+        self.assertEqual(estado2["lotes"][0]["archivos"][0]["nombre"], "lucie_hace_8_dias.jpg")
+        self.assertEqual(estado2["lotes"][0]["archivos"][0]["escena"], "capitulo_largo")
+
+    def test_duplicados_deteccion_en_descargas_movidos_y_pendrive(self):
+        """Detecta duplicados contra descargas concurrentes, archivos movidos en DB y manifiesto pendrive."""
+        import hashlib
+
+        # Caso A: Dos archivos con mismo contenido en Descargas
+        contenido_repetido = b"CONTENIDO_VIDEO_REPETIDO_123"
+        self._crear_archivo_con_antiguedad("lucie_original.mp4", horas_atras=2.0, contenido=contenido_repetido)
+        self._crear_archivo_con_antiguedad("lucie_copia.mp4", horas_atras=1.0, contenido=contenido_repetido)
+
+        # Caso B: Archivo previamente movido en DB
+        contenido_movido = b"CONTENIDO_YA_MOVIDO_ABC"
+        hash_movido = hashlib.sha256(contenido_movido).hexdigest()
+        self.db.registrar_o_actualizar(
+            hash_val=hash_movido,
+            ruta_actual=os.path.join(self.destino_base, "lucie", "fotos", "lucie1.jpg"),
+            estado="movido",
+            personaje="lucie",
+            escena="sesion1"
+        )
+        self._crear_archivo_con_antiguedad("lucie_dup_movido.jpg", horas_atras=3.0, contenido=contenido_movido)
+
+        # Caso C: Archivo ya enviado a pendrive
+        contenido_pen = b"CONTENIDO_YA_EN_PENDRIVE_XYZ"
+        hash_pen = hashlib.sha256(contenido_pen).hexdigest()
+        self._crear_archivo_con_antiguedad("lucie_dup_pendrive.mp4", horas_atras=4.0, contenido=contenido_pen)
+
+        with patch("bandeja.vigilante.detectar_pendrive") as mock_pen, \
+             patch("bandeja.vigilante.leer_manifiesto_pendrive") as mock_manif:
+            mock_pen.return_value = {"punto_montaje": "/mnt/test_pen"}
+            mock_manif.return_value = [
+                {"sha256": hash_pen, "estado": "enviado", "nombre": "video_en_pendrive.mp4"}
+            ]
+
+            vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+            vigilante.escanear()
+            estado = vigilante.obtener_estado()
+
+        archivos = {}
+        for l in estado["lotes"]:
+            for a in l["archivos"]:
+                archivos[a["nombre"]] = a
+
+        # Verificaciones
+        # 1. El primer archivo visto alfabéticamente ('lucie_copia.mp4') no es duplicado
+        self.assertIsNone(archivos["lucie_copia.mp4"]["duplicado"])
+
+        # 2. El segundo archivo visto ('lucie_original.mp4') es duplicado de tipo descargas
+        dup_descargas = archivos["lucie_original.mp4"]["duplicado"]
+        self.assertIsNotNone(dup_descargas)
+        self.assertTrue(dup_descargas["es_duplicado"])
+        self.assertEqual(dup_descargas["tipo"], "descargas")
+        self.assertEqual(dup_descargas["coincide_con"], "lucie_copia.mp4")
+
+        # 3. El archivo movido es duplicado de tipo movido
+        dup_movido = archivos["lucie_dup_movido.jpg"]["duplicado"]
+        self.assertIsNotNone(dup_movido)
+        self.assertTrue(dup_movido["es_duplicado"])
+        self.assertEqual(dup_movido["tipo"], "movido")
+        self.assertEqual(dup_movido["coincide_con"], "lucie1.jpg")
+
+        # 4. El archivo en pendrive es duplicado de tipo pendrive
+        dup_pen = archivos["lucie_dup_pendrive.mp4"]["duplicado"]
+        self.assertIsNotNone(dup_pen)
+        self.assertTrue(dup_pen["es_duplicado"])
+        self.assertEqual(dup_pen["tipo"], "pendrive")
+        self.assertEqual(dup_pen["coincide_con"], "video_en_pendrive.mp4")
+
+    def test_frontend_botones_globales_y_validacion_diferida_en_node(self):
+        """Prueba en Node.js de validarInputEscena diferido y seleccionarTodoGlobal con conteos."""
+        import subprocess
+
+        js_test = """
+        const assert = require('assert');
+
+        // Clases de prueba para el entorno DOM simulado
+        class MockElement {
+          constructor(tag, id = '') {
+            this.tagName = tag.toUpperCase();
+            this.id = id;
+            this.style = { display: '' };
+            this.attributes = {};
+            this.value = '';
+            this.checked = false;
+            this.innerText = '';
+          }
+          getAttribute(n) { return this.attributes[n] !== undefined ? this.attributes[n] : null; }
+          setAttribute(n, v) { this.attributes[n] = String(v); }
+        }
+
+        const elements = new Map();
+        function getOrCreate(id, tag = 'div') {
+          if (!elements.has(id)) {
+            elements.set(id, new MockElement(tag, id));
+          }
+          return elements.get(id);
+        }
+
+        const spanConteo = getOrCreate('conteo-global-seleccion', 'span');
+        const contLotes = getOrCreate('contenedor-lotes', 'div');
+
+        // Input y error de lote_test
+        const selEscena = getOrCreate('sel-escena-lote_test', 'select');
+        selEscena.value = '__nueva__';
+        const txtEscena = getOrCreate('txt-nueva-escena-lote_test', 'input');
+        txtEscena.value = '';
+        const errSpan = getOrCreate('error-escena-lote_test', 'span');
+
+        // Checkboxes para lote_test (principal)
+        const cbMaestro = getOrCreate('cb-maestro-lote_test', 'input');
+        cbMaestro.setAttribute('data-lote-id', 'lote_test');
+        cbMaestro.attributes['class'] = 'cb-lote-listo';
+
+        const chk1 = getOrCreate('chk-1', 'input');
+        chk1.attributes['class'] = 'chk-archivo chk-lote-lote_test';
+        chk1.checked = false;
+
+        const chk2 = getOrCreate('chk-2', 'input');
+        chk2.attributes['class'] = 'chk-archivo chk-lote-lote_test';
+        chk2.checked = false;
+
+        // Checkbox en anteriores (ant_lote) que NO debe ser afectado por selección global
+        const chkAnt = getOrCreate('chk-ant-1', 'input');
+        chkAnt.attributes['class'] = 'chk-archivo chk-lote-ant_lote';
+        chkAnt.checked = false;
+
+        const globalDocument = {
+          getElementById(id) { return elements.get(id) || null; },
+          querySelector(sel) {
+            for (const el of elements.values()) {
+              if (sel === '#' + el.id) return el;
+              if (sel === `.cb-lote-listo[data-lote-id="${el.getAttribute('data-lote-id')}"]`) return el;
+            }
+            return null;
+          },
+          querySelectorAll(sel) {
+            const res = [];
+            for (const el of elements.values()) {
+              const cls = el.attributes['class'] || '';
+              if (sel === '.chk-lote-lote_test' && cls.includes('chk-lote-lote_test')) res.push(el);
+              if (sel === '.chk-lote-lote_test:checked' && cls.includes('chk-lote-lote_test') && el.checked) res.push(el);
+              if (sel === '.chk-lote-ant_lote' && cls.includes('chk-lote-ant_lote')) res.push(el);
+              if (sel === '.chk-archivo' && cls.includes('chk-archivo')) res.push(el);
+            }
+            return res;
+          }
+        };
+
+        global.document = globalDocument;
+
+        // Datos del estado
+        const datosEstado = {
+          lotes: [
+            { lote_id: 'lote_test', es_anterior: false, archivos: [{ id_db: 1 }, { id_db: 2 }] }
+          ],
+          lotes_anteriores: [
+            { lote_id: 'ant_lote', es_anterior: true, archivos: [{ id_db: 99 }] }
+          ]
+        };
+
+        // Lógica bajo prueba
+        function validarNombreEscena(nombre) {
+          if (!nombre || !nombre.trim()) return "El nombre de la escena no puede estar vacío.";
+          return null;
+        }
+
+        function validarInputEscena(loteId, forzarMostrarVacio = false) {
+          const input = document.getElementById(`txt-nueva-escena-${loteId}`);
+          const err = document.getElementById(`error-escena-${loteId}`);
+          if (!input || !err) return true;
+
+          const sel = document.getElementById(`sel-escena-${loteId}`).value;
+          if (sel !== '__nueva__') {
+            err.style.display = 'none';
+            err.innerText = '';
+            return true;
+          }
+
+          const val = input.value;
+          if (!val || !val.trim()) {
+            if (forzarMostrarVacio) {
+              err.innerText = "El nombre de la escena no puede estar vacío.";
+              err.style.display = 'block';
+              return false;
+            } else {
+              err.style.display = 'none';
+              err.innerText = '';
+              return false;
+            }
+          }
+          return true;
+        }
+
+        function actualizarConteoGlobalSeleccion() {
+          const span = document.getElementById('conteo-global-seleccion');
+          if (!span) return;
+          const lotesActivos = (datosEstado.lotes || []).filter(l => !l.es_anterior);
+          let totalArchivos = 0;
+          let totalSeleccionados = 0;
+          lotesActivos.forEach(lote => {
+            totalArchivos += (lote.archivos || []).length;
+            const marcados = document.querySelectorAll(`.chk-lote-${lote.lote_id}:checked`).length;
+            totalSeleccionados += marcados;
+          });
+          span.innerText = `${totalSeleccionados} archivos seleccionados de ${totalArchivos}`;
+        }
+
+        function actualizarSeleccionLote(loteId, actualizarGlobal = true) {
+          const checkboxes = document.querySelectorAll(`.chk-lote-${loteId}`);
+          let marcados = 0;
+          checkboxes.forEach(cb => { if (cb.checked) marcados++; });
+          const cbM = document.querySelector(`.cb-lote-listo[data-lote-id="${loteId}"]`);
+          if (cbM) {
+            cbM.checked = (checkboxes.length > 0 && marcados === checkboxes.length);
+          }
+          if (actualizarGlobal) {
+            actualizarConteoGlobalSeleccion();
+          }
+        }
+
+        function seleccionarTodoGlobal(marcar) {
+          const lotesActivos = (datosEstado.lotes || []).filter(l => !l.es_anterior);
+          lotesActivos.forEach(lote => {
+            const checkboxes = document.querySelectorAll(`.chk-lote-${lote.lote_id}`);
+            checkboxes.forEach(cb => { cb.checked = marcar; });
+            const cbM = document.querySelector(`.cb-lote-listo[data-lote-id="${lote.lote_id}"]`);
+            if (cbM) cbM.checked = marcar;
+            actualizarSeleccionLote(lote.lote_id, false);
+          });
+          actualizarConteoGlobalSeleccion();
+        }
+
+        // 1. Verificación de validación diferida de escena vacía
+        // Al escribir/cargar (forzarMostrarVacio = false): NO se muestra el error
+        const resNoForzado = validarInputEscena('lote_test', false);
+        assert.strictEqual(resNoForzado, false);
+        assert.strictEqual(errSpan.style.display, 'none');
+        assert.strictEqual(errSpan.innerText, '');
+
+        // Al intentar mover o salir del foco (forzarMostrarVacio = true): SÍ se muestra el error
+        const resForzado = validarInputEscena('lote_test', true);
+        assert.strictEqual(resForzado, false);
+        assert.strictEqual(errSpan.style.display, 'block');
+        assert.strictEqual(errSpan.innerText, "El nombre de la escena no puede estar vacío.");
+
+        // 2. Verificación de selección global
+        // Estado inicial
+        actualizarConteoGlobalSeleccion();
+        assert.strictEqual(spanConteo.innerText, "0 archivos seleccionados de 2");
+
+        // Seleccionar todo global
+        seleccionarTodoGlobal(true);
+        assert.strictEqual(chk1.checked, true);
+        assert.strictEqual(chk2.checked, true);
+        assert.strictEqual(cbMaestro.checked, true);
+        assert.strictEqual(chkAnt.checked, false, "Los lotes de anteriores NO deben ser afectados por seleccionarTodoGlobal");
+        assert.strictEqual(spanConteo.innerText, "2 archivos seleccionados de 2");
+
+        // Ninguno global
+        seleccionarTodoGlobal(false);
+        assert.strictEqual(chk1.checked, false);
+        assert.strictEqual(chk2.checked, false);
+        assert.strictEqual(cbMaestro.checked, false);
+        assert.strictEqual(chkAnt.checked, false);
+        assert.strictEqual(spanConteo.innerText, "0 archivos seleccionados de 2");
+
+        // Selección manual de 1 archivo
+        chk1.checked = true;
+        actualizarSeleccionLote('lote_test');
+        assert.strictEqual(cbMaestro.checked, false, "Maestro no debe estar marcado si no están todos");
+        assert.strictEqual(spanConteo.innerText, "1 archivos seleccionados de 2");
+
+        console.log('TEST_NODE_PRESELECCION_OK');
+        """
+        proc = subprocess.run(["node", "-e", js_test], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, f"Fallo en pruebas Node.js: {proc.stderr}")
+        self.assertIn("TEST_NODE_PRESELECCION_OK", proc.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
+

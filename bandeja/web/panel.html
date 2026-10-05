@@ -135,21 +135,32 @@
     <div id="alert-box" style="display:none;" class="alert-error"></div>
 
     <section id="sec-lotes">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
-        <h2 style="font-size:1.15rem;">Lotes Detectados</h2>
-        <button id="btn-mover-lotes-listos" class="btn-accion" onclick="simularMoverLotesListos()" style="margin-left:0;">
-          Mover lotes listos
-        </button>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; flex-wrap:wrap; gap:8px;">
+        <h2 style="font-size:1.15rem; margin:0;">Lotes Detectados</h2>
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <button id="btn-global-seleccionar-todo" type="button" class="btn-sm" onclick="seleccionarTodoGlobal(true)" style="padding:6px 12px; font-size:0.85rem;">
+            Seleccionar todo
+          </button>
+          <button id="btn-global-seleccionar-ninguno" type="button" class="btn-sm" onclick="seleccionarTodoGlobal(false)" style="padding:6px 12px; font-size:0.85rem;">
+            Ninguno
+          </button>
+          <span id="conteo-global-seleccion" style="font-size:0.85rem; color:var(--text-muted, #aaa); margin:0 4px;">
+            0 archivos seleccionados de 0
+          </span>
+          <button id="btn-mover-lotes-listos" class="btn-accion" onclick="simularMoverLotesListos()" style="margin-left:0;">
+            Mover lotes listos
+          </button>
+        </div>
       </div>
       <div id="contenedor-lotes">Cargando lotes...</div>
 
       <div id="sec-lotes-anteriores" style="display:none; margin-top:24px;">
         <details id="details-anteriores" style="background:var(--card-bg, #1a1a1a); border:1px solid #333; border-radius:8px; padding:12px 16px;">
-          <summary style="font-size:1.05rem; font-weight:600; cursor:pointer; color:var(--text-muted, #aaa);">
-            Anteriores al capítulo (<span id="conteo-lotes-anteriores">0</span>)
+          <summary id="summary-lotes-anteriores" style="font-size:1.05rem; font-weight:600; cursor:pointer; color:var(--text-muted, #aaa);">
+            <span id="titulo-lotes-anteriores">Anteriores</span> (<span id="conteo-lotes-anteriores">0</span>)
           </summary>
-          <p style="font-size:0.85rem; color:var(--text-muted, #888); margin:8px 0 16px 0;">
-            Material descargado antes del inicio del capítulo activo. No está preasignado ni seleccionado.
+          <p id="subtitulo-lotes-anteriores" style="font-size:0.85rem; color:var(--text-muted, #888); margin:8px 0 16px 0;">
+            Material de más de 168 horas: revisá antes de mover.
           </p>
           <div id="contenedor-lotes-anteriores"></div>
         </details>

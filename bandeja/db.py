@@ -145,6 +145,13 @@ class GestorBaseDatosBandeja:
             row = cur.fetchone()
             return dict(row) if row else None
 
+    def obtener_movido_por_hash(self, hash_val: str) -> Optional[Dict[str, Any]]:
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            cur.execute("SELECT * FROM bandeja_archivos WHERE hash = ? AND estado = 'movido' ORDER BY id DESC LIMIT 1", (hash_val,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
     def obtener_por_id(self, archivo_id: int) -> Optional[Dict[str, Any]]:
         with self._lock, self._conectar() as con:
             cur = con.cursor()

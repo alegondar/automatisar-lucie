@@ -26,7 +26,11 @@ from bandeja.lotes import (
     AgrupadorLotes,
     obtener_fecha_llegada,
 )
-from bandeja.pendrive import obtener_estado_pendrive
+from bandeja.pendrive import (
+    obtener_estado_pendrive,
+    detectar_pendrive,
+    leer_manifiesto_pendrive,
+)
 from bandeja.plataforma import notificar_escritorio
 
 logger = logging.getLogger("bandeja_descargas")
@@ -77,7 +81,7 @@ class VigilanteBandeja:
         rutas_existentes = set()
 
         try:
-            entradas = os.listdir(self.config.ruta_descargas)
+            entradas = sorted(os.listdir(self.config.ruta_descargas))
         except OSError:
             return
 
@@ -94,6 +98,24 @@ class VigilanteBandeja:
                     ts_ini = 0.0
                 margen_segundos = getattr(self.config, "minutos_antes_inicio_capitulo", 0) * 60
                 ts_corte_capitulo = ts_ini - margen_segundos
+
+        # Inicializar índices para detección de duplicados
+        hashes_vistos_descargas: Dict[str, str] = {}
+        hashes_enviados_pendrive: Dict[str, Dict[str, Any]] = {}
+        try:
+            pen = detectar_pendrive(self.config)
+            if pen and pen.get("punto_montaje"):
+                carpeta_raiz = getattr(self.config, "carpeta_raiz_pendrive", "LucieSinReglas")
+                manif = leer_manifiesto_pendrive(pen["punto_montaje"], carpeta_raiz)
+                for ent in manif:
+                    h = ent.get("sha256")
+                    if h:
+                        if ent.get("estado") == "enviado":
+                            hashes_enviados_pendrive[h] = ent
+                        elif ent.get("estado") == "envio_revertido" and h in hashes_enviados_pendrive:
+                            del hashes_enviados_pendrive[h]
+        except Exception:
+            pass
 
         for entrada in entradas:
             ruta_completa = os.path.join(self.config.ruta_descargas, entrada)
@@ -133,45 +155,83 @@ class VigilanteBandeja:
 
             # Comprobar si el archivo es anterior al capítulo en foco o según horas_material_reciente
             es_anterior = False
-            if es_cap_foco and fecha_llegada < ts_corte_capitulo:
-                es_anterior = True
-
-            horas_reciente = float(getattr(self.config, "horas_material_reciente", 0) or 0)
-            if horas_reciente > 0:
-                ts_corte_reciente = time.time() - (horas_reciente * 3600.0)
-                if fecha_llegada < ts_corte_reciente:
+            if es_cap_foco:
+                if fecha_llegada < ts_corte_capitulo:
                     es_anterior = True
+            else:
+                horas_reciente = float(getattr(self.config, "horas_material_reciente", 0) or 0)
+                if horas_reciente > 0:
+                    ts_corte_reciente = time.time() - (horas_reciente * 3600.0)
+                    if fecha_llegada < ts_corte_reciente:
+                        es_anterior = True
 
             # Comprobar en base de datos SQLite si ya tiene decisión tomada
             reg = self.db.obtener_por_ruta(ruta_completa)
             hash_val = reg["hash"] if reg else calcular_sha256(ruta_completa)
             if not reg:
                 reg_hash = self.db.obtener_por_hash(hash_val)
-                if reg_hash:
+                if reg_hash and reg_hash.get("ruta_actual") == ruta_completa:
                     reg = reg_hash
 
+            # Detección de duplicados
+            duplicado_info = None
+            if hash_val in hashes_vistos_descargas:
+                primer_archivo = hashes_vistos_descargas[hash_val]
+                duplicado_info = {
+                    "es_duplicado": True,
+                    "tipo": "descargas",
+                    "coincide_con": primer_archivo,
+                    "mensaje": f"Coincide con {primer_archivo}"
+                }
+            else:
+                hashes_vistos_descargas[hash_val] = entrada
+
+            if not duplicado_info:
+                movido = self.db.obtener_movido_por_hash(hash_val)
+                if movido:
+                    nombre_movido = os.path.basename(movido.get("ruta_actual") or "") or movido.get("ruta_actual") or "archivo movido"
+                    duplicado_info = {
+                        "es_duplicado": True,
+                        "tipo": "movido",
+                        "coincide_con": nombre_movido,
+                        "mensaje": f"Ya movido ({nombre_movido})"
+                    }
+
+            if not duplicado_info and hash_val in hashes_enviados_pendrive:
+                ent_pen = hashes_enviados_pendrive[hash_val]
+                nombre_pen = ent_pen.get("nombre") or os.path.basename(ent_pen.get("ruta_relativa") or "") or "pendrive"
+                duplicado_info = {
+                    "es_duplicado": True,
+                    "tipo": "pendrive",
+                    "coincide_con": nombre_pen,
+                    "mensaje": f"Ya enviado a pendrive ({nombre_pen})"
+                }
+
             if es_anterior:
-                # Regla 2: Archivo anterior al inicio del capítulo activo:
+                # Regla 2: Archivo anterior al inicio del capítulo activo o según ventana reciente:
                 # NO se asigna al capítulo ni se preselecciona.
                 pers_alias = self.filtro.obtener_personaje_de_alias_inicial(entrada) if tipo_clasificacion == "candidato" else None
                 personaje_actual = pers_alias
                 escena_actual = None
                 raiz_escena = None
                 estado_actual = "detectado"
-                if not reg or reg.get("estado") != "detectado" or reg.get("personaje") != personaje_actual or reg.get("escena") is not None:
-                    id_db = self.db.registrar_o_actualizar(
-                        hash_val, ruta_completa, "detectado",
-                        personaje=personaje_actual, escena=None, limpiar_escena=True
-                    )
-                    logger.info(
-                        f"[BANDEJA][REGISTRADO] Archivo: '{entrada}' (anterior) | Hash: {hash_val[:12]}... | "
-                        f"Estado: detectado | Personaje: {personaje_actual} | "
-                        f"ts: {datetime.datetime.now().isoformat()}"
-                    )
+                if not duplicado_info or duplicado_info.get("tipo") == "pendrive":
+                    if not reg or reg.get("estado") != "detectado" or reg.get("personaje") != personaje_actual or reg.get("escena") is not None:
+                        id_db = self.db.registrar_o_actualizar(
+                            hash_val, ruta_completa, "detectado",
+                            personaje=personaje_actual, escena=None, limpiar_escena=True
+                        )
+                        logger.info(
+                            f"[BANDEJA][REGISTRADO] Archivo: '{entrada}' (anterior) | Hash: {hash_val[:12]}... | "
+                            f"Estado: detectado | Personaje: {personaje_actual} | "
+                            f"ts: {datetime.datetime.now().isoformat()}"
+                        )
+                    else:
+                        id_db = reg["id"]
                 else:
-                    id_db = reg["id"]
+                    id_db = reg["id"] if reg else 0
             else:
-                if reg and reg["estado"] != "detectado":
+                if reg and reg["estado"] != "detectado" and (not duplicado_info or duplicado_info.get("tipo") != "movido"):
                     # Archivo ya detectado previamente con decisión tomada: respetar
                     id_db = reg["id"]
                     estado_actual = reg["estado"]
@@ -181,6 +241,24 @@ class VigilanteBandeja:
                         raiz_escena = f"{personaje_actual}::{escena_actual}" if personaje_actual else escena_actual.lower()
                     else:
                         raiz_escena = self.filtro.obtener_raiz_escena(entrada)
+                elif duplicado_info and duplicado_info.get("tipo") in ("movido", "descargas"):
+                    # Duplicado: no sobreescribir registro previo en DB
+                    id_db = reg["id"] if reg else 0
+                    estado_actual = "detectado"
+                    if es_cap_foco:
+                        personaje_actual = cap_foco["personaje"]
+                        escena_actual = cap_foco["nombre"]
+                        raiz_escena = f"{personaje_actual}::{escena_actual}"
+                    else:
+                        pers_alias = self.filtro.obtener_personaje_de_alias_inicial(entrada)
+                        if pers_alias:
+                            personaje_actual = pers_alias
+                            escena_actual = self.filtro.extraer_escena_sugerida(entrada)
+                            raiz_escena = self.filtro.obtener_raiz_escena(entrada)
+                        else:
+                            personaje_actual = None
+                            escena_actual = None
+                            raiz_escena = None
                 else:
                     # Material nuevo o primer escaneo
                     if es_cap_foco:
@@ -249,7 +327,8 @@ class VigilanteBandeja:
                 "personaje": personaje_actual,
                 "escena": escena_actual,
                 "raiz_escena": raiz_escena,
-                "es_anterior": es_anterior
+                "es_anterior": es_anterior,
+                "duplicado": duplicado_info
             }
 
             if es_anterior:
