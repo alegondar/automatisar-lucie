@@ -10,7 +10,7 @@
 ## 2. Módulos base de plataforma y configuración
 
 - [x] 2.1 Extraer a `bandeja/plataforma.py` la capa del sistema operativo (puntos de montaje, tipo de sistema de archivos `/proc/mounts`, espacio libre, notificaciones de escritorio y stubs para Windows); verificar suite completa y AST
-- [ ] 2.2 Extraer a `bandeja/config.py` la clase `ConfiguracionBandeja`, rutas por defecto y constantes operativas; verificar suite completa y AST
+- [x] 2.2 Extraer a `bandeja/config.py` la clase `ConfiguracionBandeja`, rutas por defecto y constantes operativas; verificar suite completa y AST
 
 ## 3. Módulos de persistencia, clasificación y agrupación
 
