@@ -25,16 +25,9 @@ from bandeja.config import (
     EXTENSIONES_VIDEOS_DEFECTO,
 )
 
+from bandeja.clasificacion import asegurar_carpeta_capitulo
+
 logger = logging.getLogger("bandeja.db")
-
-
-def _asegurar_carpeta_capitulo(personaje: str, nombre: str, dest_base: str, desc: str) -> Dict[str, Any]:
-    try:
-        from bandeja.capitulos import asegurar_carpeta_capitulo
-        return asegurar_carpeta_capitulo(personaje, nombre, dest_base, desc)
-    except (ImportError, AttributeError):
-        import bandeja_descargas
-        return bandeja_descargas.asegurar_carpeta_capitulo(personaje, nombre, dest_base, desc)
 
 
 class GestorBaseDatosBandeja:
@@ -193,7 +186,7 @@ class GestorBaseDatosBandeja:
         if not dest_base:
             dest_base = os.path.expanduser("~/Descargas/_lucie")
         desc = ruta_descargas or self.ruta_descargas or os.path.expanduser("~/Descargas")
-        return _asegurar_carpeta_capitulo(personaje, nombre, dest_base, desc)
+        return asegurar_carpeta_capitulo(personaje, nombre, dest_base, desc)
 
     def empezar_capitulo(self, personaje: str, nombre: str, fecha_inicio: Optional[str] = None,
                          ruta_destino_base: Optional[str] = None, ruta_descargas: Optional[str] = None) -> Dict[str, Any]:
