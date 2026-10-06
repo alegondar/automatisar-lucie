@@ -16,8 +16,19 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch, MagicMock
+import urllib.request
+import urllib.error
 import uuid
 
+from bandeja import (
+    montar_unidad_pendrive,
+    desmontar_unidad_pendrive,
+    obtener_estado_pendrive,
+    detectar_particiones_removibles_linux,
+    diagnosticar_todas_particiones_linux,
+    listar_procesos_ocupando_montaje,
+)
 from bandeja_descargas import (
     ConfiguracionBandeja,
     GestorBaseDatosBandeja,
@@ -1272,6 +1283,315 @@ class TestConfinamientoSeguridadPendrive(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             simular_envio_capitulos(capitulos=["lucie/../../etc"], config=self.config)
+
+
+class TestControlMontajePendrive(unittest.TestCase):
+    """
+    Pruebas para el control de montaje del pendrive y detección de unidades sin montar:
+    - 5 estados de la tarjeta Unidad Pendrive
+    - Detección y diagnóstico de particiones
+    - Whitelist estricta para udisksctl mount/unmount/power-off
+    - Bloqueo por operación activa (_operacion_pendrive_activa)
+    - Detección no destructiva de procesos ocupando montaje
+    - Secuencia segura de power-off solo tras desmontaje exitoso
+    - Omisión de botones en plataforma Windows
+    - Endpoints HTTP REST (POST montar, desmontar, expulsar)
+    """
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp(prefix="test_ctrl_pendrive_")
+        self.descargas_dir = os.path.join(self.temp_dir, "Descargas")
+        self.destino_base = os.path.join(self.descargas_dir, "_lucie")
+        self.pendrive_dir = os.path.join(self.temp_dir, "media", "mi_pendrive")
+        os.makedirs(self.descargas_dir, exist_ok=True)
+        os.makedirs(self.destino_base, exist_ok=True)
+        os.makedirs(self.pendrive_dir, exist_ok=True)
+
+        self.db_path = os.path.join(self.temp_dir, "test_bandeja.db")
+        self.db = GestorBaseDatosBandeja(ruta_db=self.db_path)
+
+        self.config = ConfiguracionBandeja()
+        self.config.ruta_descargas = self.descargas_dir
+        self.config.ruta_destino_base = self.destino_base
+        self.config.rutas_candidatas_pendrive = [self.pendrive_dir]
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    @patch("bandeja.pendrive.detectar_particiones_removibles_linux")
+    @patch("bandeja.pendrive.detectar_pendrive")
+    @patch("bandeja.pendrive.detectar_unidad_candidata_sin_vincular")
+    def test_deteccion_particion_removible_sin_montar(self, mock_cand, mock_pen, mock_rem):
+        """Estado 'detectada_sin_montar': unidad removible desenlazada y sin punto de montaje."""
+        mock_rem.return_value = [{
+            "dispositivo": "/dev/sda1",
+            "nodo": "sda1",
+            "disco_padre": "/dev/sda",
+            "etiqueta": "MIUNIDAD",
+            "sistema_archivos": "exfat",
+            "punto_montaje": None,
+            "montado": False,
+            "tamanio_bytes": 120000000000,
+            "tamanio_fmt": "111.8 GB"
+        }]
+        mock_pen.return_value = None
+        mock_cand.return_value = None
+
+        estado = obtener_estado_pendrive(self.config, self.db)
+        self.assertFalse(estado["conectado"])
+        self.assertFalse(estado["sin_respuesta"])
+        self.assertEqual(estado["estado_unidad"], "detectada_sin_montar")
+        self.assertEqual(estado["dispositivo"], "/dev/sda1")
+        self.assertEqual(estado["etiqueta"], "MIUNIDAD")
+        self.assertEqual(estado["sistema_archivos"], "exfat")
+        if os.name != "nt":
+            self.assertEqual(estado["acciones_disponibles"], ["montar"])
+
+    @patch("bandeja.pendrive.detectar_particiones_removibles_linux")
+    @patch("bandeja.pendrive.detectar_pendrive")
+    @patch("bandeja.pendrive.detectar_unidad_candidata_sin_vincular")
+    def test_deteccion_particion_removible_montada_sin_vincular(self, mock_cand, mock_pen, mock_rem):
+        """Estado 'conectada_sin_vincular': unidad montada sin marcador .lucie_pendrive.json."""
+        mock_rem.return_value = [{
+            "dispositivo": "/dev/sdb1",
+            "nodo": "sdb1",
+            "disco_padre": "/dev/sdb",
+            "etiqueta": "DISCO",
+            "sistema_archivos": "vfat",
+            "punto_montaje": "/media/usb",
+            "montado": True,
+            "tamanio_bytes": 32000000000,
+            "tamanio_fmt": "29.8 GB"
+        }]
+        mock_pen.return_value = None
+        mock_cand.return_value = {
+            "punto_montaje": "/media/usb",
+            "sistema_archivos": "vfat",
+            "espacio_libre_bytes": 10000,
+            "espacio_total_bytes": 32000000000,
+            "espacio_usado_bytes": 5000
+        }
+
+        estado = obtener_estado_pendrive(self.config, self.db)
+        self.assertFalse(estado["conectado"])
+        self.assertEqual(estado["estado_unidad"], "conectada_sin_vincular")
+        self.assertEqual(estado["dispositivo"], "/dev/sdb1")
+        self.assertEqual(estado["punto_montaje"], "/media/usb")
+        self.assertIn("vincular", estado["acciones_disponibles"])
+        if os.name != "nt":
+            self.assertIn("desmontar", estado["acciones_disponibles"])
+            self.assertIn("expulsar", estado["acciones_disponibles"])
+
+    @patch("bandeja.pendrive.detectar_particiones_removibles_linux")
+    def test_deteccion_pendrive_vinculado_listo(self, mock_rem):
+        """Estado 'vinculado_listo': pendrive montado y con marcador de identidad."""
+        vincular_pendrive(self.pendrive_dir, self.config)
+        mock_rem.return_value = [{
+            "dispositivo": "/dev/sdc1",
+            "nodo": "sdc1",
+            "disco_padre": "/dev/sdc",
+            "etiqueta": "LUCIE",
+            "sistema_archivos": "ext4",
+            "punto_montaje": self.pendrive_dir,
+            "montado": True,
+            "tamanio_bytes": 64000000000,
+            "tamanio_fmt": "59.6 GB"
+        }]
+
+        estado = obtener_estado_pendrive(self.config, self.db)
+        self.assertTrue(estado["conectado"])
+        self.assertEqual(estado["estado_unidad"], "vinculado_listo")
+        self.assertEqual(estado["dispositivo"], "/dev/sdc1")
+        self.assertEqual(estado["punto_montaje"], self.pendrive_dir)
+        if os.name != "nt":
+            self.assertIn("desmontar", estado["acciones_disponibles"])
+            self.assertIn("expulsar", estado["acciones_disponibles"])
+
+    @patch("bandeja.pendrive.detectar_particiones_removibles_linux")
+    @patch("bandeja.pendrive.detectar_pendrive")
+    @patch("bandeja.pendrive.detectar_unidad_candidata_sin_vincular")
+    def test_sin_unidad_removible(self, mock_cand, mock_pen, mock_rem):
+        """Estado 'sin_unidad': no hay dispositivos removibles montados ni sin montar."""
+        mock_rem.return_value = []
+        mock_pen.return_value = None
+        mock_cand.return_value = None
+
+        estado = obtener_estado_pendrive(self.config, self.db)
+        self.assertFalse(estado["conectado"])
+        self.assertEqual(estado["estado_unidad"], "sin_unidad")
+        self.assertEqual(estado["acciones_disponibles"], [])
+
+    @patch("bandeja.pendrive.diagnosticar_todas_particiones_linux")
+    def test_diagnostico_todas_particiones(self, mock_diag):
+        """Bloque diagnóstico evalúa particiones y detalla motivos."""
+        mock_diag.return_value = [
+            {"dispositivo": "/dev/nvme0n1p1", "nodo": "nvme0n1p1", "etiqueta": "EFI", "punto_montaje": "/boot/efi", "montado": True, "sistema_archivos": "vfat", "tamanio_bytes": 500, "tamanio_fmt": "500 MB", "es_removible": False, "motivo": "Unidad fija interna"},
+            {"dispositivo": "/dev/sda1", "nodo": "sda1", "etiqueta": "MIUNIDAD", "punto_montaje": None, "montado": False, "sistema_archivos": "exfat", "tamanio_bytes": 1000, "tamanio_fmt": "114 GB", "es_removible": True, "motivo": "Removible sin montar"}
+        ]
+
+        estado = obtener_estado_pendrive(self.config, self.db)
+        self.assertIn("diagnostico_particiones", estado)
+        self.assertEqual(len(estado["diagnostico_particiones"]), 2)
+        self.assertEqual(estado["diagnostico_particiones"][1]["motivo"], "Removible sin montar")
+
+    @patch("bandeja.pendrive.detectar_particiones_removibles_linux")
+    def test_montar_unidad_whitelist_rechazo(self, mock_rem):
+        """montar_unidad_pendrive rechaza dispositivos no autorizados por la whitelist."""
+        mock_rem.return_value = [{"dispositivo": "/dev/sda1", "nodo": "sda1", "disco_padre": "/dev/sda", "punto_montaje": None, "montado": False}]
+
+        # Dispositivo no en la whitelist
+        with self.assertRaises(ValueError):
+            montar_unidad_pendrive("/dev/sdb1", config=self.config, db=self.db)
+
+        # Dispositivo con caracteres inválidos
+        with self.assertRaises(ValueError):
+            montar_unidad_pendrive("/dev/sda1; rm -rf /", config=self.config, db=self.db)
+
+        # Dispositivo vacío
+        with self.assertRaises(ValueError):
+            montar_unidad_pendrive("", config=self.config, db=self.db)
+
+    @patch("bandeja.pendrive.detectar_particiones_removibles_linux")
+    def test_desmontar_unidad_bloqueado_durante_operacion_activa(self, mock_rem):
+        """No permite desmontar ni expulsar si hay transferencia o deshacer en curso."""
+        mock_rem.return_value = [{"dispositivo": "/dev/sda1", "nodo": "sda1", "disco_padre": "/dev/sda", "punto_montaje": "/media/usb", "montado": True}]
+
+        import bandeja.pendrive
+        bandeja.pendrive._operacion_pendrive_activa = True
+        try:
+            res = desmontar_unidad_pendrive("/dev/sda1", expulsar=False, config=self.config, db=self.db)
+            self.assertFalse(res["exito"])
+            self.assertTrue(res["bloqueado"])
+            self.assertIn("transferencia", res["error"].lower())
+        finally:
+            bandeja.pendrive._operacion_pendrive_activa = False
+
+    @patch("bandeja.pendrive.detectar_particiones_removibles_linux")
+    @patch("bandeja.pendrive.listar_procesos_ocupando_montaje")
+    @patch("subprocess.run")
+    def test_desmontar_unidad_ocupada_reporta_procesos(self, mock_subp, mock_proc, mock_rem):
+        """Si udisksctl falla porque la unidad está ocupada, reporta los procesos activos en /proc."""
+        mock_rem.return_value = [{"dispositivo": "/dev/sda1", "nodo": "sda1", "disco_padre": "/dev/sda", "punto_montaje": "/media/usb", "montado": True}]
+        mock_subp.return_value = MagicMock(returncode=1, stderr="Error: target is busy")
+        mock_proc.return_value = [{"pid": 4321, "cmd": "bash", "comando": "bash", "detalle": "Directorio actual (cwd) en /media/usb"}]
+
+        res = desmontar_unidad_pendrive("/dev/sda1", expulsar=False, config=self.config, db=self.db)
+        self.assertFalse(res["exito"])
+        self.assertTrue(res["ocupado"])
+        self.assertEqual(len(res["procesos_ocupando"]), 1)
+        self.assertEqual(res["procesos_ocupando"][0]["pid"], 4321)
+        self.assertIn("ocupada", res["error"].lower())
+
+    @patch("bandeja.pendrive.detectar_particiones_removibles_linux")
+    @patch("subprocess.run")
+    def test_expulsar_ejecuta_power_off_solo_si_desmontaje_exitoso(self, mock_subp, mock_rem):
+        """Expulsar ejecuta unmount y, solo si tiene éxito, power-off al disco padre."""
+        mock_rem.return_value = [{"dispositivo": "/dev/sda1", "nodo": "sda1", "disco_padre": "/dev/sda", "punto_montaje": "/media/usb", "montado": True}]
+
+        # 1. Caso fallo en unmount: power-off NUNCA se debe ejecutar
+        mock_subp.return_value = MagicMock(returncode=1, stderr="unmount failed")
+        res_fallo = desmontar_unidad_pendrive("/dev/sda1", expulsar=True, config=self.config, db=self.db)
+        self.assertFalse(res_fallo["exito"])
+        self.assertEqual(mock_subp.call_count, 1)
+        self.assertIn("unmount", mock_subp.call_args[0][0])
+
+        mock_subp.reset_mock()
+
+        # 2. Caso éxito en unmount: se ejecuta power-off
+        mock_subp.return_value = MagicMock(returncode=0, stdout="Unmounted /dev/sda1", stderr="")
+        res_exito = desmontar_unidad_pendrive("/dev/sda1", expulsar=True, config=self.config, db=self.db)
+        self.assertTrue(res_exito["exito"])
+        self.assertTrue(res_exito["expulsado"])
+        self.assertEqual(mock_subp.call_count, 2)
+        # Primera llamada: unmount
+        self.assertEqual(mock_subp.call_args_list[0][0][0], ["udisksctl", "unmount", "-b", "/dev/sda1"])
+        # Segunda llamada: power-off
+        self.assertEqual(mock_subp.call_args_list[1][0][0], ["udisksctl", "power-off", "-b", "/dev/sda"])
+
+    @patch("bandeja.pendrive.detectar_particiones_removibles_linux")
+    def test_plataforma_windows_omite_botones(self, mock_rem):
+        """En entorno Windows (os.name == 'nt') no se exponen acciones de montaje."""
+        mock_rem.return_value = [{"dispositivo": "E:", "nodo": "E:", "disco_padre": "E:", "punto_montaje": None, "montado": False}]
+
+        with patch("os.name", "nt"):
+            estado = obtener_estado_pendrive(self.config, self.db)
+            self.assertTrue(estado["es_windows"])
+            self.assertNotIn("montar", estado["acciones_disponibles"])
+            self.assertNotIn("desmontar", estado["acciones_disponibles"])
+            self.assertNotIn("expulsar", estado["acciones_disponibles"])
+
+    @patch("bandeja.pendrive.detectar_particiones_removibles_linux")
+    @patch("subprocess.run")
+    def test_servidor_http_endpoints_montar_desmontar_expulsar(self, mock_subp, mock_rem):
+        """Endpoints POST /api/pendrive/montar, /desmontar, /expulsar responden correctamente."""
+        mock_rem.return_value = [{"dispositivo": "/dev/sda1", "nodo": "sda1", "disco_padre": "/dev/sda", "punto_montaje": None, "montado": False}]
+        mock_subp.return_value = MagicMock(returncode=0, stdout="Mounted /dev/sda1 at /media/usb", stderr="")
+
+        # Inicializar servidor HTTP
+        self.config.puerto_servidor = 0
+        token_csrf = "token_de_prueba_seguro"
+        filtro = FiltroListaBlanca(self.config)
+        detector = DetectorDescargasActivas()
+        agrupador = AgrupadorLotes(self.config.ventana_lote_minutos)
+        movimientos = GestorMovimientosBandeja(self.descargas_dir, self.destino_base, self.db)
+        miniaturas = GeneradorMiniaturas(self.db)
+        vigilante = VigilanteBandeja(self.config, self.db, filtro, detector, agrupador)
+
+        servidor = crear_servidor(self.config, self.db, vigilante, movimientos, miniaturas, token_csrf=token_csrf)
+        puerto = servidor.server_address[1]
+        hilo = threading.Thread(target=servidor.serve_forever, daemon=True)
+        hilo.start()
+
+        base_url = f"http://127.0.0.1:{puerto}"
+
+        try:
+            # 1. POST /api/pendrive/montar con dispositivo no en whitelist -> 400
+            req = urllib.request.Request(
+                f"{base_url}/api/pendrive/montar",
+                data=json.dumps({"dispositivo": "/dev/sdx99"}).encode("utf-8"),
+                headers={"Content-Type": "application/json", "X-CSRF-Token": token_csrf}
+            )
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(req)
+            self.assertEqual(ctx.exception.code, 400)
+
+            # 2. POST /api/pendrive/montar con dispositivo válido -> 200
+            req_ok = urllib.request.Request(
+                f"{base_url}/api/pendrive/montar",
+                data=json.dumps({"dispositivo": "/dev/sda1"}).encode("utf-8"),
+                headers={"Content-Type": "application/json", "X-CSRF-Token": token_csrf}
+            )
+            with urllib.request.urlopen(req_ok) as resp:
+                self.assertEqual(resp.status, 200)
+                datos = json.loads(resp.read().decode("utf-8"))
+                self.assertTrue(datos["exito"])
+
+            # 3. POST /api/pendrive/desmontar cuando la unidad está ocupada -> 409
+            mock_subp.return_value = MagicMock(returncode=1, stderr="target is busy")
+            req_des = urllib.request.Request(
+                f"{base_url}/api/pendrive/desmontar",
+                data=json.dumps({"dispositivo": "/dev/sda1"}).encode("utf-8"),
+                headers={"Content-Type": "application/json", "X-CSRF-Token": token_csrf}
+            )
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(req_des)
+            self.assertEqual(ctx.exception.code, 409)
+
+            # 4. POST /api/pendrive/expulsar con éxito -> 200
+            mock_subp.return_value = MagicMock(returncode=0, stderr="")
+            req_exp = urllib.request.Request(
+                f"{base_url}/api/pendrive/expulsar",
+                data=json.dumps({"dispositivo": "/dev/sda1"}).encode("utf-8"),
+                headers={"Content-Type": "application/json", "X-CSRF-Token": token_csrf}
+            )
+            with urllib.request.urlopen(req_exp) as resp:
+                self.assertEqual(resp.status, 200)
+                datos = json.loads(resp.read().decode("utf-8"))
+                self.assertTrue(datos["exito"])
+                self.assertTrue(datos["expulsado"])
+        finally:
+            servidor.shutdown()
+            servidor.server_close()
 
 
 if __name__ == "__main__":

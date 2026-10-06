@@ -65,7 +65,7 @@
     }
 
     function hayModalAbierto() {
-      const idsModales = ['modal-simulacion', 'modal-terminar-capitulo', 'modal-descartar-capitulo', 'modal-plan-envio', 'modal-vincular-pendrive', 'modal-visor-media'];
+      const idsModales = ['modal-simulacion', 'modal-terminar-capitulo', 'modal-descartar-capitulo', 'modal-plan-envio', 'modal-vincular-pendrive', 'modal-visor-media', 'modal-control-pendrive'];
       return idsModales.some(id => {
         const el = document.getElementById(id);
         return el && el.style.display && el.style.display !== 'none';
@@ -329,7 +329,9 @@
       const res = await fetch(url, options);
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.statusText }));
-        throw new Error(err.error || 'Error en la petición');
+        const e = new Error(err.error || 'Error en la petición');
+        e.detalles = err;
+        throw e;
       }
       return await res.json();
     }
@@ -2570,6 +2572,8 @@
           btnEnviar.style.cursor = 'not-allowed';
           if (estadoPendriveActual && estadoPendriveActual.sin_respuesta) {
             btnEnviar.title = "El pendrive no responde a las lecturas.";
+          } else if (estadoPendriveActual && estadoPendriveActual.estado_unidad === 'detectada_sin_montar') {
+            btnEnviar.title = "Unidad removible detectada sin montar. Hacé clic en 'Montar unidad' para acceder a ella.";
           } else if (estadoPendriveActual && estadoPendriveActual.unidad_candidata) {
             btnEnviar.title = "Unidad candidata detectada sin vincular. Hacé clic en 'Vincular pendrive' para configurarla.";
           } else {
@@ -2627,13 +2631,58 @@
           }
         }
 
-        // 1. Tarjeta Estado Físico del Pendrive (4 estados)
+        const contSelector = document.getElementById('contenedor-selector-unidades');
+        const contDiag = document.getElementById('contenedor-diag-pendrive');
+        const todasRem = estadoPen.todas_unidades_removibles || [];
+
+        // Selector multi-unidad si hay más de 1 unidad removible
+        if (todasRem.length > 1) {
+          if (contSelector) {
+            contSelector.style.display = 'flex';
+            if (!unidadRemovibleSeleccionada || !todasRem.some(u => u.dispositivo === unidadRemovibleSeleccionada)) {
+              unidadRemovibleSeleccionada = (estadoPen.dispositivo && todasRem.some(u => u.dispositivo === estadoPen.dispositivo))
+                ? estadoPen.dispositivo
+                : todasRem[0].dispositivo;
+            }
+            contSelector.innerHTML = `
+              <label for="sel-unidad-removible" style="font-size:0.9rem; font-weight:600; color:var(--text); white-space:nowrap;">
+                Unidad removible (${todasRem.length}):
+              </label>
+              <select id="sel-unidad-removible" onchange="seleccionarUnidadRemovible(this.value)" style="flex:1; padding:6px 12px; background:var(--bg); border:1px solid var(--border); color:var(--text); border-radius:4px; font-size:0.9rem;">
+                ${todasRem.map(u => `
+                  <option value="${escapeHTML(u.dispositivo)}" ${u.dispositivo === unidadRemovibleSeleccionada ? 'selected' : ''}>
+                    ${escapeHTML(u.dispositivo)} ${u.etiqueta ? '("' + escapeHTML(u.etiqueta) + '")' : ''} &mdash; ${escapeHTML(u.tamanio_fmt)} [${escapeHTML(u.sistema_archivos || 'desconocido')}] &mdash; ${u.montado ? '● Montada' : '○ Sin montar'}
+                  </option>
+                `).join('')}
+              </select>
+            `;
+          }
+        } else {
+          if (contSelector) {
+            contSelector.style.display = 'none';
+            contSelector.innerHTML = '';
+          }
+          if (todasRem.length === 1) {
+            unidadRemovibleSeleccionada = todasRem[0].dispositivo;
+          } else {
+            unidadRemovibleSeleccionada = null;
+          }
+        }
+
+        // Unidad activa seleccionada
+        let unidadActiva = null;
+        if (todasRem.length > 0) {
+          unidadActiva = todasRem.find(u => u.dispositivo === unidadRemovibleSeleccionada) || todasRem[0];
+        }
+
+        // 1. Tarjeta Estado Físico del Pendrive (5 estados)
         let puedeEnviarPendrive = false;
         let motivoDeshabilitado = "";
 
         if (estadoPen.sin_respuesta) {
+          // (e) Sin respuesta
           puedeEnviarPendrive = false;
-          motivoDeshabilitado = "El pendrive no responde a las lecturas dentro del tiempo límite.";
+          motivoDeshabilitado = "El pendrive no responde a las lecturas dentro del tiempo límite de 3 segundos.";
           contEstado.innerHTML = `
             <div style="background:rgba(245, 158, 11, 0.15); border:1px solid #f59e0b; padding:16px; border-radius:6px; color:#fef3c7;">
               <h3 style="display:flex; align-items:center; gap:8px;">⚠️ Pendrive sin respuesta</h3>
@@ -2641,72 +2690,161 @@
             </div>
           `;
           if (btnVincular) btnVincular.style.display = 'none';
-        } else if (!estadoPen.conectado) {
-          const cand = estadoPen.unidad_candidata;
-          if (cand) {
-            puedeEnviarPendrive = false;
-            motivoDeshabilitado = "Unidad candidata detectada sin vincular. Hacé clic en 'Vincular pendrive' para configurarla.";
-            contEstado.innerHTML = `
-              <div style="background:rgba(99, 102, 241, 0.1); border:1px solid #6366f1; padding:16px; border-radius:6px;">
-                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
-                  <div>
-                    <h3 style="color:#e0e7ff; display:flex; align-items:center; gap:8px;">
-                      🔍 Unidad candidata detectada (sin vincular)
-                    </h3>
-                    <p style="color:var(--text-muted); font-size:0.85rem; margin-top:4px;">
-                      Punto de montaje: <code>${escapeHTML(cand.punto_montaje)}</code> &bull; Filesystem: <code>${escapeHTML(cand.sistema_archivos || 'desconocido')}</code> &bull; Libre: <strong>${escapeHTML(cand.espacio_libre_fmt)}</strong>
-                    </p>
-                  </div>
-                  <button class="btn-sm" onclick="abrirModalVincularPendrive('${escapeHTML(cand.punto_montaje)}')" style="background:var(--accent); color:#000; font-weight:700; padding:8px 18px; border:none; border-radius:4px; cursor:pointer;">
-                    Vincular pendrive
-                  </button>
-                </div>
-              </div>
-            `;
-            if (btnVincular) btnVincular.style.display = 'none';
-          } else {
-            puedeEnviarPendrive = false;
-            motivoDeshabilitado = "No hay ningún pendrive vinculado conectado.";
-            contEstado.innerHTML = `
-              <div style="background:var(--card-alt); padding:16px; border-radius:6px; color:var(--text-muted);">
-                <p>🔌 Ningún pendrive vinculado detectado en el sistema.</p>
-                <small>Conectá tu pendrive para transferir el material o vincularlo por primera vez.</small>
-              </div>
-            `;
-            if (btnVincular) btnVincular.style.display = 'inline-block';
-          }
-        } else {
-          // Pendrive Conectado y Vinculado
-          puedeEnviarPendrive = true;
-          motivoDeshabilitado = "";
-          if (btnVincular) btnVincular.style.display = 'none';
-
+        } else if (!unidadActiva && !estadoPen.conectado && !estadoPen.unidad_candidata) {
+          // (a) Sin ninguna unidad removible
+          puedeEnviarPendrive = false;
+          motivoDeshabilitado = "No hay ningún pendrive vinculado conectado.";
           contEstado.innerHTML = `
-            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px;">
-              <div style="background:var(--card-alt); padding:12px; border-radius:6px; border:1px solid var(--border);">
-                <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Estado</div>
-                <div style="font-size:1.1rem; font-weight:700; color:var(--teal); margin-top:4px;">● Conectado y Vinculado</div>
-              </div>
-              <div style="background:var(--card-alt); padding:12px; border-radius:6px; border:1px solid var(--border);">
-                <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">ID Marcador</div>
-                <div style="font-size:0.95rem; font-family:monospace; margin-top:4px;" title="${escapeHTML(estadoPen.id)}">${escapeHTML((estadoPen.id || '').slice(0, 13))}...</div>
-              </div>
-              <div style="background:var(--card-alt); padding:12px; border-radius:6px; border:1px solid var(--border);">
-                <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Punto de Montaje</div>
-                <div style="font-size:0.85rem; font-family:monospace; margin-top:4px; word-break:break-all;" title="${escapeHTML(estadoPen.punto_montaje)}">${escapeHTML(estadoPen.punto_montaje)}</div>
-              </div>
-              <div style="background:var(--card-alt); padding:12px; border-radius:6px; border:1px solid var(--border);">
-                <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Sistema de Archivos</div>
-                <div style="font-size:1rem; font-weight:600; margin-top:4px;">${escapeHTML(estadoPen.sistema_archivos || 'N/D')}</div>
-              </div>
-              <div style="background:var(--card-alt); padding:12px; border-radius:6px; border:1px solid var(--border);">
-                <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Espacio Disponible</div>
-                <div style="font-size:1rem; font-weight:600; color:#38bdf8; margin-top:4px;">
-                  ${escapeHTML(estadoPen.espacio_libre_fmt)} <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;">/ ${escapeHTML(estadoPen.espacio_total_fmt)}</span>
-                </div>
-              </div>
+            <div style="background:var(--card-alt); padding:16px; border-radius:6px; color:var(--text-muted);">
+              <p>🔌 Ningún pendrive detectado en el sistema.</p>
+              <small>Conectá tu pendrive para transferir el material o vincularlo por primera vez.</small>
             </div>
           `;
+          if (btnVincular) btnVincular.style.display = 'none';
+        } else {
+          // Tenemos unidad para mostrar
+          const esWindows = !!estadoPen.es_windows;
+          const disp = (unidadActiva && unidadActiva.dispositivo) || estadoPen.dispositivo || "";
+          const nodo = (unidadActiva && unidadActiva.nodo) || estadoPen.nodo || "";
+          const padre = (unidadActiva && unidadActiva.disco_padre) || estadoPen.disco_padre || "";
+          const etiq = (unidadActiva && unidadActiva.etiqueta) || estadoPen.etiqueta || "";
+          const fs = (unidadActiva && unidadActiva.sistema_archivos) || estadoPen.sistema_archivos || "desconocido";
+          const estaMontada = unidadActiva ? !!unidadActiva.montado : (estadoPen.conectado || !!estadoPen.unidad_candidata);
+          const ptoMontaje = (unidadActiva && unidadActiva.punto_montaje) || estadoPen.punto_montaje || "";
+
+          if (!estaMontada) {
+            // (b) Unidad detectada SIN MONTAR
+            puedeEnviarPendrive = false;
+            motivoDeshabilitado = "Unidad removible detectada sin montar. Montala para acceder a ella.";
+            if (btnVincular) btnVincular.style.display = 'none';
+
+            const btnMontarHtml = !esWindows ? `
+              <button class="btn-sm" onclick="abrirModalControlPendrive('montar', '${escapeHTML(disp)}', '${escapeHTML(nodo)}', '${escapeHTML(padre)}', '')" style="background:var(--accent); color:#000; font-weight:700; padding:8px 18px; border:none; border-radius:4px; cursor:pointer;" title="Montar partición usando udisksctl">
+                Montar unidad
+              </button>
+            ` : '';
+
+            contEstado.innerHTML = `
+              <div style="background:rgba(245, 158, 11, 0.08); border:1px solid #f59e0b; padding:16px; border-radius:6px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:12px;">
+                  <div>
+                    <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Estado</div>
+                    <div style="font-size:1.1rem; font-weight:700; color:#f59e0b; margin-top:4px;">
+                      ○ Unidad detectada (sin montar)
+                    </div>
+                  </div>
+                  ${btnMontarHtml}
+                </div>
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:12px;">
+                  <div style="background:var(--card-alt); padding:10px; border-radius:6px; border:1px solid var(--border);">
+                    <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Dispositivo</div>
+                    <div style="font-size:0.95rem; font-family:monospace; margin-top:2px;">${escapeHTML(disp)}</div>
+                  </div>
+                  <div style="background:var(--card-alt); padding:10px; border-radius:6px; border:1px solid var(--border);">
+                    <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Etiqueta</div>
+                    <div style="font-size:0.95rem; font-weight:600; margin-top:2px;">${escapeHTML(etiq || '(sin etiqueta)')}</div>
+                  </div>
+                  <div style="background:var(--card-alt); padding:10px; border-radius:6px; border:1px solid var(--border);">
+                    <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Tamaño</div>
+                    <div style="font-size:0.95rem; font-weight:600; margin-top:2px;">${escapeHTML(unidadActiva ? unidadActiva.tamanio_fmt : estadoPen.espacio_total_fmt)}</div>
+                  </div>
+                  <div style="background:var(--card-alt); padding:10px; border-radius:6px; border:1px solid var(--border);">
+                    <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Sistema de archivos</div>
+                    <div style="font-size:0.95rem; font-family:monospace; margin-top:2px;">${escapeHTML(fs)}</div>
+                  </div>
+                </div>
+              </div>
+            `;
+          } else {
+            // Unidad MONTADA: ¿Vinculada o sin vincular?
+            const esEstaVinculada = estadoPen.conectado && (!unidadActiva || unidadActiva.punto_montaje === estadoPen.punto_montaje);
+
+            const btnsDesmontarHtml = !esWindows ? `
+              <div style="display:flex; gap:8px; align-items:center;">
+                <button class="btn-sm" onclick="abrirModalControlPendrive('desmontar', '${escapeHTML(disp)}', '${escapeHTML(nodo)}', '${escapeHTML(padre)}', '${escapeHTML(ptoMontaje)}')" style="background:var(--card-alt); border:1px solid var(--border); color:var(--text); padding:6px 12px; font-weight:600; border-radius:4px; cursor:pointer;" title="Desmontar partición con udisksctl">
+                  Desmontar
+                </button>
+                <button class="btn-sm" onclick="abrirModalControlPendrive('expulsar', '${escapeHTML(disp)}', '${escapeHTML(nodo)}', '${escapeHTML(padre)}', '${escapeHTML(ptoMontaje)}')" style="background:rgba(239, 68, 68, 0.2); border:1px solid #ef4444; color:#fca5a5; padding:6px 12px; font-weight:600; border-radius:4px; cursor:pointer;" title="Desmontar y apagar disco para retirar con seguridad">
+                  Desmontar y expulsar
+                </button>
+              </div>
+            ` : '';
+
+            if (!esEstaVinculada) {
+              // (c) Montada SIN VINCULAR
+              puedeEnviarPendrive = false;
+              motivoDeshabilitado = "Unidad candidata montada sin vincular. Hacé clic en 'Vincular pendrive' para configurarla.";
+              if (btnVincular) btnVincular.style.display = 'none';
+
+              contEstado.innerHTML = `
+                <div style="background:rgba(99, 102, 241, 0.1); border:1px solid #6366f1; padding:16px; border-radius:6px;">
+                  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:12px;">
+                    <div>
+                      <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Estado</div>
+                      <div style="font-size:1.1rem; font-weight:700; color:#818cf8; margin-top:4px;">
+                        🔍 Unidad candidata montada (sin vincular)
+                      </div>
+                    </div>
+                    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                      <button class="btn-sm" onclick="abrirModalVincularPendrive('${escapeHTML(ptoMontaje)}')" style="background:var(--accent); color:#000; font-weight:700; padding:8px 18px; border:none; border-radius:4px; cursor:pointer;">
+                        Vincular pendrive
+                      </button>
+                      ${btnsDesmontarHtml}
+                    </div>
+                  </div>
+                  <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:12px;">
+                    <div style="background:var(--card-alt); padding:10px; border-radius:6px; border:1px solid var(--border);">
+                      <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Punto de montaje</div>
+                      <div style="font-size:0.85rem; font-family:monospace; margin-top:2px; word-break:break-all;" title="${escapeHTML(ptoMontaje)}">${escapeHTML(ptoMontaje)}</div>
+                    </div>
+                    <div style="background:var(--card-alt); padding:10px; border-radius:6px; border:1px solid var(--border);">
+                      <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Sistema de archivos</div>
+                      <div style="font-size:0.95rem; font-family:monospace; margin-top:2px;">${escapeHTML(fs)}</div>
+                    </div>
+                    <div style="background:var(--card-alt); padding:10px; border-radius:6px; border:1px solid var(--border);">
+                      <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Espacio libre</div>
+                      <div style="font-size:0.95rem; font-weight:600; margin-top:2px;">${escapeHTML(estadoPen.espacio_libre_fmt)} de ${escapeHTML(estadoPen.espacio_total_fmt)}</div>
+                    </div>
+                  </div>
+                </div>
+              `;
+            } else {
+              // (d) Vinculada y lista
+              puedeEnviarPendrive = true;
+              motivoDeshabilitado = "";
+              if (btnVincular) btnVincular.style.display = 'none';
+
+              contEstado.innerHTML = `
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:12px;">
+                  <div>
+                    <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Estado</div>
+                    <div style="font-size:1.1rem; font-weight:700; color:var(--teal); margin-top:4px;">● Conectado y Vinculado</div>
+                  </div>
+                  ${btnsDesmontarHtml}
+                </div>
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px;">
+                  <div style="background:var(--card-alt); padding:12px; border-radius:6px; border:1px solid var(--border);">
+                    <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">ID Marcador</div>
+                    <div style="font-size:0.95rem; font-family:monospace; margin-top:4px;" title="${escapeHTML(estadoPen.id)}">${escapeHTML((estadoPen.id || '').slice(0, 13))}...</div>
+                  </div>
+                  <div style="background:var(--card-alt); padding:12px; border-radius:6px; border:1px solid var(--border);">
+                    <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Punto de Montaje</div>
+                    <div style="font-size:0.85rem; font-family:monospace; margin-top:4px; word-break:break-all;" title="${escapeHTML(estadoPen.punto_montaje)}">${escapeHTML(estadoPen.punto_montaje)}</div>
+                  </div>
+                  <div style="background:var(--card-alt); padding:12px; border-radius:6px; border:1px solid var(--border);">
+                    <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Sistema de Archivos</div>
+                    <div style="font-size:1rem; font-weight:600; margin-top:4px;">${escapeHTML(estadoPen.sistema_archivos || 'N/D')}</div>
+                  </div>
+                  <div style="background:var(--card-alt); padding:12px; border-radius:6px; border:1px solid var(--border);">
+                    <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Espacio Disponible</div>
+                    <div style="font-size:1rem; font-weight:600; color:#38bdf8; margin-top:4px;">
+                      ${escapeHTML(estadoPen.espacio_libre_fmt)} <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;">/ ${escapeHTML(estadoPen.espacio_total_fmt)}</span>
+                    </div>
+                  </div>
+                </div>
+              `;
+            }
+          }
         }
 
         // 2. Tabla de Carpetas de Sala de Espera
@@ -2929,6 +3067,41 @@
             </table>
           `;
         }
+
+        // 5. Diagnóstico de particiones ("¿Por qué no veo mi pendrive?")
+        if (contDiag) {
+          const diagParts = estadoPen.diagnostico_particiones || [];
+          if (!diagParts.length) {
+            contDiag.innerHTML = '<p style="color:var(--text-muted); font-size:0.85rem; padding:8px 0;">No se encontraron particiones de almacenamiento para diagnosticar.</p>';
+          } else {
+            contDiag.innerHTML = `
+              <table class="tabla-diag">
+                <thead>
+                  <tr>
+                    <th>Dispositivo</th>
+                    <th>Tamaño</th>
+                    <th>Removible</th>
+                    <th>Montada</th>
+                    <th>Sistema de archivos</th>
+                    <th>Estado / Diagnóstico</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${diagParts.map(p => `
+                    <tr>
+                      <td><code>${escapeHTML(p.dispositivo)}</code>${p.etiqueta ? ' <small style="color:var(--text-muted)">(' + escapeHTML(p.etiqueta) + ')</small>' : ''}</td>
+                      <td>${escapeHTML(p.tamanio_fmt || '-')}</td>
+                      <td>${p.es_removible ? '<span style="color:var(--teal)">Sí</span>' : '<span style="color:var(--text-muted)">No</span>'}</td>
+                      <td>${p.montado ? `<span style="color:#60a5fa" title="${escapeHTML(p.punto_montaje || '')}">Sí (<code>${escapeHTML(p.punto_montaje || '')}</code>)</span>` : '<span style="color:var(--text-muted)">No</span>'}</td>
+                      <td><code>${escapeHTML(p.sistema_archivos || '-')}</code></td>
+                      <td style="color:var(--text-muted); font-size:0.8rem;">${escapeHTML(p.motivo || '')}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            `;
+          }
+        }
       } catch (e) {
         contEstado.innerHTML = `<p style="color:var(--danger)">Error al cargar vista de pendrive: ${escapeHTML(e.message)}</p>`;
       }
@@ -3005,6 +3178,191 @@
       } catch (e) {
         mostrarError(`Error al vincular pendrive: ${e.message}`);
       }
+    }
+
+    let accionPendriveModal = null;
+    let dispPendriveModal = null;
+    let nodoPendriveModal = null;
+    let padrePendriveModal = null;
+    let puntoPendriveModal = null;
+    let comandoPendriveModal = '';
+    let comandoManualFallback = '';
+    let unidadRemovibleSeleccionada = null;
+
+    function abrirModalControlPendrive(accion, dispositivo, nodo, discoPadre, puntoMontaje) {
+      accionPendriveModal = accion;
+      dispPendriveModal = dispositivo;
+      nodoPendriveModal = nodo;
+      padrePendriveModal = discoPadre || (dispositivo ? dispositivo.replace(/\d+$/, '') : '');
+      puntoPendriveModal = puntoMontaje;
+
+      const modal = document.getElementById('modal-control-pendrive');
+      const tit = document.getElementById('modal-control-titulo');
+      const desc = document.getElementById('modal-control-desc');
+      const cmd = document.getElementById('modal-control-comando');
+      const errBox = document.getElementById('modal-control-error-box');
+      const exitoBox = document.getElementById('modal-control-exito-box');
+      const actBox = document.getElementById('modal-control-actions');
+      const btnConf = document.getElementById('btn-confirmar-control-pendrive');
+      const btnCanc = document.getElementById('btn-cancelar-control-pendrive');
+      const fbCopy = document.getElementById('feedback-copiar-comando');
+
+      if (errBox) errBox.style.display = 'none';
+      if (exitoBox) exitoBox.style.display = 'none';
+      if (fbCopy) fbCopy.style.display = 'none';
+      if (actBox) actBox.style.display = 'flex';
+      if (btnCanc) btnCanc.innerText = 'Cancelar';
+      if (btnConf) {
+        btnConf.style.display = 'inline-block';
+        btnConf.disabled = false;
+        btnConf.style.opacity = '1';
+        btnConf.style.cursor = 'pointer';
+      }
+
+      if (accion === 'montar') {
+        if (tit) tit.innerText = 'Montar unidad pendrive';
+        if (desc) desc.innerHTML = `Montar la partición <code>${escapeHTML(dispositivo)}</code> para permitir el acceso al almacenamiento.`;
+        comandoPendriveModal = `udisksctl mount -b ${dispositivo}`;
+        comandoManualFallback = `sudo mount ${dispositivo} /media/pendrive`;
+        if (btnConf) btnConf.innerText = 'Confirmar montaje';
+      } else if (accion === 'desmontar') {
+        if (tit) tit.innerText = 'Desmontar unidad pendrive';
+        if (desc) desc.innerHTML = `Sincronizar buffers de disco y desmontar la partición <code>${escapeHTML(dispositivo)}</code> de forma segura.`;
+        comandoPendriveModal = `udisksctl unmount -b ${dispositivo}`;
+        comandoManualFallback = `sudo umount ${dispositivo}`;
+        if (btnConf) btnConf.innerText = 'Confirmar desmontaje';
+      } else if (accion === 'expulsar') {
+        if (tit) tit.innerText = 'Desmontar y expulsar pendrive';
+        if (desc) desc.innerHTML = `Sincronizar buffers, desmontar la partición <code>${escapeHTML(dispositivo)}</code> y apagar la energía del disco <code>${escapeHTML(padrePendriveModal)}</code> para su extracción física.`;
+        comandoPendriveModal = `udisksctl unmount -b ${dispositivo} && udisksctl power-off -b ${padrePendriveModal}`;
+        comandoManualFallback = `sudo umount ${dispositivo} && sudo udisksctl power-off -b ${padrePendriveModal}`;
+        if (btnConf) btnConf.innerText = 'Confirmar y expulsar';
+      }
+
+      if (cmd) cmd.innerText = comandoPendriveModal;
+      if (modal) modal.style.display = 'flex';
+    }
+
+    function cerrarModalControlPendrive() {
+      const modal = document.getElementById('modal-control-pendrive');
+      if (modal) modal.style.display = 'none';
+      accionPendriveModal = null;
+      dispPendriveModal = null;
+      nodoPendriveModal = null;
+      padrePendriveModal = null;
+      puntoPendriveModal = null;
+      comandoPendriveModal = '';
+      comandoManualFallback = '';
+    }
+
+    function copiarComandoControlPendrive() {
+      if (!comandoPendriveModal) return;
+      navigator.clipboard.writeText(comandoPendriveModal).then(() => {
+        const fb = document.getElementById('feedback-copiar-comando');
+        if (fb) {
+          fb.style.display = 'block';
+          setTimeout(() => { fb.style.display = 'none'; }, 3000);
+        }
+      }).catch(() => {
+        prompt("Copiá este comando:", comandoPendriveModal);
+      });
+    }
+
+    function copiarComandoManualPendrive() {
+      if (!comandoManualFallback) return;
+      navigator.clipboard.writeText(comandoManualFallback).then(() => {
+        mostrarToastLlegada("Comando manual copiado.");
+      }).catch(() => {
+        prompt("Copiá este comando manual:", comandoManualFallback);
+      });
+    }
+
+    async function confirmarControlPendrive() {
+      const btnConf = document.getElementById('btn-confirmar-control-pendrive');
+      const btnCanc = document.getElementById('btn-cancelar-control-pendrive');
+      const errBox = document.getElementById('modal-control-error-box');
+      const errMsg = document.getElementById('modal-control-error-msg');
+      const procBox = document.getElementById('modal-control-procesos-box');
+      const procLista = document.getElementById('modal-control-procesos-lista');
+      const fallBox = document.getElementById('modal-control-fallback-box');
+      const fallCmd = document.getElementById('modal-control-fallback-cmd');
+      const exitoBox = document.getElementById('modal-control-exito-box');
+      const exitoMsg = document.getElementById('modal-control-exito-msg');
+
+      if (errBox) errBox.style.display = 'none';
+      if (btnConf) {
+        btnConf.disabled = true;
+        btnConf.style.opacity = '0.5';
+        btnConf.innerText = 'Ejecutando...';
+      }
+
+      let endpoint = '/api/pendrive/montar';
+      if (accionPendriveModal === 'desmontar') endpoint = '/api/pendrive/desmontar';
+      if (accionPendriveModal === 'expulsar') endpoint = '/api/pendrive/expulsar';
+
+      try {
+        const res = await apiFetch(endpoint, {
+          method: 'POST',
+          body: JSON.stringify({ dispositivo: dispPendriveModal })
+        });
+
+        if (accionPendriveModal === 'expulsar') {
+          cerrarBannerPendrive();
+          if (exitoBox && exitoMsg) {
+            exitoMsg.innerText = res.mensaje || 'Ya podés retirar el pendrive con seguridad.';
+            exitoBox.style.display = 'block';
+          }
+          if (btnConf) btnConf.style.display = 'none';
+          if (btnCanc) btnCanc.innerText = 'Cerrar';
+          await cargarVistaPendrive();
+        } else if (accionPendriveModal === 'desmontar') {
+          cerrarBannerPendrive();
+          cerrarModalControlPendrive();
+          mostrarToastLlegada(res.mensaje || 'Unidad desmontada exitosamente.');
+          await cargarVistaPendrive();
+        } else {
+          cerrarModalControlPendrive();
+          mostrarToastLlegada(res.mensaje || 'Unidad montada exitosamente.');
+          await cargarVistaPendrive();
+        }
+      } catch (err) {
+        if (btnConf) {
+          btnConf.disabled = false;
+          btnConf.style.opacity = '1';
+          btnConf.innerText = 'Reintentar';
+        }
+        const det = err.detalles || {};
+        if (errBox && errMsg) {
+          errMsg.innerText = err.message || 'Error al ejecutar la acción.';
+          errBox.style.display = 'block';
+
+          // Procesos ocupando montaje
+          if (det.procesos_ocupando && det.procesos_ocupando.length > 0 && procBox && procLista) {
+            procBox.style.display = 'block';
+            procLista.innerHTML = `
+              <ul style="margin:4px 0 0 16px; padding:0; font-size:0.85rem; color:#fef3c7;">
+                ${det.procesos_ocupando.map(p => `
+                  <li>PID <strong>${escapeHTML(p.pid)}</strong> (<em>${escapeHTML(p.comando || p.cmd)}</em>) &mdash; ${escapeHTML(p.detalle)}</li>
+                `).join('')}
+              </ul>
+            `;
+          } else if (procBox) {
+            procBox.style.display = 'none';
+          }
+
+          // Comando manual sugerido
+          if (det.comando_manual || comandoManualFallback) {
+            if (det.comando_manual) comandoManualFallback = det.comando_manual;
+            if (fallCmd) fallCmd.innerText = comandoManualFallback;
+            if (fallBox) fallBox.style.display = 'block';
+          }
+        }
+      }
+    }
+
+    function seleccionarUnidadRemovible(disp) {
+      unidadRemovibleSeleccionada = disp;
+      cargarVistaPendrive();
     }
 
     cargarDatos().then(() => {

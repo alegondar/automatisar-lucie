@@ -766,3 +766,74 @@
       display: inline-block;
     }
 
+    /* Control de Montaje y Diagnóstico del Pendrive */
+    .badge-sin-montar {
+      background: rgba(245, 158, 11, 0.2);
+      color: #f59e0b;
+      border: 1px solid #f59e0b;
+      font-size: 0.75rem;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 600;
+      display: inline-block;
+    }
+
+    .comando-terminal-pre {
+      background: #0d0e11;
+      border: 1px solid #27272a;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.85rem;
+      color: #38bdf8;
+      overflow-x: auto;
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .modal-control-error-box {
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid #ef4444;
+      border-radius: 6px;
+      padding: 12px 16px;
+    }
+
+    .diag-pendrive {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 14px;
+    }
+
+    .diag-pendrive summary {
+      cursor: pointer;
+      font-weight: 500;
+      transition: color 0.15s;
+    }
+
+    .diag-pendrive summary:hover {
+      color: var(--text);
+    }
+
+    .tabla-diag {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 0.82rem;
+    }
+
+    .tabla-diag th {
+      text-align: left;
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    .tabla-diag td {
+      padding: 6px 8px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+

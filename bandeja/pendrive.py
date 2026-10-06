@@ -22,6 +22,7 @@ import platform
 import re
 import shutil
 import socket
+import subprocess
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
@@ -32,6 +33,11 @@ from bandeja.plataforma import (
     buscar_puntos_montaje_candidatos,
     ejecutar_con_timeout,
     ejecutar_con_timeout as ejecutar_lectura_pendrive_con_timeout,
+    notificar_escritorio,
+    detectar_particiones_removibles_linux,
+    diagnosticar_todas_particiones_linux,
+    obtener_disco_padre_particion,
+    listar_procesos_ocupando_montaje,
 )
 from bandeja.config import (
     ConfiguracionBandeja,
@@ -134,13 +140,8 @@ def leer_marcador_pendrive(ruta_raiz: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-from bandeja.plataforma import (
-    obtener_sistema_archivos,
-    obtener_espacio_disco,
-    buscar_puntos_montaje_candidatos,
-    ejecutar_con_timeout as ejecutar_lectura_pendrive_con_timeout,
-    notificar_escritorio,
-)
+_unidades_silenciadas: Set[str] = set()
+_operacion_pendrive_activa: bool = False
 
 
 def detectar_pendrive(config: Optional[ConfiguracionBandeja] = None) -> Optional[Dict[str, Any]]:
@@ -601,30 +602,120 @@ def _leer_estado_pendrive_raw(config: Optional[ConfiguracionBandeja] = None,
                               db: Optional[GestorBaseDatosBandeja] = None) -> Dict[str, Any]:
     """Rutina interna de lectura del estado físico del pendrive."""
     cfg = config or ConfiguracionBandeja()
+
+    particiones_rem = detectar_particiones_removibles_linux()
+    todas_diag = diagnosticar_todas_particiones_linux()
+
+    # Limpiar de _unidades_silenciadas aquellas que ya no existen físicamente
+    nodos_activos = {p["dispositivo"] for p in particiones_rem} | {p["nodo"] for p in particiones_rem} | {p.get("punto_montaje") for p in particiones_rem if p.get("punto_montaje")}
+    for u in list(_unidades_silenciadas):
+        if u and u not in nodos_activos:
+            _unidades_silenciadas.discard(u)
+
     info = detectar_pendrive(cfg)
     if not info or not info.get("conectado"):
         cand = detectar_unidad_candidata_sin_vincular(cfg)
-        estado_unidad = "conectada_sin_vincular" if cand else "sin_unidad"
+        if cand:
+            estado_unidad = "conectada_sin_vincular"
+            cand_p = cand.get("punto_montaje")
+            part_match = next((p for p in particiones_rem if p.get("punto_montaje") == cand_p), None)
+            disp_cand = part_match.get("dispositivo") if part_match else None
+            nodo_cand = part_match.get("nodo") if part_match else None
+            padre_cand = part_match.get("disco_padre") if part_match else None
+            etiq_cand = part_match.get("etiqueta") if part_match else None
+            acciones = ["desmontar", "expulsar", "vincular"] if os.name != "nt" else ["vincular"]
+
+            return {
+                "conectado": False,
+                "sin_respuesta": False,
+                "estado_unidad": estado_unidad,
+                "id": None,
+                "punto_montaje": cand_p,
+                "dispositivo": disp_cand,
+                "nodo": nodo_cand,
+                "disco_padre": padre_cand,
+                "etiqueta": etiq_cand,
+                "sistema_archivos": cand.get("sistema_archivos"),
+                "espacio_libre_bytes": cand.get("espacio_libre_bytes", 0),
+                "espacio_libre_fmt": formatear_bytes(cand.get("espacio_libre_bytes", 0)),
+                "espacio_total_bytes": cand.get("espacio_total_bytes", 0),
+                "espacio_total_fmt": formatear_bytes(cand.get("espacio_total_bytes", 0)),
+                "espacio_usado_bytes": cand.get("espacio_usado_bytes", 0),
+                "unidad_candidata": cand,
+                "acciones_disponibles": acciones,
+                "archivos_part_huerfanos": [],
+                "archivos_pendientes_conteo": 0,
+                "capitulos_pendientes_conteo": 0,
+                "capitulos_pendientes": [],
+                "banner_reactivo": None,
+                "todas_unidades_removibles": particiones_rem,
+                "diagnostico_particiones": todas_diag,
+                "es_windows": (os.name == "nt")
+            }
+
+        # Removibles no montadas
+        no_montadas = [p for p in particiones_rem if not p.get("montado")]
+        if no_montadas:
+            p_sel = no_montadas[0]
+            acciones = ["montar"] if os.name != "nt" else []
+            return {
+                "conectado": False,
+                "sin_respuesta": False,
+                "estado_unidad": "detectada_sin_montar",
+                "id": None,
+                "punto_montaje": None,
+                "dispositivo": p_sel.get("dispositivo"),
+                "nodo": p_sel.get("nodo"),
+                "disco_padre": p_sel.get("disco_padre"),
+                "etiqueta": p_sel.get("etiqueta") or "",
+                "sistema_archivos": p_sel.get("sistema_archivos") or "desconocido",
+                "espacio_libre_bytes": 0,
+                "espacio_libre_fmt": "0 B",
+                "espacio_total_bytes": p_sel.get("tamanio_bytes", 0),
+                "espacio_total_fmt": p_sel.get("tamanio_fmt", "0 B"),
+                "espacio_usado_bytes": 0,
+                "unidad_candidata": p_sel,
+                "acciones_disponibles": acciones,
+                "archivos_part_huerfanos": [],
+                "archivos_pendientes_conteo": 0,
+                "capitulos_pendientes_conteo": 0,
+                "capitulos_pendientes": [],
+                "banner_reactivo": None,
+                "todas_unidades_removibles": particiones_rem,
+                "diagnostico_particiones": todas_diag,
+                "es_windows": (os.name == "nt")
+            }
+
+        # Sin ninguna unidad
         return {
             "conectado": False,
             "sin_respuesta": False,
-            "estado_unidad": estado_unidad,
+            "estado_unidad": "sin_unidad",
             "id": None,
-            "punto_montaje": cand.get("punto_montaje") if cand else None,
-            "sistema_archivos": cand.get("sistema_archivos") if cand else None,
-            "espacio_libre_bytes": cand.get("espacio_libre_bytes", 0) if cand else 0,
-            "espacio_libre_fmt": formatear_bytes(cand.get("espacio_libre_bytes", 0)) if cand else "0 B",
-            "espacio_total_bytes": cand.get("espacio_total_bytes", 0) if cand else 0,
-            "espacio_total_fmt": formatear_bytes(cand.get("espacio_total_bytes", 0)) if cand else "0 B",
-            "espacio_usado_bytes": cand.get("espacio_usado_bytes", 0) if cand else 0,
-            "unidad_candidata": cand,
+            "punto_montaje": None,
+            "dispositivo": None,
+            "nodo": None,
+            "disco_padre": None,
+            "etiqueta": None,
+            "sistema_archivos": None,
+            "espacio_libre_bytes": 0,
+            "espacio_libre_fmt": "0 B",
+            "espacio_total_bytes": 0,
+            "espacio_total_fmt": "0 B",
+            "espacio_usado_bytes": 0,
+            "unidad_candidata": None,
+            "acciones_disponibles": [],
             "archivos_part_huerfanos": [],
             "archivos_pendientes_conteo": 0,
             "capitulos_pendientes_conteo": 0,
             "capitulos_pendientes": [],
-            "banner_reactivo": None
+            "banner_reactivo": None,
+            "todas_unidades_removibles": particiones_rem,
+            "diagnostico_particiones": todas_diag,
+            "es_windows": (os.name == "nt")
         }
 
+    # Caso conectado y vinculado (vinculado_listo)
     punto = info.get("punto_montaje") or info.get("ruta_montaje")
     carpeta_raiz = getattr(cfg, "carpeta_raiz_pendrive", CARPETA_RAIZ_PENDRIVE_DEFECTO)
     part_files = listar_archivos_part_huerfanos(punto, carpeta_raiz)
@@ -695,8 +786,17 @@ def _leer_estado_pendrive_raw(config: Optional[ConfiguracionBandeja] = None,
                 "bytes_totales_fmt": formatear_bytes(bytes_cap)
             })
 
+    # Cotejar con particiones removibles detectadas
+    part_match = next((p for p in particiones_rem if p.get("punto_montaje") == punto), None)
+    disp_id = part_match.get("dispositivo") if part_match else None
+    nodo_id = part_match.get("nodo") if part_match else None
+    padre_id = part_match.get("disco_padre") if part_match else None
+    etiq_id = part_match.get("etiqueta") if part_match else None
+
+    esta_silenciada = (disp_id in _unidades_silenciadas or nodo_id in _unidades_silenciadas or punto in _unidades_silenciadas)
+
     banner = None
-    if tot_arch > 0:
+    if tot_arch > 0 and not esta_silenciada:
         banner = {
             "mostrar": True,
             "mensaje": f"Pendrive detectado: {tot_arch} archivo(s) de {len(caps_detalle)} capítulo(s) listos para enviar",
@@ -707,6 +807,7 @@ def _leer_estado_pendrive_raw(config: Optional[ConfiguracionBandeja] = None,
     esp_libre = info.get("espacio_libre_bytes", 0)
     esp_total = info.get("espacio_total_bytes", 0)
     esp_usado = info.get("espacio_usado_bytes", 0)
+    acciones = ["desmontar", "expulsar"] if os.name != "nt" else []
 
     return {
         "conectado": True,
@@ -714,6 +815,10 @@ def _leer_estado_pendrive_raw(config: Optional[ConfiguracionBandeja] = None,
         "estado_unidad": "vinculado_listo",
         "id": info.get("id", ""),
         "punto_montaje": punto,
+        "dispositivo": disp_id,
+        "nodo": nodo_id,
+        "disco_padre": padre_id,
+        "etiqueta": etiq_id,
         "sistema_archivos": info.get("sistema_archivos"),
         "espacio_libre_bytes": esp_libre,
         "espacio_libre_fmt": formatear_bytes(esp_libre),
@@ -721,11 +826,15 @@ def _leer_estado_pendrive_raw(config: Optional[ConfiguracionBandeja] = None,
         "espacio_total_fmt": formatear_bytes(esp_total),
         "espacio_usado_bytes": esp_usado,
         "unidad_candidata": None,
+        "acciones_disponibles": acciones,
         "archivos_part_huerfanos": part_files,
         "archivos_pendientes_conteo": tot_arch,
         "capitulos_pendientes_conteo": len(caps_detalle),
         "capitulos_pendientes": caps_detalle,
-        "banner_reactivo": banner
+        "banner_reactivo": banner,
+        "todas_unidades_removibles": particiones_rem,
+        "diagnostico_particiones": todas_diag,
+        "es_windows": (os.name == "nt")
     }
 
 
@@ -750,16 +859,282 @@ def obtener_estado_pendrive(config: Optional[ConfiguracionBandeja] = None,
             "mensaje": "Pendrive sin respuesta",
             "id": None,
             "punto_montaje": None,
+            "dispositivo": None,
+            "nodo": None,
+            "disco_padre": None,
+            "etiqueta": None,
             "sistema_archivos": None,
             "espacio_libre_bytes": 0,
             "espacio_total_bytes": 0,
             "espacio_usado_bytes": 0,
+            "unidad_candidata": None,
+            "acciones_disponibles": [],
+            "todas_unidades_removibles": [],
+            "diagnostico_particiones": [],
+            "es_windows": (os.name == "nt"),
             "archivos_part_huerfanos": [],
             "archivos_pendientes_conteo": 0,
             "capitulos_pendientes_conteo": 0,
+            "capitulos_pendientes": [],
             "banner_reactivo": None
         }
     return res
+
+
+def montar_unidad_pendrive(dispositivo: str,
+                           timeout: float = 15.0,
+                           config: Optional[ConfiguracionBandeja] = None,
+                           db: Optional[GestorBaseDatosBandeja] = None) -> Dict[str, Any]:
+    """
+    Monta una partición extraíble usando udisksctl mount -b <dispositivo>.
+    Valida que el dispositivo esté en la lista blanca de particiones removibles detectadas.
+    Registra el evento en la bitácora si hay db configurada.
+    """
+    if not dispositivo or not isinstance(dispositivo, str):
+        raise ValueError("El nodo de dispositivo no puede estar vacío.")
+
+    disp_limpio = dispositivo.strip()
+    if not re.match(r"^/dev/[a-zA-Z0-9_\-]+$", disp_limpio):
+        raise ValueError(f"Formato de dispositivo inválido o inseguro: '{disp_limpio}'")
+
+    # Validación de lista blanca
+    removibles = detectar_particiones_removibles_linux()
+    dispositivos_validos = {p["dispositivo"] for p in removibles}
+    cfg = config or ConfiguracionBandeja()
+    rutas_cfg = getattr(cfg, "rutas_candidatas_pendrive", None) or []
+    for r in rutas_cfg:
+        dispositivos_validos.add(r)
+        try:
+            dispositivos_validos.add(os.path.realpath(r))
+        except Exception:
+            pass
+
+    if disp_limpio not in dispositivos_validos and not any(disp_limpio.endswith(p["nodo"]) for p in removibles):
+        raise ValueError(f"Dispositivo no permitido o no detectado como removible: '{disp_limpio}'")
+
+    cmd = ["udisksctl", "mount", "-b", disp_limpio]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        salida = (proc.stdout if isinstance(proc.stdout, str) else str(proc.stdout or "")).strip()
+        error = (proc.stderr if isinstance(proc.stderr, str) else str(proc.stderr or "")).strip()
+        exito = (proc.returncode == 0)
+
+        punto_montaje = None
+        if exito:
+            m = re.search(r" at\s+(/[^\s\.]+)", salida)
+            if m:
+                punto_montaje = m.group(1).rstrip(".")
+            if disp_limpio in _unidades_silenciadas:
+                _unidades_silenciadas.discard(disp_limpio)
+            if os.path.basename(disp_limpio) in _unidades_silenciadas:
+                _unidades_silenciadas.discard(os.path.basename(disp_limpio))
+
+        if db:
+            try:
+                db.registrar_evento("montar_unidad", {
+                    "dispositivo": disp_limpio,
+                    "exito": exito,
+                    "salida": salida,
+                    "error": error,
+                    "punto_montaje": punto_montaje
+                })
+            except Exception as e_db:
+                logger.debug(f"No se pudo registrar evento montar_unidad en bitácora: {e_db}")
+
+        if exito:
+            return {
+                "exito": True,
+                "mensaje": salida or f"Unidad '{disp_limpio}' montada exitosamente.",
+                "dispositivo": disp_limpio,
+                "punto_montaje": punto_montaje,
+                "comando_ejecutado": f"udisksctl mount -b {disp_limpio}"
+            }
+        else:
+            return {
+                "exito": False,
+                "error": error or salida or "Error desconocido al montar la unidad.",
+                "dispositivo": disp_limpio,
+                "comando_manual": f"udisksctl mount -b {disp_limpio}",
+                "comando_ejecutado": f"udisksctl mount -b {disp_limpio}"
+            }
+    except FileNotFoundError:
+        return {
+            "exito": False,
+            "error": "El comando 'udisksctl' no está instalado en este sistema.",
+            "dispositivo": disp_limpio,
+            "comando_manual": f"udisksctl mount -b {disp_limpio}",
+            "comando_ejecutado": f"udisksctl mount -b {disp_limpio}"
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "exito": False,
+            "error": f"Tiempo de espera agotado ({timeout}s) al intentar montar '{disp_limpio}'.",
+            "dispositivo": disp_limpio,
+            "comando_manual": f"udisksctl mount -b {disp_limpio}",
+            "comando_ejecutado": f"udisksctl mount -b {disp_limpio}"
+        }
+
+
+def desmontar_unidad_pendrive(dispositivo: str,
+                              expulsar: bool = False,
+                              timeout: float = 15.0,
+                              config: Optional[ConfiguracionBandeja] = None,
+                              db: Optional[GestorBaseDatosBandeja] = None) -> Dict[str, Any]:
+    """
+    Desmonta una unidad usando udisksctl unmount -b <dispositivo> y opcionalmente
+    ejecuta udisksctl power-off -b <disco_padre> si expulsar=True.
+    Precondiciones:
+    - Verifica que no haya transferencia o deshacer en curso ni .part activo.
+    - Ejecuta os.sync().
+    - Si falla por estar ocupada (busy), inspecciona procesos ocupantes vía /proc.
+    - Silencia el banner reactivo para la unidad retirada.
+    """
+    global _operacion_pendrive_activa
+
+    if not dispositivo or not isinstance(dispositivo, str):
+        raise ValueError("El nodo de dispositivo no puede estar vacío.")
+
+    disp_limpio = dispositivo.strip()
+    if not re.match(r"^/dev/[a-zA-Z0-9_\-]+$", disp_limpio):
+        raise ValueError(f"Formato de dispositivo inválido o inseguro: '{disp_limpio}'")
+
+    if _operacion_pendrive_activa:
+        return {
+            "exito": False,
+            "error": "No se puede desmontar: hay un envío o reversión de transferencia en curso en este momento.",
+            "dispositivo": disp_limpio,
+            "bloqueado": True
+        }
+
+    removibles = detectar_particiones_removibles_linux()
+    dispositivos_validos = {p["dispositivo"] for p in removibles}
+    info_part = next((p for p in removibles if p["dispositivo"] == disp_limpio or p["nodo"] == os.path.basename(disp_limpio)), None)
+
+    cfg = config or ConfiguracionBandeja()
+    rutas_cfg = getattr(cfg, "rutas_candidatas_pendrive", None) or []
+    for r in rutas_cfg:
+        dispositivos_validos.add(r)
+        try:
+            dispositivos_validos.add(os.path.realpath(r))
+        except Exception:
+            pass
+
+    if disp_limpio not in dispositivos_validos and not any(disp_limpio.endswith(p["nodo"]) for p in removibles):
+        raise ValueError(f"Dispositivo no permitido o no detectado como removible: '{disp_limpio}'")
+
+    punto_montaje = info_part.get("punto_montaje") if info_part else None
+
+    # Verificar si hay archivos .part activos en el pendrive
+    if punto_montaje and os.path.isdir(punto_montaje):
+        carpeta_raiz = getattr(cfg, "carpeta_raiz_pendrive", CARPETA_RAIZ_PENDRIVE_DEFECTO)
+        parts_huerfanos = listar_archivos_part_huerfanos(punto_montaje, carpeta_raiz)
+        if len(parts_huerfanos) > 0:
+            logger.info(f"Desmontando con {len(parts_huerfanos)} archivos .part preservados en pendrive.")
+
+    # os.sync() antes de desmontar
+    try:
+        os.sync()
+    except Exception as e_sync:
+        logger.debug(f"os.sync previo al unmount: {e_sync}")
+
+    cmd_unmount = ["udisksctl", "unmount", "-b", disp_limpio]
+    try:
+        proc = subprocess.run(cmd_unmount, capture_output=True, text=True, timeout=timeout)
+        salida = (proc.stdout if isinstance(proc.stdout, str) else str(proc.stdout or "")).strip()
+        error = (proc.stderr if isinstance(proc.stderr, str) else str(proc.stderr or "")).strip()
+        exito = (proc.returncode == 0)
+
+        if not exito:
+            es_busy = any(w in error.lower() or w in salida.lower() for w in ("busy", "target is busy", "en uso", "ocupado"))
+            procesos_ocupantes = []
+            if es_busy and punto_montaje:
+                procesos_ocupantes = listar_procesos_ocupando_montaje(punto_montaje)
+
+            msg_error = error or salida or "Error al desmontar la unidad."
+            if es_busy:
+                msg_error = f"La unidad está ocupada por otras aplicaciones ({len(procesos_ocupantes)} proceso(s) detectado(s)). Cerrá esas ventanas o terminales antes de desmontar."
+
+            return {
+                "exito": False,
+                "error": msg_error,
+                "ocupado": es_busy,
+                "procesos_ocupantes": procesos_ocupantes,
+                "procesos_ocupando": procesos_ocupantes,
+                "dispositivo": disp_limpio,
+                "comando_manual": f"udisksctl unmount -b {disp_limpio}",
+                "comando_ejecutado": f"udisksctl unmount -b {disp_limpio}"
+            }
+
+        # Silenciar unidad tras desmontaje exitoso
+        _unidades_silenciadas.add(disp_limpio)
+        _unidades_silenciadas.add(os.path.basename(disp_limpio))
+        if punto_montaje:
+            _unidades_silenciadas.add(punto_montaje)
+
+        power_off_exito = False
+        power_off_msg = ""
+        disco_padre = None
+
+        if expulsar:
+            disco_padre = info_part.get("disco_padre") if info_part else obtener_disco_padre_particion(disp_limpio)
+            if not disco_padre:
+                disco_padre = disp_limpio
+
+            cmd_poweroff = ["udisksctl", "power-off", "-b", disco_padre]
+            proc_po = subprocess.run(cmd_poweroff, capture_output=True, text=True, timeout=timeout)
+            power_off_exito = (proc_po.returncode == 0)
+            po_stdout = (proc_po.stdout if isinstance(proc_po.stdout, str) else str(proc_po.stdout or "")).strip()
+            po_stderr = (proc_po.stderr if isinstance(proc_po.stderr, str) else str(proc_po.stderr or "")).strip()
+            if power_off_exito:
+                power_off_msg = po_stdout
+                _unidades_silenciadas.add(disco_padre)
+                _unidades_silenciadas.add(os.path.basename(disco_padre))
+            else:
+                power_off_msg = po_stderr or po_stdout
+
+        if db:
+            try:
+                db.registrar_evento("desmontar_unidad", {
+                    "dispositivo": disp_limpio,
+                    "expulsar": expulsar,
+                    "exito_unmount": True,
+                    "exito_power_off": power_off_exito if expulsar else None,
+                    "disco_padre": disco_padre,
+                    "punto_montaje": punto_montaje
+                })
+            except Exception as e_db:
+                logger.debug(f"No se pudo registrar evento desmontar_unidad en bitácora: {e_db}")
+
+        mensaje_final = "Unidad desmontada exitosamente."
+        if expulsar:
+            if power_off_exito:
+                mensaje_final = "Unidad desmontada y apagada exitosamente. Ya podés retirar el pendrive."
+            else:
+                mensaje_final = f"Unidad desmontada, pero falló la expulsión eléctrica: {power_off_msg}."
+
+        return {
+            "exito": True,
+            "expulsado": (expulsar and power_off_exito),
+            "mensaje": mensaje_final,
+            "dispositivo": disp_limpio,
+            "disco_padre": disco_padre,
+            "comando_ejecutado": f"udisksctl unmount -b {disp_limpio}" + (f" && udisksctl power-off -b {disco_padre}" if expulsar else "")
+        }
+
+    except FileNotFoundError:
+        return {
+            "exito": False,
+            "error": "El comando 'udisksctl' no está disponible en este sistema.",
+            "dispositivo": disp_limpio,
+            "comando_manual": f"udisksctl unmount -b {disp_limpio}"
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "exito": False,
+            "error": f"Tiempo de espera agotado ({timeout}s) al intentar desmontar '{disp_limpio}'.",
+            "dispositivo": disp_limpio,
+            "comando_manual": f"udisksctl unmount -b {disp_limpio}"
+        }
 
 
 def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
@@ -1017,19 +1392,19 @@ def ejecutar_envio_pendrive(simulacion_o_capitulos: Any,
                             config: Optional[ConfiguracionBandeja] = None,
                             db: Optional[GestorBaseDatosBandeja] = None,
                             movimientos: Optional[Any] = None) -> Dict[str, Any]:
-    """
-    Ejecuta la transferencia física segura de archivos hacia el pendrive siguiendo el protocolo:
-    1. Re-validación del plan o simulación previa (o ejecución de simulación si se pasan capítulos).
-    2. Copia en bloques binarios (1 MiB) hacia <destino>.part con cálculo de SHA-256 en la misma pasada.
-    3. Sincronización a disco con os.fsync.
-    4. Renombrado con os.rename a su nombre final tras comprobar ausencia de colisión.
-    5. Re-lectura del archivo final para verificar que su SHA-256 coincide con el origen.
-       Si ocurre error o discrepancia, el archivo .part se preserva (NO se borra) y el lote se interrumpe.
-    6. Preservación del archivo original: se mueve con os.rename a ~/Descargas/_lucie/_enviados/<pers>/<cap>/(fotos|videos)/<arch>
-       (con sufijo numérico si ya existiera en _enviados).
-    7. Registro en manifiesto.jsonl del pendrive en modo append-only ('a').
-    8. Registro del evento 'envio_pendrive' en bitacora_bandeja.jsonl.
-    """
+    """Ejecuta la transferencia física segura de archivos hacia el pendrive."""
+    global _operacion_pendrive_activa
+    _operacion_pendrive_activa = True
+    try:
+        return _ejecutar_envio_pendrive_interno(simulacion_o_capitulos, config, db, movimientos)
+    finally:
+        _operacion_pendrive_activa = False
+
+
+def _ejecutar_envio_pendrive_interno(simulacion_o_capitulos: Any,
+                                     config: Optional[ConfiguracionBandeja] = None,
+                                     db: Optional[GestorBaseDatosBandeja] = None,
+                                     movimientos: Optional[Any] = None) -> Dict[str, Any]:
     cfg = config or ConfiguracionBandeja()
 
     # 1. Obtener o re-ejecutar simulación
@@ -1247,18 +1622,20 @@ def deshacer_envio_pendrive(id_operacion: str,
                             config: Optional[ConfiguracionBandeja] = None,
                             db: Optional[GestorBaseDatosBandeja] = None,
                             ruta_bitacora: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Revierte una operación de envío al pendrive sin borrar absolutamente nada:
-    1. Comprueba la bitácora local para encontrar la operación y validar que no fue revertida antes.
-    2. Localiza el pendrive correspondiente por ID.
-    3. Fase preventiva: verifica que cada archivo en el pendrive y en _enviados existe, y
-       COMPRUEBA ESTRICTAMENTE que la ruta de origen en la sala de espera NO ESTÉ OCUPADA.
-       Si algún destino en la sala de espera está ocupado, la reversión se NIEGA por completo.
-    4. Fase de ejecución:
-       - Mueve la copia en pendrive hacia LucieSinReglas/_revertidos/<id_envio>/<ruta_relativa> con os.rename.
-       - Restituye el original desde _enviados a la sala de espera con os.rename.
-    5. Registra el evento 'envio_revertido' en manifiesto.jsonl del pendrive y en bitacora_bandeja.jsonl.
-    """
+    """Revierte una operación de envío al pendrive sin borrar absolutamente nada."""
+    global _operacion_pendrive_activa
+    _operacion_pendrive_activa = True
+    try:
+        return _deshacer_envio_pendrive_interno(id_operacion, operacion, config, db, ruta_bitacora)
+    finally:
+        _operacion_pendrive_activa = False
+
+
+def _deshacer_envio_pendrive_interno(id_operacion: str,
+                                     operacion: Optional[Dict[str, Any]] = None,
+                                     config: Optional[ConfiguracionBandeja] = None,
+                                     db: Optional[GestorBaseDatosBandeja] = None,
+                                     ruta_bitacora: Optional[str] = None) -> Dict[str, Any]:
     cfg = config or ConfiguracionBandeja()
     bit_path = ruta_bitacora or "bitacora_bandeja.jsonl"
 

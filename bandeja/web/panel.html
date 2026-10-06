@@ -259,7 +259,12 @@
             <button class="btn-sm" id="btn-vincular-pendrive" onclick="abrirModalVincularPendrive()" style="display:none; background:var(--accent); color:#000; font-weight:600;">Vincular pendrive</button>
           </div>
         </div>
+        <div id="contenedor-selector-unidades" style="display:none; margin-bottom:14px; background:var(--card-alt); border:1px solid var(--border); border-radius:6px; padding:10px 14px; align-items:center; gap:12px;"></div>
         <div id="contenedor-estado-pendrive">Cargando estado del pendrive...</div>
+        <details class="diag-pendrive" id="details-diag-pendrive" style="margin-top:16px;">
+          <summary style="cursor:pointer; color:var(--text-muted); font-size:0.85rem; user-select:none;">¿Por qué no veo mi pendrive?</summary>
+          <div id="contenedor-diag-pendrive" style="margin-top:10px;"></div>
+        </details>
       </div>
 
       <div class="card">
@@ -384,6 +389,56 @@
         <button class="btn-confirmar" id="btn-confirmar-vincular" onclick="confirmarVincularPendrive()">Confirmar y vincular</button>
       </div>
     </div>
+  </div>
+
+  <!-- Modal de Control de Montaje de Pendrive (Montar / Desmontar / Expulsar) -->
+  <div id="modal-control-pendrive" class="modal-overlay">
+    <div class="modal-content" style="max-width:680px;">
+      <h2 id="modal-control-titulo">Control de Unidad Pendrive</h2>
+      <p id="modal-control-desc" style="color:var(--text-muted); margin:8px 0 16px 0; font-size:0.95rem; line-height:1.5;">
+        Acción sobre el dispositivo.
+      </p>
+
+      <div id="modal-control-comando-wrap" style="margin:16px 0;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <label style="font-size:0.85rem; font-weight:600; color:var(--text-muted);">Comando exacto a ejecutar:</label>
+          <button type="button" class="btn-sm" id="btn-copiar-comando-pendrive" onclick="copiarComandoControlPendrive()" style="background:var(--card-alt); border:1px solid var(--border); color:var(--text); padding:3px 10px; font-size:0.8rem; border-radius:4px; cursor:pointer;">
+            Copiar comando
+          </button>
+        </div>
+        <pre class="comando-terminal-pre"><code id="modal-control-comando">udisksctl mount -b /dev/sdX</code></pre>
+        <span id="feedback-copiar-comando" style="display:none; color:var(--teal); font-size:0.8rem; margin-top:4px;">¡Comando copiado al portapapeles!</span>
+      </div>
+
+      <div id="modal-control-error-box" class="modal-control-error-box" style="display:none; margin:16px 0;">
+        <h4 style="color:#ef4444; margin-bottom:6px;" id="modal-control-error-titulo">Error al ejecutar la acción</h4>
+        <p id="modal-control-error-msg" style="color:#fca5a5; font-size:0.9rem; margin-bottom:10px;"></p>
+        <div id="modal-control-procesos-box" style="display:none; margin-bottom:10px;">
+          <strong style="font-size:0.85rem; color:#fef3c7;">Procesos del usuario ocupando el punto de montaje:</strong>
+          <div id="modal-control-procesos-lista" style="margin-top:6px;"></div>
+        </div>
+        <div id="modal-control-fallback-box" style="display:none; margin-top:10px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <label style="font-size:0.8rem; color:var(--text-muted);">Comando manual sugerido:</label>
+            <button type="button" class="btn-sm" id="btn-copiar-manual-pendrive" onclick="copiarComandoManualPendrive()" style="background:var(--card-alt); border:1px solid var(--border); color:var(--text); padding:2px 8px; font-size:0.75rem; border-radius:4px; cursor:pointer;">
+              Copiar manual
+            </button>
+          </div>
+          <pre class="comando-terminal-pre"><code id="modal-control-fallback-cmd">sudo mount /dev/sdX /media/...</code></pre>
+        </div>
+      </div>
+
+      <div id="modal-control-exito-box" style="display:none; background:rgba(16, 185, 129, 0.15); border:1px solid #10b981; color:#ecfdf5; padding:14px; border-radius:6px; margin:16px 0;">
+        <strong style="font-size:1.05rem;" id="modal-control-exito-msg">Ya podés retirar el pendrive con seguridad.</strong>
+      </div>
+
+      <div class="modal-actions" id="modal-control-actions">
+        <button class="btn-cancelar" id="btn-cancelar-control-pendrive" onclick="cerrarModalControlPendrive()">Cancelar</button>
+        <button class="btn-confirmar" id="btn-confirmar-control-pendrive" onclick="confirmarControlPendrive()">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Modal Visor Multimedia (Lightbox) -->
   <div id="modal-visor-media" class="modal-overlay" style="display:none;" tabindex="-1">
     <div class="modal-content modal-visor-content">

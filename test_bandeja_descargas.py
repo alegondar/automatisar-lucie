@@ -5670,12 +5670,13 @@ class TestListaEnvioPendrivePorCarpetas(unittest.TestCase):
             self.assertTrue(os.path.isfile(orig_fot))
 
     def test_cuatro_estados_de_unidad_fisica(self):
-        """Verifica la diferenciación exacta de los 4 estados de la unidad física."""
+        """Verifica la diferenciación exacta de los estados de la unidad física."""
         from bandeja.pendrive import _leer_estado_pendrive_raw
 
         # 1. Sin unidad
         with patch("bandeja.pendrive.detectar_pendrive", return_value={"conectado": False}), \
-             patch("bandeja.pendrive.detectar_unidad_candidata_sin_vincular", return_value=None):
+             patch("bandeja.pendrive.detectar_unidad_candidata_sin_vincular", return_value=None), \
+             patch("bandeja.pendrive.detectar_particiones_removibles_linux", return_value=[]):
             st1 = _leer_estado_pendrive_raw(self.config, self.db)
             self.assertEqual(st1.get("estado_unidad"), "sin_unidad")
             self.assertFalse(st1.get("conectado"))
@@ -5686,7 +5687,8 @@ class TestListaEnvioPendrivePorCarpetas(unittest.TestCase):
             "espacio_libre_fmt": "14 GB", "espacio_total_fmt": "16 GB"
         }
         with patch("bandeja.pendrive.detectar_pendrive", return_value={"conectado": False}), \
-             patch("bandeja.pendrive.detectar_unidad_candidata_sin_vincular", return_value=cand_mock):
+             patch("bandeja.pendrive.detectar_unidad_candidata_sin_vincular", return_value=cand_mock), \
+             patch("bandeja.pendrive.detectar_particiones_removibles_linux", return_value=[]):
             st2 = _leer_estado_pendrive_raw(self.config, self.db)
             self.assertEqual(st2.get("estado_unidad"), "conectada_sin_vincular")
             self.assertEqual(st2.get("unidad_candidata", {}).get("punto_montaje"), "/media/usb")
@@ -5697,7 +5699,8 @@ class TestListaEnvioPendrivePorCarpetas(unittest.TestCase):
             "id": "pen_123", "sistema_archivos": "vfat", "espacio_libre_bytes": 10**9,
             "espacio_total_bytes": 10**10, "espacio_libre_fmt": "1 GB", "espacio_total_fmt": "10 GB"
         }
-        with patch("bandeja.pendrive.detectar_pendrive", return_value=vinculado_mock):
+        with patch("bandeja.pendrive.detectar_pendrive", return_value=vinculado_mock), \
+             patch("bandeja.pendrive.detectar_particiones_removibles_linux", return_value=[]):
             st3 = _leer_estado_pendrive_raw(self.config, self.db)
             self.assertEqual(st3.get("estado_unidad"), "vinculado_listo")
             self.assertTrue(st3.get("conectado"))
@@ -5708,6 +5711,19 @@ class TestListaEnvioPendrivePorCarpetas(unittest.TestCase):
             st4 = obtener_estado_pendrive(self.config, self.db)
             self.assertEqual(st4.get("estado_unidad"), "sin_respuesta")
             self.assertTrue(st4.get("sin_respuesta"))
+
+        # 5. Detectada sin montar
+        rem_mock = [{
+            "dispositivo": "/dev/sda1", "nodo": "sda1", "disco_padre": "/dev/sda",
+            "etiqueta": "MIUNIDAD", "sistema_archivos": "exfat", "punto_montaje": None,
+            "montado": False, "tamanio_bytes": 10**10, "tamanio_fmt": "10 GB"
+        }]
+        with patch("bandeja.pendrive.detectar_pendrive", return_value={"conectado": False}), \
+             patch("bandeja.pendrive.detectar_unidad_candidata_sin_vincular", return_value=None), \
+             patch("bandeja.pendrive.detectar_particiones_removibles_linux", return_value=rem_mock):
+            st5 = _leer_estado_pendrive_raw(self.config, self.db)
+            self.assertEqual(st5.get("estado_unidad"), "detectada_sin_montar")
+            self.assertFalse(st5.get("conectado"))
 
     def test_frontend_js_preservacion_seleccion_y_estados(self):
         """Verifica en Node.js la preservación de selecciones y botones de envío del panel frontend."""

@@ -12,6 +12,10 @@ from bandeja.plataforma import (
     obtener_sistema_archivos,
     obtener_espacio_disco,
     buscar_puntos_montaje_candidatos,
+    detectar_particiones_removibles_linux,
+    diagnosticar_todas_particiones_linux,
+    obtener_disco_padre_particion,
+    listar_procesos_ocupando_montaje,
 )
 
 from bandeja.config import (
@@ -78,6 +82,8 @@ from bandeja.pendrive import (
     simular_envio_capitulos,
     ejecutar_envio_pendrive,
     deshacer_envio_pendrive,
+    montar_unidad_pendrive,
+    desmontar_unidad_pendrive,
     ejecutar_lectura_pendrive_con_timeout,
 )
 
@@ -95,6 +101,10 @@ __all__ = [
     "obtener_sistema_archivos",
     "obtener_espacio_disco",
     "buscar_puntos_montaje_candidatos",
+    "detectar_particiones_removibles_linux",
+    "diagnosticar_todas_particiones_linux",
+    "obtener_disco_padre_particion",
+    "listar_procesos_ocupando_montaje",
     # Configuración y constantes
     "RUTA_DESCARGAS_DEFECTO",
     "RUTA_DESTINO_DEFECTO",
@@ -149,6 +159,8 @@ __all__ = [
     "simular_envio_capitulos",
     "ejecutar_envio_pendrive",
     "deshacer_envio_pendrive",
+    "montar_unidad_pendrive",
+    "desmontar_unidad_pendrive",
     "ejecutar_lectura_pendrive_con_timeout",
     # Vigilante
     "VigilanteBandeja",

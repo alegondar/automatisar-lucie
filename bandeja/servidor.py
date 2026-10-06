@@ -47,6 +47,8 @@ from bandeja.pendrive import (
     escanear_sala_espera_carpetas,
     detectar_pendrive,
     leer_manifiesto_pendrive,
+    montar_unidad_pendrive,
+    desmontar_unidad_pendrive,
 )
 from bandeja.vigilante import VigilanteBandeja
 
@@ -605,6 +607,12 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._handle_pendrive_envio_simular(body)
         elif ruta == "/api/pendrive/envio":
             self._handle_pendrive_envio(body)
+        elif ruta == "/api/pendrive/montar":
+            self._handle_pendrive_montar(body)
+        elif ruta == "/api/pendrive/desmontar":
+            self._handle_pendrive_desmontar(body, expulsar=False)
+        elif ruta == "/api/pendrive/expulsar":
+            self._handle_pendrive_desmontar(body, expulsar=True)
         else:
             self._enviar_error(HTTPStatus.NOT_FOUND, "Endpoint POST no encontrado.")
 
@@ -647,6 +655,39 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._enviar_error(HTTPStatus.FORBIDDEN, str(e))
         except Exception as e:
             self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al ejecutar envío: {e}")
+
+    def _handle_pendrive_montar(self, body: Dict[str, Any]):
+        dispositivo = str(body.get("dispositivo", "")).strip()
+        if not dispositivo:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "Debe especificar el campo 'dispositivo'.")
+            return
+        try:
+            res = montar_unidad_pendrive(dispositivo, config=self.config, db=self.db)
+            if res.get("exito"):
+                self._enviar_json(res)
+            else:
+                self._enviar_json(res, codigo=HTTPStatus.UNPROCESSABLE_ENTITY)
+        except ValueError as e:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, str(e))
+        except Exception as e:
+            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al montar unidad: {e}")
+
+    def _handle_pendrive_desmontar(self, body: Dict[str, Any], expulsar: bool = False):
+        dispositivo = str(body.get("dispositivo", "")).strip()
+        if not dispositivo:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "Debe especificar el campo 'dispositivo'.")
+            return
+        try:
+            res = desmontar_unidad_pendrive(dispositivo, expulsar=expulsar, config=self.config, db=self.db)
+            if res.get("exito"):
+                self._enviar_json(res)
+            else:
+                status = HTTPStatus.CONFLICT if res.get("ocupado") or res.get("bloqueado") else HTTPStatus.UNPROCESSABLE_ENTITY
+                self._enviar_json(res, codigo=status)
+        except ValueError as e:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, str(e))
+        except Exception as e:
+            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al desmontar unidad: {e}")
 
     def _handle_pendrive_vincular_simular(self, body: Dict[str, Any]):
         punto = str(body.get("punto_montaje", "")).strip()
