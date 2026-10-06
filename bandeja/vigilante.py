@@ -54,6 +54,7 @@ class VigilanteBandeja:
         self._escenas_existentes_actuales: List[Dict[str, Any]] = []
         self._ultimo_conteo_lotes = 0
         self._estado_pendrive: Dict[str, Any] = {"conectado": False, "sin_respuesta": False}
+        self._mapa_media: Dict[str, str] = {}
         self._lock = threading.Lock()
 
     def iniciar(self):
@@ -314,8 +315,10 @@ class VigilanteBandeja:
                                 id_db = reg["id"]
 
             fecha_llegada_str = datetime.datetime.fromtimestamp(fecha_llegada).strftime("%Y-%m-%d %H:%M:%S")
+            id_media = hashlib.sha256(f"media:{ruta_completa}".encode("utf-8")).hexdigest()[:32]
             item_info = {
                 "id_db": id_db,
+                "id_media": id_media,
                 "nombre": entrada,
                 "ruta": ruta_completa,
                 "tamanio": tamanio,
@@ -420,12 +423,25 @@ class VigilanteBandeja:
         except Exception:
             estado_pen = {"conectado": False, "sin_respuesta": False}
 
+        # Construir mapa de identificadores opacos de media para lotes, anteriores y sin identificar
+        nuevo_mapa_media = {}
+        for l in lotes_generados + lotes_anteriores:
+            for a in l.get("archivos", []):
+                id_m = a.get("id_media")
+                if id_m:
+                    nuevo_mapa_media[id_m] = a["ruta"]
+        for a in sin_identificar:
+            id_m = a.get("id_media")
+            if id_m:
+                nuevo_mapa_media[id_m] = a["ruta"]
+
         with self._lock:
             self._lotes_actuales = lotes_generados
             self._lotes_anteriores_actuales = lotes_anteriores
             self._sin_identificar_actuales = sin_identificar
             self._escenas_existentes_actuales = escenas_existentes
             self._estado_pendrive = estado_pen
+            self._mapa_media = nuevo_mapa_media
 
             # Notificar si hay nuevos lotes en la lista principal (NUNCA en Anteriores)
             lotes_principales = [l for l in lotes_generados if not l.get("es_anterior")]
@@ -451,6 +467,13 @@ class VigilanteBandeja:
                 "escenas": list(self._escenas_existentes_actuales),
                 "pendrive": dict(self._estado_pendrive)
             }
+
+    def resolver_ruta_media(self, id_media: str) -> Optional[str]:
+        """Resuelve un id_media opaco a la ruta absoluta de un archivo conocido."""
+        if not id_media:
+            return None
+        with self._lock:
+            return self._mapa_media.get(id_media)
 
     def obtener_token_version(self) -> str:
         """

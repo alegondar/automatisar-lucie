@@ -65,7 +65,7 @@
     }
 
     function hayModalAbierto() {
-      const idsModales = ['modal-simulacion', 'modal-terminar-capitulo', 'modal-descartar-capitulo', 'modal-plan-envio', 'modal-vincular-pendrive'];
+      const idsModales = ['modal-simulacion', 'modal-terminar-capitulo', 'modal-descartar-capitulo', 'modal-plan-envio', 'modal-vincular-pendrive', 'modal-visor-media'];
       return idsModales.some(id => {
         const el = document.getElementById(id);
         return el && el.style.display && el.style.display !== 'none';
@@ -1138,6 +1138,321 @@
       }
     }
 
+    function esArchivoVideo(nombre) {
+      if (!nombre) return false;
+      const idx = nombre.lastIndexOf('.');
+      if (idx === -1) return false;
+      const ext = nombre.slice(idx).toLowerCase();
+      return ['.mp4', '.mov', '.webm', '.m4v'].includes(ext);
+    }
+
+    function esArchivoFoto(nombre) {
+      if (!nombre) return false;
+      const idx = nombre.lastIndexOf('.');
+      if (idx === -1) return false;
+      const ext = nombre.slice(idx).toLowerCase();
+      return ['.jpg', '.jpeg', '.png', '.webp'].includes(ext);
+    }
+
+    const MAX_CONCURRENT_VIDEO_LOADS = 3;
+    const colaCargaVideos = [];
+    let videosCargandoActivos = 0;
+    let observerVideos = null;
+
+    function inicializarLazyLoaderVideos() {
+      if (typeof window === 'undefined' || typeof document === 'undefined') return;
+      if (typeof IntersectionObserver === 'undefined') {
+        document.querySelectorAll('video.video-thumb-lazy').forEach(v => {
+          const src = v.getAttribute('data-src');
+          if (src && !v.src) {
+            v.preload = 'metadata';
+            v.src = src;
+          }
+        });
+        return;
+      }
+
+      if (observerVideos) {
+        observerVideos.disconnect();
+      }
+
+      observerVideos = new IntersectionObserver((entries, obs) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            obs.unobserve(entry.target);
+            encolarCargaVideo(entry.target);
+          }
+        });
+      }, {
+        rootMargin: '200px 0px'
+      });
+
+      document.querySelectorAll('video.video-thumb-lazy').forEach(v => {
+        if (!v.src) {
+          observerVideos.observe(v);
+        }
+      });
+    }
+
+    function encolarCargaVideo(videoEl) {
+      colaCargaVideos.push(videoEl);
+      procesarColaVideos();
+    }
+
+    function procesarColaVideos() {
+      while (videosCargandoActivos < MAX_CONCURRENT_VIDEO_LOADS && colaCargaVideos.length > 0) {
+        const v = colaCargaVideos.shift();
+        if (!v) continue;
+        const dataSrc = v.getAttribute('data-src');
+        if (!dataSrc || v.src) continue;
+
+        videosCargandoActivos++;
+
+        let finalizado = false;
+        const finalizar = () => {
+          if (finalizado) return;
+          finalizado = true;
+          videosCargandoActivos--;
+          v.removeEventListener('loadeddata', finalizar);
+          v.removeEventListener('seeked', finalizar);
+          v.removeEventListener('error', manejarError);
+          procesarColaVideos();
+        };
+
+        const manejarError = () => {
+          if (finalizado) return;
+          v.style.display = 'none';
+          const fallback = v.parentElement ? v.parentElement.querySelector('.video-thumb-fallback') : null;
+          if (fallback) fallback.style.display = 'block';
+          finalizar();
+        };
+
+        v.addEventListener('loadeddata', finalizar, { once: true });
+        v.addEventListener('seeked', finalizar, { once: true });
+        v.addEventListener('error', manejarError, { once: true });
+
+        setTimeout(() => {
+          if (!finalizado) finalizar();
+        }, 5000);
+
+        v.preload = 'metadata';
+        v.src = dataSrc;
+      }
+    }
+
+    function generarHtmlMiniatura(loteId, a) {
+      const esVid = esArchivoVideo(a.nombre);
+      const mediaId = a.id_media || '';
+      const fallbackSvg = `data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22><rect width=%22100%%22 height=%22100%%22 fill=%22%23222%22/><text x=%2250%%22 y=%2250%%22 fill=%22%23888%22 text-anchor=%22middle%22 dy=%22.3em%22>Media</text></svg>`;
+
+      if (esVid) {
+        const srcVideo = mediaId ? `/api/media?id=${mediaId}#t=0.1` : '';
+        return `
+          <div class="miniatura-wrap miniatura-clickable" onclick="abrirVisorMedia('${loteId}', '${mediaId}')" title="Clic para ver vista previa">
+            <video class="video-thumb-lazy" data-src="${srcVideo}" muted playsinline preload="none"></video>
+            <img class="video-thumb-fallback" src="${fallbackSvg}" alt="Media" style="display:none;">
+          </div>
+        `;
+      } else {
+        const srcFoto = mediaId ? `/api/media?id=${mediaId}` : (a.id_db ? `/api/miniatura?id=${a.id_db}` : fallbackSvg);
+        return `
+          <div class="miniatura-wrap miniatura-clickable" onclick="abrirVisorMedia('${loteId}', '${mediaId}')" title="Clic para ver vista previa">
+            <img class="foto-thumb" src="${srcFoto}" loading="lazy" alt="${escapeHTML(a.nombre)}" onerror="this.onerror=null;this.src='${fallbackSvg}';">
+          </div>
+        `;
+      }
+    }
+
+    let visorLoteIdActual = null;
+    let visorListaActual = [];
+    let visorIndiceActual = -1;
+    let visorArchivoActual = null;
+
+    function abrirVisorMedia(loteId, idMedia) {
+      let listaArchivos = [];
+      if (loteId === 'sin_identificar') {
+        listaArchivos = datosEstado.sin_identificar || [];
+      } else {
+        const todosLotes = (datosEstado.lotes || []).concat(datosEstado.lotes_anteriores || []);
+        const lote = todosLotes.find(l => l.lote_id === loteId);
+        if (lote) {
+          listaArchivos = lote.archivos || [];
+        }
+      }
+
+      if (!listaArchivos.length) return;
+
+      const idx = listaArchivos.findIndex(a => a.id_media === idMedia);
+      if (idx === -1) return;
+
+      visorLoteIdActual = loteId;
+      visorListaActual = listaArchivos;
+      visorIndiceActual = idx;
+
+      mostrarArchivoEnVisor();
+
+      const modal = document.getElementById('modal-visor-media');
+      if (modal) {
+        modal.style.display = 'flex';
+        modal.focus();
+      }
+    }
+
+    function mostrarArchivoEnVisor() {
+      if (visorIndiceActual < 0 || visorIndiceActual >= visorListaActual.length) return;
+      const archivo = visorListaActual[visorIndiceActual];
+      visorArchivoActual = archivo;
+
+      const hNombre = document.getElementById('visor-nombre');
+      const divMeta = document.getElementById('visor-meta');
+      const chk = document.getElementById('visor-chk-seleccion');
+      const lblChk = document.getElementById('visor-lbl-seleccion');
+      const img = document.getElementById('visor-img');
+      const vid = document.getElementById('visor-video');
+      const errBox = document.getElementById('visor-error-formato');
+      const feedback = document.getElementById('visor-copiar-feedback');
+
+      if (feedback) feedback.style.display = 'none';
+      if (errBox) errBox.style.display = 'none';
+
+      if (hNombre) hNombre.innerText = archivo.nombre || '';
+      if (divMeta) {
+        let loteDesc = '';
+        if (visorLoteIdActual === 'sin_identificar') {
+          loteDesc = 'Sin identificar';
+        } else {
+          const todosLotes = (datosEstado.lotes || []).concat(datosEstado.lotes_anteriores || []);
+          const l = todosLotes.find(lot => lot.lote_id === visorLoteIdActual);
+          loteDesc = l ? (l.es_anterior ? `Lote #${l.numero} (Anteriores)` : `Lote #${l.numero}`) : 'Lote';
+        }
+        divMeta.innerText = `${loteDesc} • ${formatearBytes(archivo.tamanio)} • 🕒 ${archivo.fecha_llegada || archivo.fecha || ''}`;
+      }
+
+      if (chk) {
+        if (visorLoteIdActual === 'sin_identificar') {
+          if (lblChk) lblChk.style.display = 'none';
+        } else {
+          if (lblChk) lblChk.style.display = 'flex';
+          const cbTarjeta = document.querySelector(`.chk-lote-${visorLoteIdActual}[data-id="${archivo.id_db}"]`);
+          chk.checked = cbTarjeta ? cbTarjeta.checked : false;
+        }
+      }
+
+      if (img) {
+        img.style.display = 'none';
+        img.removeAttribute('src');
+      }
+      if (vid) {
+        vid.pause();
+        vid.removeAttribute('src');
+        vid.load();
+        vid.style.display = 'none';
+      }
+
+      const mediaId = archivo.id_media || '';
+      const srcUrl = `/api/media?id=${mediaId}`;
+
+      if (esArchivoVideo(archivo.nombre)) {
+        if (vid) {
+          vid.onerror = () => {
+            vid.style.display = 'none';
+            if (errBox) errBox.style.display = 'block';
+          };
+          vid.src = srcUrl;
+          vid.style.display = 'block';
+        }
+      } else {
+        if (img) {
+          img.onerror = () => {
+            img.style.display = 'none';
+            if (errBox) errBox.style.display = 'block';
+          };
+          img.src = srcUrl;
+          img.style.display = 'block';
+        }
+      }
+    }
+
+    function toggleSeleccionVisor(marcado) {
+      if (!visorArchivoActual || !visorLoteIdActual || visorLoteIdActual === 'sin_identificar') return;
+      const cbTarjeta = document.querySelector(`.chk-lote-${visorLoteIdActual}[data-id="${visorArchivoActual.id_db}"]`);
+      if (cbTarjeta) {
+        cbTarjeta.checked = marcado;
+        actualizarSeleccionLote(visorLoteIdActual);
+      }
+    }
+
+    function navegarVisorMedia(delta) {
+      if (!visorListaActual.length) return;
+      const nuevoIdx = visorIndiceActual + delta;
+      if (nuevoIdx >= 0 && nuevoIdx < visorListaActual.length) {
+        visorIndiceActual = nuevoIdx;
+        mostrarArchivoEnVisor();
+      }
+    }
+
+    function cerrarVisorMedia() {
+      const modal = document.getElementById('modal-visor-media');
+      if (modal) modal.style.display = 'none';
+      const vid = document.getElementById('visor-video');
+      if (vid) {
+        vid.pause();
+        vid.removeAttribute('src');
+        vid.load();
+        vid.style.display = 'none';
+      }
+      const img = document.getElementById('visor-img');
+      if (img) {
+        img.removeAttribute('src');
+        img.style.display = 'none';
+      }
+      const errBox = document.getElementById('visor-error-formato');
+      if (errBox) errBox.style.display = 'none';
+
+      visorArchivoActual = null;
+      visorListaActual = [];
+      visorIndiceActual = -1;
+      visorLoteIdActual = null;
+
+      programarSiguienteSondeo(500);
+    }
+
+    function copiarRutaVisor() {
+      if (!visorArchivoActual || !visorArchivoActual.ruta) return;
+      const ruta = visorArchivoActual.ruta;
+      const fb = document.getElementById('visor-copiar-feedback');
+      if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(ruta).then(() => {
+          if (fb) {
+            fb.style.display = 'inline';
+            setTimeout(() => { if (fb) fb.style.display = 'none'; }, 3000);
+          }
+        }).catch(() => {
+          if (typeof prompt !== 'undefined') prompt("Ruta del archivo:", ruta);
+        });
+      } else {
+        if (typeof prompt !== 'undefined') prompt("Ruta del archivo:", ruta);
+      }
+    }
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('keydown', (e) => {
+        const modal = document.getElementById('modal-visor-media');
+        if (!modal || modal.style.display === 'none') return;
+
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          cerrarVisorMedia();
+        } else if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          navegarVisorMedia(-1);
+        } else if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          navegarVisorMedia(1);
+        }
+      });
+    }
+
     function generarHtmlCardLote(lote) {
       const capFoco = (datosEstado.capitulo_foco && datosEstado.capitulo_foco.habilitado) ? datosEstado.capitulo_foco : 
                       ((datosEstado.capitulo_activo && datosEstado.capitulo_activo.habilitado) ? datosEstado.capitulo_activo : null);
@@ -1207,9 +1522,7 @@
                 <div class="chk-container">
                   <input type="checkbox" class="chk-archivo chk-lote-${lote.lote_id}" data-id="${a.id_db}" ${isChecked ? 'checked' : ''} onchange="actualizarSeleccionLote('${lote.lote_id}')">
                 </div>
-                <div class="miniatura-wrap">
-                  <img src="/api/miniatura?id=${a.id_db}" alt="${a.nombre}" onerror="this.onerror=null;this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22><rect width=%22100%%22 height=%22100%%22 fill=%22%23222%22/><text x=%2250%%22 y=%2250%%22 fill=%22%23888%22 text-anchor=%22middle%22 dy=%22.3em%22>Media</text></svg>';">
-                </div>
+                ${generarHtmlMiniatura(lote.lote_id, a)}
                 <div class="archivo-meta">
                   <div class="archivo-nombre" title="${a.nombre}">${escapeHTML(a.nombre)} ${badgeDup}</div>
                   <div class="archivo-peso">${formatearBytes(a.tamanio)}</div>
@@ -1290,9 +1603,7 @@
                 <div class="chk-container">
                   <input type="checkbox" class="chk-archivo chk-lote-${lote.lote_id}" data-id="${a.id_db}" onchange="actualizarSeleccionLote('${lote.lote_id}')">
                 </div>
-                <div class="miniatura-wrap">
-                  <img src="/api/miniatura?id=${a.id_db}" alt="${a.nombre}" onerror="this.onerror=null;this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22><rect width=%22100%%22 height=%22100%%22 fill=%22%23222%22/><text x=%2250%%22 y=%2250%%22 fill=%22%23888%22 text-anchor=%22middle%22 dy=%22.3em%22>Media</text></svg>';">
-                </div>
+                ${generarHtmlMiniatura(lote.lote_id, a)}
                 <div class="archivo-meta">
                   <div class="archivo-nombre" title="${a.nombre}">${escapeHTML(a.nombre)} ${badgeDup}</div>
                   <div class="archivo-peso">${formatearBytes(a.tamanio)}</div>
@@ -1330,6 +1641,7 @@
       }
       cont.innerHTML = lotesActivos.map(lote => generarHtmlCardLote(lote)).join('');
       actualizarConteoGlobalSeleccion();
+      inicializarLazyLoaderVideos();
     }
 
     function renderLotesIncremental() {
@@ -1364,6 +1676,7 @@
         }
       });
       actualizarConteoGlobalSeleccion();
+      inicializarLazyLoaderVideos();
     }
 
     function renderLotesAnteriores() {
@@ -1397,6 +1710,7 @@
       }
 
       cont.innerHTML = lotesAnt.map(lote => generarHtmlCardLoteAnterior(lote)).join('');
+      inicializarLazyLoaderVideos();
     }
 
     function renderLotesAnterioresIncremental() {
@@ -1447,6 +1761,7 @@
           cont.appendChild(nuevaCard);
         }
       });
+      inicializarLazyLoaderVideos();
     }
 
     function actualizarConteoGlobalSeleccion() {
@@ -1610,12 +1925,17 @@
       cont.innerHTML = `
         <table>
           <thead>
-            <tr><th>Archivo</th><th>Tamaño</th><th>Acción</th></tr>
+            <tr><th style="width:70px;">Vista</th><th>Archivo</th><th>Tamaño</th><th>Acción</th></tr>
           </thead>
           <tbody>
             ${datosEstado.sin_identificar.map(a => `
               <tr>
-                <td>${a.nombre}</td>
+                <td style="padding:6px;">
+                  <div style="width:60px; height:45px; border-radius:4px; overflow:hidden;">
+                    ${generarHtmlMiniatura('sin_identificar', a)}
+                  </div>
+                </td>
+                <td><span style="cursor:pointer; font-weight:500;" onclick="abrirVisorMedia('sin_identificar', '${a.id_media}')" title="Clic para vista previa">${escapeHTML(a.nombre)}</span></td>
                 <td>${formatearBytes(a.tamanio)}</td>
                 <td>
                   <button class="btn-accion" style="padding:4px 8px;font-size:0.75rem;" onclick="clasificarSinId('${a.hash}', '${a.ruta.replace(/'/g, "\\\\\\'")}', true)">Del Proyecto</button>
@@ -1626,6 +1946,7 @@
           </tbody>
         </table>
       `;
+      inicializarLazyLoaderVideos();
     }
 
     async function clasificarSinId(hash, ruta, esProyecto) {

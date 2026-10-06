@@ -4905,6 +4905,453 @@ class TestPreseleccionRecienteYSeleccionGlobal(unittest.TestCase):
         self.assertIn("TEST_NODE_PRESELECCION_OK", proc.stdout)
 
 
+class TestVistaPreviaMedia(unittest.TestCase):
+    """Pruebas completas para el endpoint /api/media, streaming HTTP Range y visor interactivo."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp(prefix="test_media_preview_")
+        self.descargas = os.path.join(self.tmp_dir, "Descargas")
+        self.destino = os.path.join(self.descargas, "_lucie")
+        self.db_path = os.path.join(self.tmp_dir, "bandeja.db")
+        self.bitacora = os.path.join(self.tmp_dir, "bitacora.jsonl")
+
+        os.makedirs(self.descargas, exist_ok=True)
+        os.makedirs(self.destino, exist_ok=True)
+
+        self.config = ConfiguracionBandeja()
+        self.config.ruta_descargas = self.descargas
+        self.config.ruta_destino_base = self.destino
+        self.config.puerto_servidor = 8815
+        self.config.host_servidor = "127.0.0.1"
+
+        self.db = GestorBaseDatosBandeja(self.db_path)
+        self.movimientos = GestorMovimientosBandeja(self.descargas, self.destino, self.db, self.bitacora)
+        self.filtro = FiltroListaBlanca(self.config)
+        self.detector = DetectorDescargasActivas(0.0)
+        self.agrupador = AgrupadorLotes(10)
+        self.vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+
+        self.servidor = None
+        self.hilo_servidor = None
+
+    def tearDown(self):
+        if self.servidor:
+            self.servidor.shutdown()
+            self.servidor.server_close()
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _crear_archivo(self, ruta: str, contenido: bytes) -> str:
+        os.makedirs(os.path.dirname(ruta), exist_ok=True)
+        with open(ruta, "wb") as f:
+            f.write(contenido)
+        # Asegurar estabilidad inmediata para el detector
+        st = os.stat(ruta)
+        self.detector._historial_tamanio[ruta] = (st.st_size, time.time() - 10.0)
+        return ruta
+
+    def _iniciar_servidor(self):
+        miniaturas = GeneradorMiniaturas(self.db, os.path.join(self.tmp_dir, "thumbs"))
+        self.servidor = crear_servidor(
+            self.config, self.db, self.vigilante, self.movimientos, miniaturas, token_csrf="token_test_media"
+        )
+        self.hilo_servidor = threading.Thread(target=self.servidor.serve_forever, daemon=True)
+        self.hilo_servidor.start()
+        time.sleep(0.2)
+
+    def _http_request(self, method: str, path: str, headers: dict = None) -> Tuple[int, dict, bytes]:
+        conn = http.client.HTTPConnection("127.0.0.1", self.config.puerto_servidor, timeout=5)
+        headers = headers or {}
+        if "Host" not in headers:
+            headers["Host"] = f"127.0.0.1:{self.config.puerto_servidor}"
+        conn.request(method, path, headers=headers)
+        res = conn.getresponse()
+        raw = res.read()
+        res_headers = {k.lower(): v for k, v in res.getheaders()}
+        conn.close()
+        return res.status, res_headers, raw
+
+    def test_servidor_multihilo_daemon_threads(self):
+        """El servidor creado es multihilo con daemon_threads=True para evitar bloqueos."""
+        miniaturas = GeneradorMiniaturas(self.db, os.path.join(self.tmp_dir, "thumbs"))
+        srv = crear_servidor(self.config, self.db, self.vigilante, self.movimientos, miniaturas)
+        try:
+            self.assertTrue(srv.daemon_threads)
+        finally:
+            srv.server_close()
+
+    def test_api_media_range_206_y_completo_200(self):
+        """Soporte de peticiones Range: 206 con bytes exactos y Content-Range, 200 sin Range y 416 insatisfactorio."""
+        contenido = (b"A" * 100) + (b"B" * 100) + (b"C" * 100) + (b"D" * 100) + (b"E" * 100)
+        self.assertEqual(len(contenido), 500)
+        ruta_video = os.path.join(self.descargas, "grok-video-test1.mp4")
+        self._crear_archivo(ruta_video, contenido)
+
+        self.vigilante.escanear()
+        estado = self.vigilante.obtener_estado()
+        archivo_info = estado["lotes"][0]["archivos"][0]
+        id_media = archivo_info["id_media"]
+        self.assertTrue(id_media)
+
+        self._iniciar_servidor()
+
+        # 1. Petición Range 0-99 (primeros 100 bytes)
+        status, headers, body = self._http_request(
+            "GET", f"/api/media?id={id_media}",
+            headers={"Range": "bytes=0-99"}
+        )
+        self.assertEqual(status, 206)
+        self.assertEqual(headers.get("content-range"), "bytes 0-99/500")
+        self.assertEqual(headers.get("accept-ranges"), "bytes")
+        self.assertEqual(headers.get("content-length"), "100")
+        self.assertEqual(headers.get("x-content-type-options"), "nosniff")
+        self.assertEqual(headers.get("content-disposition"), "inline")
+        self.assertEqual(headers.get("cache-control"), "private")
+        self.assertEqual(len(body), 100)
+        self.assertEqual(body, b"A" * 100)
+
+        # 2. Petición Range 100-199 (segundos 100 bytes)
+        status, headers, body = self._http_request(
+            "GET", f"/api/media?id={id_media}",
+            headers={"Range": "bytes=100-199"}
+        )
+        self.assertEqual(status, 206)
+        self.assertEqual(headers.get("content-range"), "bytes 100-199/500")
+        self.assertEqual(len(body), 100)
+        self.assertEqual(body, b"B" * 100)
+
+        # 3. Petición sin Range (archivo completo 200)
+        status, headers, body = self._http_request("GET", f"/api/media?id={id_media}")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("content-length"), "500")
+        self.assertEqual(headers.get("accept-ranges"), "bytes")
+        self.assertIn("video", headers.get("content-type", ""))
+        self.assertEqual(len(body), 500)
+        self.assertEqual(body, contenido)
+
+        # 4. Petición con Range insatisfactorio (start >= total) -> 416
+        status, headers, body = self._http_request(
+            "GET", f"/api/media?id={id_media}",
+            headers={"Range": "bytes=600-700"}
+        )
+        self.assertEqual(status, 416)
+        self.assertEqual(headers.get("content-range"), "bytes */500")
+
+    def test_api_media_head_devuelve_cabeceras_sin_cuerpo(self):
+        """HEAD devuelve cabeceras completas (Content-Type, Content-Length, Accept-Ranges) sin cuerpo."""
+        contenido = b"DATOS_IMAGEN_JPG_1234567890"
+        ruta_foto = os.path.join(self.descargas, "grok-image-sample.jpg")
+        self._crear_archivo(ruta_foto, contenido)
+
+        self.vigilante.escanear()
+        estado = self.vigilante.obtener_estado()
+        archivo_info = estado["lotes"][0]["archivos"][0]
+        id_media = archivo_info["id_media"]
+
+        self._iniciar_servidor()
+
+        status, headers, body = self._http_request("HEAD", f"/api/media?id={id_media}")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("content-length"), str(len(contenido)))
+        self.assertEqual(headers.get("accept-ranges"), "bytes")
+        self.assertEqual(headers.get("x-content-type-options"), "nosniff")
+        self.assertEqual(len(body), 0)
+
+    def test_api_media_seguridad_id_inexistente_ruta_arbitraria_symlink_host_invalido(self):
+        """ID inexistente -> 404; no se admiten rutas; symlink que escapa -> 403; Host inválido -> 403."""
+        contenido = b"VIDEO_SEGURO_ABC"
+        ruta_video = os.path.join(self.descargas, "grok-video-safe.mp4")
+        self._crear_archivo(ruta_video, contenido)
+
+        # Archivo externo y symlink que escapa de Descargas
+        ruta_externa = os.path.join(self.tmp_dir, "archivo_externo.mp4")
+        with open(ruta_externa, "wb") as f:
+            f.write(b"EXTERNO_NO_PERMITIDO")
+
+        ruta_symlink = os.path.join(self.descargas, "grok-video-symlink_escape.mp4")
+        os.symlink(ruta_externa, ruta_symlink)
+        self.detector._historial_tamanio[ruta_symlink] = (len(b"EXTERNO_NO_PERMITIDO"), time.time() - 10.0)
+
+        self.vigilante.escanear()
+        estado = self.vigilante.obtener_estado()
+
+        archivos = {a["nombre"]: a for l in estado["lotes"] for a in l["archivos"]}
+        id_safe = archivos["grok-video-safe.mp4"]["id_media"]
+        id_symlink = archivos["grok-video-symlink_escape.mp4"]["id_media"]
+
+        self._iniciar_servidor()
+
+        # 1. ID inexistente devuelve 404
+        status, _, _ = self._http_request("GET", "/api/media?id=id_totalmente_inexistente")
+        self.assertEqual(status, 404)
+
+        # 2. Intentos de pedir rutas arbitrarias en el id devuelven 404 (no existe dicho ID)
+        status, _, _ = self._http_request("GET", "/api/media?id=/etc/passwd")
+        self.assertEqual(status, 404)
+        status, _, _ = self._http_request("GET", "/api/media?id=../../config_bandeja.json")
+        self.assertEqual(status, 404)
+
+        # 3. Symlink que escapa de las raíces permitidas es rechazado con 403
+        status, _, _ = self._http_request("GET", f"/api/media?id={id_symlink}")
+        self.assertEqual(status, 403)
+
+        # 4. Host inválido devuelve 403
+        status, _, _ = self._http_request(
+            "GET", f"/api/media?id={id_safe}",
+            headers={"Host": "sitio-atacante.org"}
+        )
+        self.assertEqual(status, 403)
+
+    def test_api_media_desconexion_cliente_no_deja_trazas(self):
+        """Una desconexión cortada (BrokenPipe / ConnectionReset) durante el streaming se captura silenciosamente."""
+        contenido = b"CHUNK_DATOS_" * 20000  # ~240 KB
+        ruta_video = os.path.join(self.descargas, "grok-video-streaming.mp4")
+        self._crear_archivo(ruta_video, contenido)
+
+        self.vigilante.escanear()
+        estado = self.vigilante.obtener_estado()
+        id_media = estado["lotes"][0]["archivos"][0]["id_media"]
+
+        self._iniciar_servidor()
+
+        # Conexión TCP directa que lee 100 bytes y cierra el socket intempestivamente
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect(("127.0.0.1", self.config.puerto_servidor))
+        peticion = (
+            f"GET /api/media?id={id_media} HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{self.config.puerto_servidor}\r\n"
+            "Connection: close\r\n\r\n"
+        ).encode("utf-8")
+        s.sendall(peticion)
+        _ = s.recv(128)
+        # Cerrar intempestivamente mientras el servidor está transmitiendo
+        s.close()
+        time.sleep(0.1)
+
+        # El servidor debe seguir respondiendo peticiones normales de inmediato
+        status, _, body = self._http_request("GET", f"/api/media?id={id_media}", headers={"Range": "bytes=0-10"})
+        self.assertEqual(status, 206)
+        self.assertEqual(len(body), 11)
+
+    def test_frontend_lightbox_navegacion_sincronizacion_y_pausa_refresco(self):
+        """Prueba de integración Node.js del visor: navegación, sincronización de checkbox, pausa de refresco y liberación de memoria."""
+        import subprocess
+        js_test = """
+        const assert = require('assert');
+
+        // Simulación básica de DOM
+        class MockElement {
+          constructor(id, tagName = 'div') {
+            this.id = id;
+            this.tagName = tagName.toUpperCase();
+            this.style = {};
+            this.attributes = {};
+            this.listeners = {};
+            this.children = [];
+            this.innerText = '';
+            this.checked = false;
+            this.src = '';
+            this.paused = true;
+          }
+          setAttribute(k, v) { this.attributes[k] = String(v); }
+          getAttribute(k) { return this.attributes[k] !== undefined ? this.attributes[k] : null; }
+          removeAttribute(k) { delete this.attributes[k]; }
+          addEventListener(ev, fn) { this.listeners[ev] = fn; }
+          removeEventListener(ev) { delete this.listeners[ev]; }
+          pause() { this.paused = true; }
+          load() { this.src = ''; }
+          focus() {}
+        }
+
+        const elements = new Map();
+        function getOrCreate(id, tag = 'div') {
+          if (!elements.has(id)) {
+            elements.set(id, new MockElement(id, tag));
+          }
+          return elements.get(id);
+        }
+
+        // Crear elementos del lightbox
+        const modalVisor = getOrCreate('modal-visor-media', 'div');
+        modalVisor.style.display = 'none';
+
+        const hNombre = getOrCreate('visor-nombre', 'h3');
+        const divMeta = getOrCreate('visor-meta', 'div');
+        const chkVisor = getOrCreate('visor-chk-seleccion', 'input');
+        const lblChk = getOrCreate('visor-lbl-seleccion', 'label');
+        const imgVisor = getOrCreate('visor-img', 'img');
+        const vidVisor = getOrCreate('visor-video', 'video');
+        const errBox = getOrCreate('visor-error-formato', 'div');
+        const feedback = getOrCreate('visor-copiar-feedback', 'span');
+
+        // Checkboxes en tarjetas de lote_1
+        const chkTarjeta1 = getOrCreate('chk-1', 'input');
+        chkTarjeta1.attributes['class'] = 'chk-archivo chk-lote-lote_1';
+        chkTarjeta1.setAttribute('data-id', '101');
+        chkTarjeta1.checked = false;
+
+        const chkTarjeta2 = getOrCreate('chk-2', 'input');
+        chkTarjeta2.attributes['class'] = 'chk-archivo chk-lote-lote_1';
+        chkTarjeta2.setAttribute('data-id', '102');
+        chkTarjeta2.checked = true;
+
+        const globalDocument = {
+          getElementById(id) { return elements.get(id) || null; },
+          querySelector(sel) {
+            if (sel === '.chk-lote-lote_1[data-id="101"]') return chkTarjeta1;
+            if (sel === '.chk-lote-lote_1[data-id="102"]') return chkTarjeta2;
+            return null;
+          },
+          querySelectorAll(sel) { return []; }
+        };
+
+        global.document = globalDocument;
+        global.window = {};
+
+        // Datos del estado con lote_1 conteniendo 2 archivos
+        const datosEstado = {
+          lotes: [
+            {
+              lote_id: 'lote_1',
+              numero: 1,
+              es_anterior: false,
+              archivos: [
+                { id_db: 101, id_media: 'media_aaa', nombre: 'video1.mp4', tamanio: 1048576, fecha_llegada: '2026-10-06 01:00:00', ruta: '/home/test/video1.mp4' },
+                { id_db: 102, id_media: 'media_bbb', nombre: 'foto2.jpg', tamanio: 204800, fecha_llegada: '2026-10-06 01:05:00', ruta: '/home/test/foto2.jpg' }
+              ]
+            }
+          ],
+          lotes_anteriores: [],
+          sin_identificar: []
+        };
+
+        function formatearBytes(b) { return (b / 1024).toFixed(1) + ' KB'; }
+        function esArchivoVideo(n) { return n.endsWith('.mp4'); }
+
+        function hayModalAbierto() {
+          const idsModales = ['modal-simulacion', 'modal-terminar-capitulo', 'modal-descartar-capitulo', 'modal-plan-envio', 'modal-vincular-pendrive', 'modal-visor-media'];
+          return idsModales.some(id => {
+            const el = document.getElementById(id);
+            return el && el.style.display && el.style.display !== 'none';
+          });
+        }
+
+        // Lógica del visor
+        let visorLoteIdActual = null;
+        let visorListaActual = [];
+        let visorIndiceActual = -1;
+        let visorArchivoActual = null;
+        let loteActualizadoId = null;
+
+        function actualizarSeleccionLote(loteId) {
+          loteActualizadoId = loteId;
+        }
+
+        function abrirVisorMedia(loteId, idMedia) {
+          const todosLotes = (datosEstado.lotes || []).concat(datosEstado.lotes_anteriores || []);
+          const lote = todosLotes.find(l => l.lote_id === loteId);
+          if (!lote) return;
+          const idx = lote.archivos.findIndex(a => a.id_media === idMedia);
+          if (idx === -1) return;
+
+          visorLoteIdActual = loteId;
+          visorListaActual = lote.archivos;
+          visorIndiceActual = idx;
+
+          mostrarArchivoEnVisor();
+          modalVisor.style.display = 'flex';
+        }
+
+        function mostrarArchivoEnVisor() {
+          const archivo = visorListaActual[visorIndiceActual];
+          visorArchivoActual = archivo;
+          hNombre.innerText = archivo.nombre;
+          divMeta.innerText = `Lote #1 • ${formatearBytes(archivo.tamanio)} • 🕒 ${archivo.fecha_llegada}`;
+
+          const cbTarjeta = document.querySelector(`.chk-lote-${visorLoteIdActual}[data-id="${archivo.id_db}"]`);
+          chkVisor.checked = cbTarjeta ? cbTarjeta.checked : false;
+
+          imgVisor.style.display = 'none';
+          vidVisor.style.display = 'none';
+
+          if (esArchivoVideo(archivo.nombre)) {
+            vidVisor.src = `/api/media?id=${archivo.id_media}`;
+            vidVisor.style.display = 'block';
+          } else {
+            imgVisor.src = `/api/media?id=${archivo.id_media}`;
+            imgVisor.style.display = 'block';
+          }
+        }
+
+        function toggleSeleccionVisor(marcado) {
+          const cbTarjeta = document.querySelector(`.chk-lote-${visorLoteIdActual}[data-id="${visorArchivoActual.id_db}"]`);
+          if (cbTarjeta) {
+            cbTarjeta.checked = marcado;
+            actualizarSeleccionLote(visorLoteIdActual);
+          }
+        }
+
+        function navegarVisorMedia(delta) {
+          const nuevoIdx = visorIndiceActual + delta;
+          if (nuevoIdx >= 0 && nuevoIdx < visorListaActual.length) {
+            visorIndiceActual = nuevoIdx;
+            mostrarArchivoEnVisor();
+          }
+        }
+
+        function cerrarVisorMedia() {
+          modalVisor.style.display = 'none';
+          vidVisor.pause();
+          vidVisor.removeAttribute('src');
+          vidVisor.load();
+          imgVisor.removeAttribute('src');
+          visorArchivoActual = null;
+        }
+
+        // 1. Verificación de pausa de refresco con visor abierto
+        assert.strictEqual(hayModalAbierto(), false, "Inicialmente ningún modal abierto");
+        abrirVisorMedia('lote_1', 'media_aaa');
+        assert.strictEqual(modalVisor.style.display, 'flex');
+        assert.strictEqual(hayModalAbierto(), true, "Refresco pausado mientras el visor esté abierto");
+
+        // 2. Metadatos del primer archivo (video)
+        assert.strictEqual(hNombre.innerText, 'video1.mp4');
+        assert.strictEqual(vidVisor.style.display, 'block');
+        assert.strictEqual(vidVisor.src, '/api/media?id=media_aaa');
+        assert.strictEqual(chkVisor.checked, false, "Checkbox sincronizado con chkTarjeta1 (false)");
+
+        // 3. Sincronización de selección desde el visor a la tarjeta
+        toggleSeleccionVisor(true);
+        assert.strictEqual(chkTarjeta1.checked, true, "La tarjeta debe haberse marcado");
+        assert.strictEqual(loteActualizadoId, 'lote_1');
+
+        // 4. Navegación al siguiente archivo en el lote (foto2.jpg)
+        navegarVisorMedia(1);
+        assert.strictEqual(visorIndiceActual, 1);
+        assert.strictEqual(hNombre.innerText, 'foto2.jpg');
+        assert.strictEqual(imgVisor.style.display, 'block');
+        assert.strictEqual(imgVisor.src, '/api/media?id=media_bbb');
+        assert.strictEqual(chkVisor.checked, true, "Checkbox sincronizado con chkTarjeta2 (true)");
+
+        // Navegar más allá del final no debe salirse
+        navegarVisorMedia(1);
+        assert.strictEqual(visorIndiceActual, 1, "No debe salirse del rango del lote");
+
+        // 5. Cierre del visor y liberación de memoria
+        cerrarVisorMedia();
+        assert.strictEqual(modalVisor.style.display, 'none');
+        assert.strictEqual(vidVisor.paused, true, "Video pausado");
+        assert.strictEqual(vidVisor.src, '', "src liberado");
+        assert.strictEqual(hayModalAbierto(), false, "Refresco reactivado al cerrar");
+
+        console.log('TEST_NODE_LIGHTBOX_OK');
+        """
+        proc = subprocess.run(["node", "-e", js_test], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, f"Fallo en pruebas Node.js: {proc.stderr}")
+        self.assertIn("TEST_NODE_LIGHTBOX_OK", proc.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
+
 

@@ -379,7 +379,38 @@
         <button class="btn-confirmar" id="btn-confirmar-vincular" onclick="confirmarVincularPendrive()">Confirmar y vincular</button>
       </div>
     </div>
+  <!-- Modal Visor Multimedia (Lightbox) -->
+  <div id="modal-visor-media" class="modal-overlay" style="display:none;" tabindex="-1">
+    <div class="modal-content modal-visor-content">
+      <div class="visor-header">
+        <div class="visor-info">
+          <h3 id="visor-nombre">archivo.mp4</h3>
+          <div id="visor-meta" class="visor-meta-sub">Lote #1 &bull; 15.2 MB &bull; 🕒 2026-10-06 04:30:00</div>
+        </div>
+        <div class="visor-controles-top">
+          <label id="visor-lbl-seleccion" class="visor-chk-label" title="Sincronizado con la selección de la tarjeta">
+            <input type="checkbox" id="visor-chk-seleccion" onchange="toggleSeleccionVisor(this.checked)">
+            <span>Seleccionado</span>
+          </label>
+          <button type="button" class="visor-btn-cerrar" onclick="cerrarVisorMedia()" title="Cerrar (Esc)">&times;</button>
+        </div>
+      </div>
+      <div class="visor-body">
+        <button type="button" class="visor-nav visor-nav-prev" onclick="navegarVisorMedia(-1)" title="Anterior (&larr;)">&lsaquo;</button>
+        <div class="visor-media-container" id="visor-media-container">
+          <img id="visor-img" style="display:none;" alt="">
+          <video id="visor-video" controls playsinline style="display:none;"></video>
+          <div id="visor-error-formato" class="visor-error-box" style="display:none;">
+            <p style="font-size:1.1rem; margin-bottom:12px; color:var(--text);">El navegador no puede reproducir este formato</p>
+            <button type="button" class="btn-sm" id="visor-btn-copiar-ruta" onclick="copiarRutaVisor()" style="background:var(--accent); color:#000; font-weight:600; padding:6px 16px;">Copiar ruta</button>
+            <span id="visor-copiar-feedback" style="display:none; color:var(--teal); margin-left:8px; font-size:0.85rem;">¡Ruta copiada!</span>
+          </div>
+        </div>
+        <button type="button" class="visor-nav visor-nav-next" onclick="navegarVisorMedia(1)" title="Siguiente (&rarr;)">&rsaquo;</button>
+      </div>
+    </div>
   </div>
+
   <script>
     const CSRF_TOKEN = "__TOKEN_CSRF__";
     const REFRESCO_PANEL_SEGUNDOS = __REFRESCO__;

@@ -16,6 +16,8 @@ import hmac
 import shutil
 import subprocess
 import logging
+import mimetypes
+import socket
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Set, Tuple, Any, Union
@@ -131,19 +133,20 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     miniaturas: GeneradorMiniaturas = None
     token_csrf: str = ""
 
-    def _enviar_json(self, datos: Any, codigo: int = 200):
+    def _enviar_json(self, datos: Any, codigo: int = 200, solo_cabeceras: bool = False):
         cuerpo = json.dumps(datos, ensure_ascii=False).encode("utf-8")
         self.send_response(codigo)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(cuerpo)))
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
-        self.wfile.write(cuerpo)
+        if not solo_cabeceras:
+            self.wfile.write(cuerpo)
 
-    def _enviar_error(self, codigo: int, mensaje: str):
-        self._enviar_json({"error": mensaje, "codigo": codigo}, codigo=codigo)
+    def _enviar_error(self, codigo: int, mensaje: str, solo_cabeceras: bool = False):
+        self._enviar_json({"error": mensaje, "codigo": codigo}, codigo=codigo, solo_cabeceras=solo_cabeceras)
 
-    def _validar_host(self) -> bool:
+    def _validar_host(self, solo_cabeceras: bool = False) -> bool:
         host_header = self.headers.get("Host", "").strip()
         puerto_esperado = str(self.config.puerto_servidor)
         puerto_real = str(self.server.server_address[1]) if hasattr(self, "server") and hasattr(self.server, "server_address") else puerto_esperado
@@ -156,7 +159,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             "localhost"
         }
         if host_header not in hosts_validos:
-            self._enviar_error(HTTPStatus.FORBIDDEN, f"Cabecera Host no permitida: '{host_header}'")
+            self._enviar_error(HTTPStatus.FORBIDDEN, f"Cabecera Host no permitida: '{host_header}'", solo_cabeceras=solo_cabeceras)
             return False
         return True
 
@@ -196,6 +199,34 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         except Exception:
             return None
 
+    def do_HEAD(self):
+        parsed = urlparse(self.path)
+        ruta = parsed.path
+
+        if ruta.startswith("/api/"):
+            if not self._validar_host(solo_cabeceras=True):
+                return
+
+        if ruta == "/api/media":
+            self._servir_media(parsed.query, solo_cabeceras=True)
+        elif ruta in ("/", "/index.html", "/panel.html"):
+            self._servir_html_spa(solo_cabeceras=True)
+        elif ruta == "/panel.js":
+            self._servir_estatico("panel.js", "application/javascript; charset=utf-8", solo_cabeceras=True)
+        elif ruta == "/panel.css":
+            self._servir_estatico("panel.css", "text/css; charset=utf-8", solo_cabeceras=True)
+        elif ruta == "/api/estado-version":
+            token = self.vigilante.obtener_token_version()
+            estado_pen = getattr(self.vigilante, "_estado_pendrive", {})
+            self._enviar_json({
+                "version": token,
+                "refresco_panel_segundos": getattr(self.config, "refresco_panel_segundos", 4),
+                "banner_pendrive": estado_pen.get("banner_reactivo"),
+                "horas_material_reciente": getattr(self.config, "horas_material_reciente", 168)
+            }, solo_cabeceras=True)
+        else:
+            self._enviar_error(HTTPStatus.NOT_FOUND, "Ruta no encontrada.", solo_cabeceras=True)
+
     def do_GET(self):
         parsed = urlparse(self.path)
         ruta = parsed.path
@@ -210,6 +241,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._servir_estatico("panel.js", "application/javascript; charset=utf-8")
         elif ruta == "/panel.css":
             self._servir_estatico("panel.css", "text/css; charset=utf-8")
+        elif ruta == "/api/media":
+            self._servir_media(parsed.query, solo_cabeceras=False)
         elif ruta == "/api/estado-version":
             token = self.vigilante.obtener_token_version()
             estado_pen = getattr(self.vigilante, "_estado_pendrive", {})
@@ -341,6 +374,153 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "public, max-age=3600")
         self.end_headers()
         self.wfile.write(datos)
+
+    def _servir_media(self, query_string: str, solo_cabeceras: bool = False):
+        params = parse_qs(query_string)
+        media_id = params.get("id", [None])[0]
+        if not media_id:
+            self._enviar_error(HTTPStatus.NOT_FOUND, "Identificador multimedia no especificado.", solo_cabeceras=solo_cabeceras)
+            return
+
+        if not self.vigilante:
+            self._enviar_error(HTTPStatus.NOT_FOUND, "Servicio de vigilancia no disponible.", solo_cabeceras=solo_cabeceras)
+            return
+
+        ruta = self.vigilante.resolver_ruta_media(str(media_id))
+        if not ruta:
+            self._enviar_error(HTTPStatus.NOT_FOUND, "Archivo multimedia no encontrado.", solo_cabeceras=solo_cabeceras)
+            return
+
+        # Resolver con realpath para mitigar enlaces simbólicos y evasión de directorio
+        real_ruta = os.path.realpath(ruta)
+
+        raices_permitidas = [
+            os.path.realpath(self.config.ruta_descargas),
+            os.path.realpath(self.config.ruta_destino_base)
+        ]
+
+        dentro_de_raices = False
+        for raiz in raices_permitidas:
+            try:
+                if os.path.commonpath([real_ruta, raiz]) == raiz:
+                    dentro_de_raices = True
+                    break
+            except (ValueError, OSError):
+                continue
+
+        if not dentro_de_raices:
+            self._enviar_error(HTTPStatus.FORBIDDEN, "Acceso no permitido: el archivo está fuera de las raíces autorizadas.", solo_cabeceras=solo_cabeceras)
+            return
+
+        if not os.path.isfile(real_ruta):
+            self._enviar_error(HTTPStatus.NOT_FOUND, "El archivo solicitado no existe en disco.", solo_cabeceras=solo_cabeceras)
+            return
+
+        try:
+            st = os.stat(real_ruta)
+            total_bytes = st.st_size
+            mtime = st.st_mtime
+        except OSError:
+            self._enviar_error(HTTPStatus.NOT_FOUND, "Error al acceder a los metadatos del archivo.", solo_cabeceras=solo_cabeceras)
+            return
+
+        mime_type, _ = mimetypes.guess_type(real_ruta)
+        if not mime_type:
+            _, ext = os.path.splitext(real_ruta.lower())
+            if ext in (".mp4", ".m4v"):
+                mime_type = "video/mp4"
+            elif ext == ".webm":
+                mime_type = "video/webm"
+            elif ext == ".mov":
+                mime_type = "video/quicktime"
+            elif ext in (".jpg", ".jpeg"):
+                mime_type = "image/jpeg"
+            elif ext == ".png":
+                mime_type = "image/png"
+            elif ext == ".webp":
+                mime_type = "image/webp"
+            else:
+                mime_type = "application/octet-stream"
+
+        etag = f'"{total_bytes}-{int(mtime)}"'
+        range_header = self.headers.get("Range", "").strip()
+
+        es_rango = False
+        start = 0
+        end = total_bytes - 1
+
+        if range_header.startswith("bytes="):
+            rango_val = range_header[6:].strip()
+            if "," in rango_val:
+                rango_val = rango_val.split(",")[0].strip()
+
+            partes = rango_val.split("-")
+            if len(partes) == 2:
+                str_start, str_end = partes[0].strip(), partes[1].strip()
+                try:
+                    if str_start and str_end:
+                        start = int(str_start)
+                        end = int(str_end)
+                    elif str_start and not str_end:
+                        start = int(str_start)
+                        end = total_bytes - 1
+                    elif not str_start and str_end:
+                        sufijo = int(str_end)
+                        start = max(0, total_bytes - sufijo)
+                        end = total_bytes - 1
+                    else:
+                        start = 0
+                        end = total_bytes - 1
+
+                    if start < 0 or start >= total_bytes or end < start:
+                        self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                        self.send_header("Content-Range", f"bytes */{total_bytes}")
+                        self.send_header("Accept-Ranges", "bytes")
+                        self.send_header("Content-Length", "0")
+                        self.send_header("Cache-Control", "private")
+                        self.end_headers()
+                        return
+
+                    end = min(end, total_bytes - 1)
+                    es_rango = True
+                except ValueError:
+                    es_rango = False
+                    start = 0
+                    end = total_bytes - 1
+
+        longitud = end - start + 1 if es_rango else total_bytes
+
+        codigo_respuesta = HTTPStatus.PARTIAL_CONTENT if es_rango else HTTPStatus.OK
+        self.send_response(codigo_respuesta)
+        self.send_header("Content-Type", mime_type)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(longitud))
+        if es_rango:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{total_bytes}")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Disposition", "inline")
+        self.send_header("ETag", etag)
+        self.send_header("Cache-Control", "private")
+        self.end_headers()
+
+        if solo_cabeceras:
+            return
+
+        chunk_size = 65536
+        restante = longitud
+        try:
+            with open(real_ruta, "rb") as f:
+                if start > 0:
+                    f.seek(start)
+                while restante > 0:
+                    a_leer = min(chunk_size, restante)
+                    bloque = f.read(a_leer)
+                    if not bloque:
+                        break
+                    self.wfile.write(bloque)
+                    restante -= len(bloque)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, socket.error):
+            pass
 
     def do_POST(self):
         parsed = urlparse(self.path)
@@ -897,22 +1077,22 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         self._enviar_error(HTTPStatus.METHOD_NOT_ALLOWED, "Método PATCH no permitido.")
 
 
-    def _servir_estatico(self, nombre_archivo: str, content_type: str):
+    def _servir_estatico(self, nombre_archivo: str, content_type: str, solo_cabeceras: bool = False):
         # Lista blanca fija e inmutable
         if nombre_archivo not in ("panel.js", "panel.css"):
-            self._enviar_error(HTTPStatus.NOT_FOUND, "Archivo estático no permitido.")
+            self._enviar_error(HTTPStatus.NOT_FOUND, "Archivo estático no permitido.", solo_cabeceras=solo_cabeceras)
             return
 
         ruta_archivo = os.path.join(RUTA_WEB, nombre_archivo)
         if not os.path.isfile(ruta_archivo):
-            self._enviar_error(HTTPStatus.NOT_FOUND, "Recurso no encontrado.")
+            self._enviar_error(HTTPStatus.NOT_FOUND, "Recurso no encontrado.", solo_cabeceras=solo_cabeceras)
             return
 
         try:
             with open(ruta_archivo, "rb") as f:
                 cuerpo = f.read()
         except Exception:
-            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Error al leer recurso estático.")
+            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Error al leer recurso estático.", solo_cabeceras=solo_cabeceras)
             return
 
         self.send_response(HTTPStatus.OK)
@@ -920,15 +1100,16 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(cuerpo)))
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
-        self.wfile.write(cuerpo)
+        if not solo_cabeceras:
+            self.wfile.write(cuerpo)
 
-    def _servir_html_spa(self):
+    def _servir_html_spa(self, solo_cabeceras: bool = False):
         ruta_archivo = os.path.join(RUTA_WEB, "panel.html")
         try:
             with open(ruta_archivo, "r", encoding="utf-8") as f:
                 plantilla = f.read()
         except Exception:
-            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Error al cargar la plantilla web.")
+            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Error al cargar la plantilla web.", solo_cabeceras=solo_cabeceras)
             return
 
         refresco = str(getattr(self.config, "refresco_panel_segundos", 4))
@@ -947,7 +1128,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(cuerpo)))
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
-        self.wfile.write(cuerpo)
+        if not solo_cabeceras:
+            self.wfile.write(cuerpo)
 
 
 def crear_servidor(config: ConfiguracionBandeja, db: GestorBaseDatosBandeja,
@@ -967,6 +1149,7 @@ def crear_servidor(config: ConfiguracionBandeja, db: GestorBaseDatosBandeja,
     CustomHandler.token_csrf = token
 
     servidor = ThreadingHTTPServer((config.host_servidor, config.puerto_servidor), CustomHandler)
+    servidor.daemon_threads = True
     if config.puerto_servidor == 0:
         config.puerto_servidor = servidor.server_address[1]
     return servidor
