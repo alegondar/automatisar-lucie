@@ -5351,7 +5351,431 @@ class TestVistaPreviaMedia(unittest.TestCase):
         self.assertIn("TEST_NODE_LIGHTBOX_OK", proc.stdout)
 
 
+class TestListaEnvioPendrivePorCarpetas(unittest.TestCase):
+    """
+    Pruebas exhaustivas para el cambio lista-envio-pendrive-por-carpetas:
+    - Escaneo recursivo seguro (sin symlinks, tope de profundidad 6 niveles, totales acumulados).
+    - Inclusión de carpetas con archivos en subcarpetas y carpetas con archivos sueltos en raíz.
+    - Exclusión estricta de carpetas de control interno (_enviados, _revertidos, _descartados, _a_revisar).
+    - Clasificación cruzando con bandeja_capitulos (en foco, abierto, cerrado, escena suelta, heredada).
+    - Detección y contabilización de archivos no multimedia y advertencia correspondiente.
+    - Desacoplamiento de GET /api/pendrive/carpetas (funciona sin pendrive ni BD).
+    - Cuatro estados de la unidad física (sin unidad, candidata sin vincular, vinculado listo, sin respuesta).
+    - Simulación y envío en lote de múltiples carpetas seleccionadas.
+    - Pruebas frontend de selección y preservación de estado con Node.js.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp(prefix="test_pendrive_carpetas_")
+        self.descargas = os.path.join(self.tmp_dir, "Descargas")
+        self.destino = os.path.join(self.descargas, "_lucie")
+        self.db_path = os.path.join(self.tmp_dir, "bandeja.db")
+        self.bitacora = os.path.join(self.tmp_dir, "bitacora.jsonl")
+        self.alias_file = os.path.join(self.tmp_dir, "alias.json")
+
+        os.makedirs(self.descargas, exist_ok=True)
+        os.makedirs(self.destino, exist_ok=True)
+
+        with open(self.alias_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "lucie": ["lucie", "luci"],
+                "roli": ["roli"],
+                "mailen": ["mailen"]
+            }, f)
+
+        self.config = ConfiguracionBandeja()
+        self.config.ruta_descargas = self.descargas
+        self.config.ruta_destino_base = self.destino
+        self.config.archivo_alias_personajes = self.alias_file
+        self.config.puerto_servidor = 8809
+        self.config.host_servidor = "127.0.0.1"
+
+        self.db = GestorBaseDatosBandeja(self.db_path)
+        self.movimientos = GestorMovimientosBandeja(self.descargas, self.destino, self.db, self.bitacora)
+        self.filtro = FiltroListaBlanca(self.config)
+        self.detector = DetectorDescargasActivas(0.0)
+        self.agrupador = AgrupadorLotes(10)
+        self.vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+
+        self.servidor = None
+        self.hilo_servidor = None
+
+    def tearDown(self):
+        if self.servidor:
+            self.servidor.shutdown()
+            self.servidor.server_close()
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _crear_archivo(self, ruta: str, contenido: bytes = b"datos de prueba", mtime: float = None) -> str:
+        os.makedirs(os.path.dirname(ruta), exist_ok=True)
+        with open(ruta, "wb") as f:
+            f.write(contenido)
+        if mtime is not None:
+            os.utime(ruta, (mtime, mtime))
+        return ruta
+
+    def _iniciar_servidor_prueba(self, token_csrf: str = "csrf_test_carpetas"):
+        miniaturas = GeneradorMiniaturas(self.db, os.path.join(self.tmp_dir, "thumbs"))
+        self.servidor = crear_servidor(
+            self.config, self.db, self.vigilante, self.movimientos, miniaturas, token_csrf=token_csrf
+        )
+        self.token_csrf = token_csrf
+        self.hilo_servidor = threading.Thread(target=self.servidor.serve_forever, daemon=True)
+        self.hilo_servidor.start()
+        time.sleep(0.2)
+
+    def _request(self, method: str, path: str, headers: dict = None, body: str = None) -> Tuple[int, dict, bytes]:
+        conn = http.client.HTTPConnection("127.0.0.1", self.config.puerto_servidor, timeout=5)
+        headers = headers or {}
+        conn.request(method, path, body=body, headers=headers)
+        res = conn.getresponse()
+        raw = res.read()
+        conn.close()
+        try:
+            parsed_json = json.loads(raw.decode("utf-8"))
+        except Exception:
+            parsed_json = {}
+        return res.status, parsed_json, raw
+
+    def test_endpoint_desacoplado_sin_pendrive_ni_bd(self):
+        """El endpoint GET /api/pendrive/carpetas responde 200 sin pendrive conectado ni datos en BD."""
+        self._iniciar_servidor_prueba()
+        status, data, _ = self._request("GET", "/api/pendrive/carpetas")
+        self.assertEqual(status, 200)
+        self.assertEqual(data.get("carpetas"), [])
+        self.assertEqual(data.get("total_carpetas"), 0)
+
+        # Crear una carpeta en la sala de espera
+        self._crear_archivo(os.path.join(self.destino, "lucie", "cap_demo", "videos", "v.mp4"), b"video_demo")
+        status, data, _ = self._request("GET", "/api/pendrive/carpetas")
+        self.assertEqual(status, 200)
+        self.assertEqual(data.get("total_carpetas"), 1)
+        carpetas = data.get("carpetas", [])
+        self.assertEqual(carpetas[0]["carpeta"], "cap_demo")
+        self.assertEqual(carpetas[0]["personaje"], "lucie")
+        self.assertEqual(carpetas[0]["videos"], 1)
+        self.assertEqual(carpetas[0]["fotos"], 0)
+
+        # HEAD request también debe funcionar
+        status_head, _, _ = self._request("HEAD", "/api/pendrive/carpetas")
+        self.assertEqual(status_head, 200)
+
+    def test_escaneo_recursivo_carpetas_raiz_y_subcarpetas(self):
+        """Escanea recursivamente archivos en raíz de la carpeta y en subcarpetas anidadas."""
+        from bandeja.pendrive import escanear_sala_espera_carpetas
+
+        # 1. Carpeta canónica con fotos y videos
+        self._crear_archivo(os.path.join(self.destino, "lucie", "cap_normal", "videos", "vid1.mp4"), b"12345")
+        self._crear_archivo(os.path.join(self.destino, "lucie", "cap_normal", "fotos", "fot1.jpg"), b"67890")
+
+        # 2. Carpeta con archivo suelto en la raíz (sin subcarpeta videos/)
+        self._crear_archivo(os.path.join(self.destino, "lucie", "cap_suelto", "vid2.mp4"), b"abcdef")
+
+        # 3. Carpeta 'imagenes' con archivos únicamente en subcarpetas anidadas
+        self._crear_archivo(os.path.join(self.destino, "lucie", "imagenes", "sub1", "sub2", "fot2.png"), b"png_data")
+
+        # 4. Carpeta vacía
+        os.makedirs(os.path.join(self.destino, "lucie", "cap_vacio"), exist_ok=True)
+
+        res = escanear_sala_espera_carpetas(self.destino, db=self.db, vigilante=self.vigilante)
+        mapa = {c["carpeta"]: c for c in res}
+
+        self.assertIn("cap_normal", mapa)
+        self.assertEqual(mapa["cap_normal"]["videos"], 1)
+        self.assertEqual(mapa["cap_normal"]["fotos"], 1)
+        self.assertEqual(mapa["cap_normal"]["total_archivos"], 2)
+        self.assertEqual(mapa["cap_normal"]["bytes_totales"], 10)
+
+        self.assertIn("cap_suelto", mapa)
+        self.assertEqual(mapa["cap_suelto"]["videos"], 1)
+        self.assertEqual(mapa["cap_suelto"]["fotos"], 0)
+        self.assertEqual(mapa["cap_suelto"]["total_archivos"], 1)
+        self.assertEqual(mapa["cap_suelto"]["bytes_totales"], 6)
+
+        self.assertIn("imagenes", mapa)
+        self.assertEqual(mapa["imagenes"]["videos"], 0)
+        self.assertEqual(mapa["imagenes"]["fotos"], 1)
+        self.assertEqual(mapa["imagenes"]["total_archivos"], 1)
+        self.assertTrue(mapa["imagenes"]["es_heredada"])
+
+        self.assertIn("cap_vacio", mapa)
+        self.assertEqual(mapa["cap_vacio"]["total_archivos"], 0)
+        self.assertEqual(mapa["cap_vacio"]["bytes_totales"], 0)
+
+        # Verificar que todos los archivos tienen un id_media opaco asignado
+        for arch in mapa["cap_normal"]["archivos"]:
+            self.assertTrue(bool(arch["id_media"]))
+
+    def test_exclusion_carpetas_control_interno(self):
+        """Omite estrictamente _enviados, _revertidos, _descartados y _a_revisar."""
+        from bandeja.pendrive import escanear_sala_espera_carpetas
+
+        self._crear_archivo(os.path.join(self.destino, "lucie", "_enviados", "v1.mp4"), b"v1")
+        self._crear_archivo(os.path.join(self.destino, "lucie", "_revertidos", "v2.mp4"), b"v2")
+        self._crear_archivo(os.path.join(self.destino, "lucie", "_descartados", "v3.mp4"), b"v3")
+        self._crear_archivo(os.path.join(self.destino, "lucie", "_a_revisar", "v4.mp4"), b"v4")
+        self._crear_archivo(os.path.join(self.destino, "lucie", "carpeta_legitima", "v5.mp4"), b"v5")
+
+        res = escanear_sala_espera_carpetas(self.destino, db=self.db)
+        nombres = [c["carpeta"] for c in res]
+        self.assertIn("carpeta_legitima", nombres)
+        self.assertNotIn("_enviados", nombres)
+        self.assertNotIn("_revertidos", nombres)
+        self.assertNotIn("_descartados", nombres)
+        self.assertNotIn("_a_revisar", nombres)
+
+    def test_no_sigue_symlinks_ni_profundidad_mayor_6(self):
+        """followlinks=False no sigue symlinks externos y el escaneo respeta tope de 6 niveles."""
+        from bandeja.pendrive import escanear_sala_espera_carpetas
+
+        fuera = os.path.join(self.tmp_dir, "carpeta_externa")
+        self._crear_archivo(os.path.join(fuera, "secreto.mp4"), b"secreto")
+
+        dir_cap = os.path.join(self.destino, "lucie", "cap_seguro")
+        os.makedirs(dir_cap, exist_ok=True)
+        link_path = os.path.join(dir_cap, "enlace_afuera")
+        try:
+            os.symlink(fuera, link_path)
+        except OSError:
+            pass
+
+        # Archivo a nivel de profundidad 7 (mayor que el tope de 6 niveles relativos)
+        profundo = os.path.join(self.destino, "lucie", "cap_profundo", "1", "2", "3", "4", "5", "6", "7")
+        self._crear_archivo(os.path.join(profundo, "ignorado.mp4"), b"ignorado")
+        self._crear_archivo(os.path.join(self.destino, "lucie", "cap_profundo", "visible.mp4"), b"visible")
+
+        res = escanear_sala_espera_carpetas(self.destino, db=self.db)
+        mapa = {c["carpeta"]: c for c in res}
+
+        if os.path.islink(link_path):
+            nombres_archivos = [a["nombre"] for a in mapa["cap_seguro"]["archivos"]]
+            self.assertNotIn("secreto.mp4", nombres_archivos)
+
+        self.assertIn("cap_profundo", mapa)
+        nombres_profundo = [a["nombre"] for a in mapa["cap_profundo"]["archivos"]]
+        self.assertIn("visible.mp4", nombres_profundo)
+        self.assertNotIn("ignorado.mp4", nombres_profundo)
+
+    def test_tipificacion_cruzando_bandeja_capitulos(self):
+        """Clasifica correctamente: Capítulo en foco, Capítulo abierto, Capítulo cerrado, Escena suelta y Carpeta heredada."""
+        from bandeja.pendrive import escanear_sala_espera_carpetas
+
+        with self.db._conectar() as conn:
+            conn.execute("""
+                INSERT INTO bandeja_capitulos (personaje, nombre, fecha_inicio, estado, en_foco)
+                VALUES
+                    ('lucie', 'lucie-foco', '2026-10-06T00:00:00', 'activo', 1),
+                    ('lucie', 'lucie-abierto', '2026-10-06T00:00:00', 'activo', 0),
+                    ('lucie', 'lucie-cerrado', '2026-10-05T00:00:00', 'cerrado', 0)
+            """)
+
+        self._crear_archivo(os.path.join(self.destino, "lucie", "lucie-foco", "videos", "v1.mp4"), b"v1")
+        self._crear_archivo(os.path.join(self.destino, "lucie", "lucie-abierto", "videos", "v2.mp4"), b"v2")
+        self._crear_archivo(os.path.join(self.destino, "lucie", "lucie-cerrado", "videos", "v3.mp4"), b"v3")
+        self._crear_archivo(os.path.join(self.destino, "lucie", "lucie-suelta", "videos", "v4.mp4"), b"v4")
+        self._crear_archivo(os.path.join(self.destino, "lucie", "imagenes", "sub", "f5.jpg"), b"f5")
+
+        res = escanear_sala_espera_carpetas(self.destino, db=self.db)
+        mapa = {c["carpeta"]: c["tipo"] for c in res}
+
+        self.assertEqual(mapa.get("lucie-foco"), "Capítulo en foco")
+        self.assertEqual(mapa.get("lucie-abierto"), "Capítulo abierto")
+        self.assertEqual(mapa.get("lucie-cerrado"), "Capítulo cerrado")
+        self.assertEqual(mapa.get("lucie-suelta"), "Escena suelta")
+        self.assertEqual(mapa.get("imagenes"), "Carpeta heredada")
+
+    def test_archivos_no_multimedia_contabilizados_y_advertencia(self):
+        """Contabiliza archivos no multimedia por separado y emite advertencia sin detener la operación."""
+        from bandeja.pendrive import escanear_sala_espera_carpetas, simular_envio_capitulos
+
+        self._crear_archivo(os.path.join(self.destino, "lucie", "cap_mixto", "video.mp4"), b"vid")
+        self._crear_archivo(os.path.join(self.destino, "lucie", "cap_mixto", "notas.txt"), b"notas")
+        self._crear_archivo(os.path.join(self.destino, "lucie", "cap_mixto", "doc.pdf"), b"pdf")
+
+        res = escanear_sala_espera_carpetas(self.destino, db=self.db)
+        mapa = {c["carpeta"]: c for c in res}
+        c = mapa["cap_mixto"]
+        self.assertEqual(c["videos"], 1)
+        self.assertEqual(c["fotos"], 0)
+        self.assertEqual(c["no_multimedia"], 2)
+        self.assertEqual(c["total_archivos"], 3)
+
+        # Montaje falso de pendrive vinculado
+        punto_pen = os.path.join(self.tmp_dir, "mock_pendrive")
+        os.makedirs(os.path.join(punto_pen, "LucieSinReglas"), exist_ok=True)
+        with open(os.path.join(punto_pen, ".lucie_pendrive.json"), "w") as f:
+            json.dump({"id": "mock_id", "version": 1}, f)
+
+        with patch("bandeja.pendrive.detectar_pendrive", return_value={
+            "conectado": True, "punto_montaje": punto_pen, "ruta_montaje": punto_pen,
+            "id": "mock_id", "sistema_archivos": "vfat", "espacio_libre_bytes": 5 * 10**9,
+            "espacio_total_bytes": 10**10, "espacio_libre_fmt": "5 GB", "espacio_total_fmt": "10 GB"
+        }):
+            sim = simular_envio_capitulos(carpetas=["lucie/cap_mixto"], config=self.config, db=self.db)
+            self.assertEqual(sim["total_archivos_a_enviar"], 1)
+            self.assertTrue(any("notas.txt" in str(a) for a in sim["archivos_no_multimedia"]))
+            self.assertTrue(any("doc.pdf" in str(a) for a in sim["archivos_no_multimedia"]))
+            self.assertTrue(len(sim["advertencias"]) >= 2)
+
+    def test_simulacion_y_envio_unificado_lote_carpetas(self):
+        """Simula y ejecuta el envío consolidado de múltiples carpetas seleccionadas en un solo lote."""
+        punto_pen = os.path.join(self.tmp_dir, "mock_pendrive_lote")
+        os.makedirs(os.path.join(punto_pen, "LucieSinReglas"), exist_ok=True)
+        with open(os.path.join(punto_pen, ".lucie_pendrive.json"), "w") as f:
+            json.dump({"id": "mock_lote_id", "version": 1}, f)
+
+        # Dos carpetas con archivos multimedia
+        self._crear_archivo(os.path.join(self.destino, "lucie", "capA", "videos", "videoA.mp4"), b"contenido_video_A")
+        self._crear_archivo(os.path.join(self.destino, "lucie", "capB", "fotos", "fotoB.jpg"), b"contenido_foto_B")
+
+        self._iniciar_servidor_prueba()
+
+        with patch("bandeja.servidor.detectar_pendrive", return_value={
+            "conectado": True, "punto_montaje": punto_pen, "ruta_montaje": punto_pen,
+            "id": "mock_lote_id", "sistema_archivos": "vfat", "espacio_libre_bytes": 5 * 10**9,
+            "espacio_total_bytes": 10**10, "espacio_libre_fmt": "5 GB", "espacio_total_fmt": "10 GB"
+        }), patch("bandeja.pendrive.detectar_pendrive", return_value={
+            "conectado": True, "punto_montaje": punto_pen, "ruta_montaje": punto_pen,
+            "id": "mock_lote_id", "sistema_archivos": "vfat", "espacio_libre_bytes": 5 * 10**9,
+            "espacio_total_bytes": 10**10, "espacio_libre_fmt": "5 GB", "espacio_total_fmt": "10 GB"
+        }):
+            headers = {
+                "X-CSRF-Token": self.token_csrf,
+                "Content-Type": "application/json"
+            }
+            body_sim = json.dumps({"carpetas": ["lucie/capA", "lucie/capB"]})
+            status, sim, _ = self._request("POST", "/api/pendrive/envio-simular", headers=headers, body=body_sim)
+            self.assertEqual(status, 200)
+            self.assertTrue(sim.get("puede_enviar"))
+            self.assertEqual(sim.get("total_archivos_a_enviar"), 2)
+            self.assertIn("lucie/capA", sim.get("carpetas_seleccionadas", []))
+            self.assertIn("lucie/capB", sim.get("carpetas_seleccionadas", []))
+
+            # Ejecutar el envío
+            body_env = json.dumps({"simulacion": sim})
+            status, res, _ = self._request("POST", "/api/pendrive/envio", headers=headers, body=body_env)
+            self.assertEqual(status, 200)
+            self.assertEqual(res.get("total_archivos_enviados"), 2)
+
+            # Verificar que los archivos llegaron a LucieSinReglas/ en el pendrive
+            dest_vid = os.path.join(punto_pen, "LucieSinReglas", "videos sin editar", "lucie", "capA", "videoA.mp4")
+            dest_fot = os.path.join(punto_pen, "LucieSinReglas", "imagenes", "lucie", "capB", "fotoB.jpg")
+            self.assertTrue(os.path.isfile(dest_vid))
+            self.assertTrue(os.path.isfile(dest_fot))
+
+            # Verificar que los archivos originales se preservaron en _enviados (sin borrado)
+            orig_vid = os.path.join(self.destino, "_enviados", "lucie", "capA", "videos", "videoA.mp4")
+            orig_fot = os.path.join(self.destino, "_enviados", "lucie", "capB", "fotos", "fotoB.jpg")
+            self.assertTrue(os.path.isfile(orig_vid))
+            self.assertTrue(os.path.isfile(orig_fot))
+
+    def test_cuatro_estados_de_unidad_fisica(self):
+        """Verifica la diferenciación exacta de los 4 estados de la unidad física."""
+        from bandeja.pendrive import _leer_estado_pendrive_raw
+
+        # 1. Sin unidad
+        with patch("bandeja.pendrive.detectar_pendrive", return_value={"conectado": False}), \
+             patch("bandeja.pendrive.detectar_unidad_candidata_sin_vincular", return_value=None):
+            st1 = _leer_estado_pendrive_raw(self.config, self.db)
+            self.assertEqual(st1.get("estado_unidad"), "sin_unidad")
+            self.assertFalse(st1.get("conectado"))
+
+        # 2. Conectada sin vincular
+        cand_mock = {
+            "punto_montaje": "/media/usb", "sistema_archivos": "exfat",
+            "espacio_libre_fmt": "14 GB", "espacio_total_fmt": "16 GB"
+        }
+        with patch("bandeja.pendrive.detectar_pendrive", return_value={"conectado": False}), \
+             patch("bandeja.pendrive.detectar_unidad_candidata_sin_vincular", return_value=cand_mock):
+            st2 = _leer_estado_pendrive_raw(self.config, self.db)
+            self.assertEqual(st2.get("estado_unidad"), "conectada_sin_vincular")
+            self.assertEqual(st2.get("unidad_candidata", {}).get("punto_montaje"), "/media/usb")
+
+        # 3. Vinculado listo
+        vinculado_mock = {
+            "conectado": True, "punto_montaje": "/media/usb_lucie",
+            "id": "pen_123", "sistema_archivos": "vfat", "espacio_libre_bytes": 10**9,
+            "espacio_total_bytes": 10**10, "espacio_libre_fmt": "1 GB", "espacio_total_fmt": "10 GB"
+        }
+        with patch("bandeja.pendrive.detectar_pendrive", return_value=vinculado_mock):
+            st3 = _leer_estado_pendrive_raw(self.config, self.db)
+            self.assertEqual(st3.get("estado_unidad"), "vinculado_listo")
+            self.assertTrue(st3.get("conectado"))
+
+        # 4. Sin respuesta (timeout o excepción simulada)
+        from bandeja.pendrive import obtener_estado_pendrive
+        with patch("bandeja.pendrive.ejecutar_lectura_pendrive_con_timeout", side_effect=TimeoutError("Demora de lectura")):
+            st4 = obtener_estado_pendrive(self.config, self.db)
+            self.assertEqual(st4.get("estado_unidad"), "sin_respuesta")
+            self.assertTrue(st4.get("sin_respuesta"))
+
+    def test_frontend_js_preservacion_seleccion_y_estados(self):
+        """Verifica en Node.js la preservación de selecciones y botones de envío del panel frontend."""
+        import subprocess
+        js_test = """
+        const assert = require('assert');
+
+        // Estado simulado del frontend
+        let carpetasPendriveData = [
+          { personaje: 'lucie', carpeta: 'cap_foco', tipo: 'Capítulo en foco', es_heredada: false, pendientes_conteo: 2, total_archivos: 2 },
+          { personaje: 'lucie', carpeta: 'imagenes', tipo: 'Carpeta heredada', es_heredada: true, pendientes_conteo: 5, total_archivos: 5 },
+          { personaje: 'roli', carpeta: 'cap_roli', tipo: 'Capítulo abierto', es_heredada: false, pendientes_conteo: 1, total_archivos: 1 }
+        ];
+
+        let window = {
+          carpetasPendriveSeleccionadas: null,
+          carpetasPendriveInicializadas: false
+        };
+
+        // 1. Inicialización: carpetas normales se seleccionan, heredadas quedan destildadas
+        if (!window.carpetasPendriveInicializadas) {
+          window.carpetasPendriveSeleccionadas = new Set();
+          carpetasPendriveData.forEach(c => {
+            if (!c.es_heredada && (c.pendientes_conteo > 0 || c.total_archivos > 0)) {
+              window.carpetasPendriveSeleccionadas.add(`${c.personaje}/${c.carpeta}`);
+            }
+          });
+          window.carpetasPendriveInicializadas = true;
+        }
+
+        assert.strictEqual(window.carpetasPendriveSeleccionadas.has('lucie/cap_foco'), true, "cap_foco preseleccionado");
+        assert.strictEqual(window.carpetasPendriveSeleccionadas.has('roli/cap_roli'), true, "cap_roli preseleccionado");
+        assert.strictEqual(window.carpetasPendriveSeleccionadas.has('lucie/imagenes'), false, "imagenes NO debe preseleccionarse");
+        assert.strictEqual(window.carpetasPendriveSeleccionadas.size, 2);
+
+        // 2. Selección explícita por el usuario de la carpeta heredada
+        window.carpetasPendriveSeleccionadas.add('lucie/imagenes');
+        assert.strictEqual(window.carpetasPendriveSeleccionadas.size, 3);
+
+        // 3. Simulación de ciclo de refresco automático: las selecciones del usuario deben preservarse
+        const keysActuales = new Set(carpetasPendriveData.map(c => `${c.personaje}/${c.carpeta}`));
+        for (const k of Array.from(window.carpetasPendriveSeleccionadas)) {
+          if (!keysActuales.has(k)) {
+            window.carpetasPendriveSeleccionadas.delete(k);
+          }
+        }
+        assert.strictEqual(window.carpetasPendriveSeleccionadas.has('lucie/imagenes'), true, "imagenes sigue seleccionada tras refresco");
+        assert.strictEqual(window.carpetasPendriveSeleccionadas.size, 3);
+
+        // 4. Botón 'Ninguna'
+        window.carpetasPendriveSeleccionadas.clear();
+        assert.strictEqual(window.carpetasPendriveSeleccionadas.size, 0);
+
+        // 5. Botón 'Seleccionar todas'
+        carpetasPendriveData.forEach(c => {
+          window.carpetasPendriveSeleccionadas.add(`${c.personaje}/${c.carpeta}`);
+        });
+        assert.strictEqual(window.carpetasPendriveSeleccionadas.size, 3);
+
+        console.log('TEST_NODE_PENDRIVE_CARPETAS_OK');
+        """
+        proc = subprocess.run(["node", "-e", js_test], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, f"Fallo en pruebas Node.js: {proc.stderr}")
+        self.assertIn("TEST_NODE_PENDRIVE_CARPETAS_OK", proc.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
 

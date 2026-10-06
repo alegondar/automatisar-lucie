@@ -338,6 +338,190 @@ def _es_extension_multimedia(ext: str) -> bool:
     return _es_extension_video(ext) or _es_extension_foto(ext)
 
 
+def escanear_sala_espera_carpetas(ruta_destino_base: str,
+                                   db: Optional[GestorBaseDatosBandeja] = None,
+                                   hashes_manifiesto: Optional[Set[str]] = None,
+                                   vigilante: Optional[Any] = None) -> List[Dict[str, Any]]:
+    """
+    Escanea recursivamente la sala de espera ~/Descargas/_lucie/<personaje>/<carpeta>/
+    omitiendo carpetas del sistema (_enviados, _revertidos, _descartados, _a_revisar).
+    - No sigue symlinks (followlinks=False).
+    - Tiene un tope de profundidad de 6 niveles.
+    - No descarta carpetas que solo tienen subcarpetas con archivos: acumula el total recursivo.
+    - Clasifica cada carpeta cruzando con bandeja_capitulos:
+      * 'Capítulo en foco' (activo y en foco en la BD).
+      * 'Capítulo abierto' (activo en la BD).
+      * 'Capítulo cerrado' (cerrado en la BD).
+      * 'Carpeta heredada' (sin estructura canónica de capítulo, ej: imagenes o subcarpetas no estándar).
+      * 'Escena suelta' (resto no registrado en la BD pero con estructura válida).
+    - Computa fotos, videos, no multimedia, tamaño total, fecha más reciente y cotejo contra manifiesto.
+    """
+    ruta_real_base = os.path.realpath(os.path.expanduser(ruta_destino_base))
+    if not os.path.isdir(ruta_real_base):
+        return []
+
+    carpetas_ignoradas = {"_enviados", "_revertidos", "_descartados", "_a_revisar"}
+    mapa_caps: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    mapa_hashes_db: Dict[str, str] = {}
+
+    if db:
+        try:
+            with db._conectar() as conn:
+                for r in conn.execute("SELECT personaje, nombre, estado, en_foco FROM bandeja_capitulos").fetchall():
+                    p = str(r["personaje"]).strip().lower()
+                    n = str(r["nombre"]).strip().lower()
+                    mapa_caps[(p, n)] = dict(r)
+                    n_norm = n.replace(" ", "").replace("-", "").replace("_", "")
+                    mapa_caps[(p, n_norm)] = dict(r)
+
+                for r in conn.execute("SELECT ruta_actual, hash FROM bandeja_archivos WHERE hash IS NOT NULL").fetchall():
+                    mapa_hashes_db[r["ruta_actual"]] = str(r["hash"]).lower()
+        except Exception as e:
+            logger.warning(f"Error al consultar base de datos para escanear sala de espera: {e}")
+
+    hashes_man_set = {h.lower() for h in (hashes_manifiesto or set())}
+    resultado = []
+
+    for pers in sorted(os.listdir(ruta_real_base)):
+        if pers.startswith("_") or pers in carpetas_ignoradas:
+            continue
+        ruta_pers = os.path.join(ruta_real_base, pers)
+        if not os.path.isdir(ruta_pers):
+            continue
+
+        for cap in sorted(os.listdir(ruta_pers)):
+            if cap.startswith("_") or cap in carpetas_ignoradas:
+                continue
+            ruta_cap = os.path.join(ruta_pers, cap)
+            if not os.path.isdir(ruta_cap):
+                continue
+
+            cant_fotos = 0
+            cant_vids = 0
+            cant_no_media = 0
+            bytes_totales = 0
+            mtime_max = 0.0
+            cant_enviados = 0
+            archivos_lista = []
+            tiene_subcarpetas_no_estandar = False
+
+            base_depth = ruta_cap.rstrip(os.sep).count(os.sep)
+
+            for root, dirs, files in os.walk(ruta_cap, followlinks=False):
+                cur_depth = root.rstrip(os.sep).count(os.sep) - base_depth
+                if cur_depth >= 6:
+                    dirs.clear()
+                    continue
+
+                rel_root = os.path.relpath(root, ruta_cap)
+                if rel_root == ".":
+                    for d in dirs:
+                        if d not in ("fotos", "videos") and not d.startswith("_"):
+                            tiene_subcarpetas_no_estandar = True
+
+                for f in sorted(files):
+                    if f.startswith("."):
+                        continue
+                    p_file = os.path.join(root, f)
+                    try:
+                        st = os.stat(p_file)
+                        sz = st.st_size
+                        mt = st.st_mtime
+                    except OSError:
+                        continue
+
+                    bytes_totales += sz
+                    if mt > mtime_max:
+                        mtime_max = mt
+
+                    _, ext = os.path.splitext(f)
+                    ext_lower = ext.lower()
+                    es_vid = _es_extension_video(ext_lower)
+                    es_fot = _es_extension_foto(ext_lower)
+
+                    if es_vid:
+                        cant_vids += 1
+                        tipo_arch = "video"
+                    elif es_fot:
+                        cant_fotos += 1
+                        tipo_arch = "foto"
+                    else:
+                        cant_no_media += 1
+                        tipo_arch = "otro"
+
+                    # id_media opaco para la vista previa
+                    id_m = None
+                    if vigilante and hasattr(vigilante, "registrar_ruta_media"):
+                        id_m = vigilante.registrar_ruta_media(p_file)
+                    else:
+                        id_m = hashlib.sha256(f"media:{p_file}".encode("utf-8")).hexdigest()[:32]
+
+                    # Chequeo contra manifiesto si está disponible
+                    h_archivo = mapa_hashes_db.get(p_file)
+                    ya_env = False
+                    if h_archivo and hashes_man_set:
+                        ya_env = (h_archivo in hashes_man_set)
+                    if ya_env:
+                        cant_enviados += 1
+
+                    archivos_lista.append({
+                        "nombre": f,
+                        "ruta_relativa": os.path.relpath(p_file, ruta_cap),
+                        "ruta_absoluta": p_file,
+                        "tamanio_bytes": sz,
+                        "tamanio_fmt": formatear_bytes(sz),
+                        "mtime": mt,
+                        "fecha_modificacion": datetime.datetime.fromtimestamp(mt).strftime("%Y-%m-%d %H:%M:%S") if mt > 0 else "N/D",
+                        "tipo": tipo_arch,
+                        "id_media": id_m,
+                        "ya_enviado": ya_env
+                    })
+
+            # Clasificación de tipo
+            p_key = pers.strip().lower()
+            c_key = cap.strip().lower()
+            c_norm = c_key.replace(" ", "").replace("-", "").replace("_", "")
+
+            db_entry = mapa_caps.get((p_key, c_key)) or mapa_caps.get((p_key, c_norm))
+
+            if db_entry:
+                if db_entry.get("en_foco") == 1 and db_entry.get("estado") == "activo":
+                    tipo_carpeta = "Capítulo en foco"
+                elif db_entry.get("estado") == "activo":
+                    tipo_carpeta = "Capítulo abierto"
+                else:
+                    tipo_carpeta = "Capítulo cerrado"
+            else:
+                if cap.lower() in ("imagenes", "fotos", "videos", "legacy", "heredado") or tiene_subcarpetas_no_estandar:
+                    tipo_carpeta = "Carpeta heredada"
+                else:
+                    tipo_carpeta = "Escena suelta"
+
+            fecha_fmt = datetime.datetime.fromtimestamp(mtime_max).strftime("%Y-%m-%d %H:%M:%S") if mtime_max > 0 else "N/D"
+
+            resultado.append({
+                "personaje": pers,
+                "carpeta": cap,
+                "capitulo": cap,
+                "tipo": tipo_carpeta,
+                "es_heredada": (tipo_carpeta == "Carpeta heredada"),
+                "ruta_absoluta": ruta_cap,
+                "fotos": cant_fotos,
+                "videos": cant_vids,
+                "no_multimedia": cant_no_media,
+                "total_archivos": len(archivos_lista),
+                "bytes_totales": bytes_totales,
+                "bytes_totales_fmt": formatear_bytes(bytes_totales),
+                "fecha_ultimo_archivo": fecha_fmt,
+                "mtime_max": mtime_max,
+                "enviados_conteo": cant_enviados,
+                "pendientes_conteo": len(archivos_lista) - cant_enviados,
+                "archivos": archivos_lista
+            })
+
+    return resultado
+
+
 def escanear_capitulos_para_envio(ruta_destino_base: str) -> List[Dict[str, Any]]:
     """
     Escanea la sala de espera ~/Descargas/_lucie/<personaje>/<capítulo>/
@@ -368,6 +552,7 @@ def escanear_capitulos_para_envio(ruta_destino_base: str) -> List[Dict[str, Any]
             resultado.append({
                 "personaje": pers,
                 "capitulo": cap,
+                "carpeta": cap,
                 "ruta_absoluta": ruta_cap
             })
 
@@ -417,11 +602,13 @@ def _leer_estado_pendrive_raw(config: Optional[ConfiguracionBandeja] = None,
     """Rutina interna de lectura del estado físico del pendrive."""
     cfg = config or ConfiguracionBandeja()
     info = detectar_pendrive(cfg)
-    if not info:
+    if not info or not info.get("conectado"):
         cand = detectar_unidad_candidata_sin_vincular(cfg)
+        estado_unidad = "conectada_sin_vincular" if cand else "sin_unidad"
         return {
             "conectado": False,
             "sin_respuesta": False,
+            "estado_unidad": estado_unidad,
             "id": None,
             "punto_montaje": cand.get("punto_montaje") if cand else None,
             "sistema_archivos": cand.get("sistema_archivos") if cand else None,
@@ -524,7 +711,8 @@ def _leer_estado_pendrive_raw(config: Optional[ConfiguracionBandeja] = None,
     return {
         "conectado": True,
         "sin_respuesta": False,
-        "id": info["id"],
+        "estado_unidad": "vinculado_listo",
+        "id": info.get("id", ""),
         "punto_montaje": punto,
         "sistema_archivos": info.get("sistema_archivos"),
         "espacio_libre_bytes": esp_libre,
@@ -549,11 +737,15 @@ def obtener_estado_pendrive(config: Optional[ConfiguracionBandeja] = None,
     con límite estricto de timeout_segundos (por defecto 3 s).
     Si el pendrive se cuelga o no responde, retorna sin bloquear indicando sin_respuesta=True.
     """
-    res = ejecutar_lectura_pendrive_con_timeout(_leer_estado_pendrive_raw, config, db, timeout_segundos=timeout_segundos)
+    try:
+        res = ejecutar_lectura_pendrive_con_timeout(_leer_estado_pendrive_raw, config, db, timeout_segundos=timeout_segundos)
+    except Exception:
+        res = {"sin_respuesta": True}
     if not isinstance(res, dict) or res.get("sin_respuesta"):
         return {
             "conectado": False,
             "sin_respuesta": True,
+            "estado_unidad": "sin_respuesta",
             "error": "Pendrive sin respuesta",
             "mensaje": "Pendrive sin respuesta",
             "id": None,
@@ -587,7 +779,8 @@ def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
     """
     cfg = config or ConfiguracionBandeja()
     carpeta_raiz = cfg.carpeta_raiz_pendrive
-    capitulos_lista = capitulos_filtro if capitulos_filtro is not None else kwargs.get("capitulos")
+    carpetas_arg = kwargs.get("carpetas")
+    capitulos_lista = capitulos_filtro if capitulos_filtro is not None else (carpetas_arg if carpetas_arg is not None else kwargs.get("capitulos"))
 
     if capitulos_lista:
         for c_item in capitulos_lista:
@@ -622,22 +815,22 @@ def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
         if h and e.get("estado") != "revertido":
             hashes_manifiesto.add(h.lower())
 
-    # 2. Obtener capítulos candidatos en la sala de espera
-    todos_capitulos = escanear_capitulos_para_envio(cfg.ruta_destino_base)
-    capitulos_seleccionados = []
+    # 2. Obtener carpetas candidatas en la sala de espera
+    todas_carpetas = escanear_sala_espera_carpetas(cfg.ruta_destino_base, db=db, hashes_manifiesto=hashes_manifiesto)
+    carpetas_seleccionadas = []
 
     if capitulos_lista:
-        filtro_normalizado = {c.strip().lower() for c in capitulos_lista if c.strip()}
+        filtro_normalizado = {str(c).strip().lower() for c in capitulos_lista if str(c).strip()}
         if "todos" in filtro_normalizado or not filtro_normalizado:
-            capitulos_seleccionados = todos_capitulos
+            carpetas_seleccionadas = todas_carpetas
         else:
-            for c in todos_capitulos:
-                clave_completa = f"{c['personaje']}/{c['capitulo']}".lower()
-                clave_corta = c["capitulo"].lower()
+            for c in todas_carpetas:
+                clave_completa = f"{c['personaje']}/{c['carpeta']}".lower()
+                clave_corta = c["carpeta"].lower()
                 if clave_completa in filtro_normalizado or clave_corta in filtro_normalizado:
-                    capitulos_seleccionados.append(c)
+                    carpetas_seleccionadas.append(c)
     else:
-        capitulos_seleccionados = todos_capitulos
+        carpetas_seleccionadas = todas_carpetas
 
     # 3. Consultar capítulos abiertos si db está disponible
     capitulos_abiertos_nombres = set()
@@ -661,63 +854,43 @@ def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
 
     es_fat = sistema_archivos in ("vfat", "fat32", "fat")
 
-    for c in capitulos_seleccionados:
+    for c in carpetas_seleccionadas:
         pers = c["personaje"]
-        cap = c["capitulo"]
+        cap = c["carpeta"]
         ruta_cap = c["ruta_absoluta"]
 
         if (pers, cap) in capitulos_abiertos_nombres:
             avisos.append(f"Aviso: El capítulo '{pers}/{cap}' sigue abierto en la sala de espera; podrían llegar más archivos.")
 
-        # Recorrer archivos dentro del capítulo
-        candidatos_archivos = []  # (ruta_origen, subcarpeta_origen, nombre_archivo)
+        # Recorrer archivos dentro de la carpeta (recursivo seguro)
+        candidatos_archivos = []  # (ruta_origen, subcarpeta_origen, nombre_archivo, tipo_media, sub_dest)
 
-        # a) subcarpeta fotos
-        dir_fotos = os.path.join(ruta_cap, sub_fotos)
-        if os.path.isdir(dir_fotos):
-            for arch in sorted(os.listdir(dir_fotos)):
-                p = os.path.join(dir_fotos, arch)
-                if os.path.isfile(p) and not arch.startswith("."):
-                    candidatos_archivos.append((p, sub_fotos, arch))
+        for arch in c.get("archivos", []):
+            p = arch["ruta_absoluta"]
+            nombre = arch["nombre"]
+            tipo_arch = arch["tipo"]
+            rel_dir = os.path.dirname(arch.get("ruta_relativa", ""))
 
-        # b) subcarpeta videos
-        dir_videos = os.path.join(ruta_cap, sub_videos)
-        if os.path.isdir(dir_videos):
-            for arch in sorted(os.listdir(dir_videos)):
-                p = os.path.join(dir_videos, arch)
-                if os.path.isfile(p) and not arch.startswith("."):
-                    candidatos_archivos.append((p, sub_videos, arch))
-
-        # c) archivos sueltos en la raíz del capítulo
-        for item in sorted(os.listdir(ruta_cap)):
-            p = os.path.join(ruta_cap, item)
-            if os.path.isfile(p) and not item.startswith("."):
-                _, ext = os.path.splitext(item)
-                if _es_extension_multimedia(ext):
-                    sub_asignada = sub_videos if _es_extension_video(ext) else sub_fotos
-                    candidatos_archivos.append((p, sub_asignada, item))
-                else:
-                    archivos_no_multimedia.append({
-                        "personaje": pers,
-                        "capitulo": cap,
-                        "nombre": item,
-                        "ruta_origen": p,
-                        "tamanio_bytes": os.path.getsize(p),
-                        "aviso": "Archivo suelto con extensión no multimedia en la raíz del capítulo: omitido del envío."
-                    })
-                    avisos.append(f"Archivo suelto no multimedia omitido: '{pers}/{cap}/{item}'.")
+            tam = arch.get("tamanio_bytes", 0)
+            if tipo_arch == "video":
+                candidatos_archivos.append((p, rel_dir or sub_videos, nombre, "crudo", "videos sin editar", tam))
+            elif tipo_arch == "foto":
+                candidatos_archivos.append((p, rel_dir or sub_fotos, nombre, "imagen", "imagenes", tam))
+            else:
+                item_no_med = {
+                    "personaje": pers,
+                    "capitulo": cap,
+                    "nombre": nombre,
+                    "ruta_origen": p,
+                    "tamanio_bytes": tam,
+                    "motivo": "No multimedia (omitido)",
+                    "aviso": "Archivo con extensión no multimedia omitido del envío."
+                }
+                archivos_no_multimedia.append(item_no_med)
+                avisos.append(f"Archivo no multimedia omitido: '{pers}/{cap}/{nombre}'.")
 
         # Evaluar cada archivo candidato
-        for ruta_orig, sub_orig, nombre in candidatos_archivos:
-            try:
-                st = os.stat(ruta_orig)
-                tam = st.st_size
-            except OSError:
-                continue
-
-            _, ext = os.path.splitext(nombre)
-            tipo_media = "crudo" if _es_extension_video(ext) else "imagen"
-            sub_dest = "videos sin editar" if tipo_media == "crudo" else "imagenes"
+        for ruta_orig, sub_orig, nombre, tipo_media, sub_dest, tam in candidatos_archivos:
 
             ruta_rel_pendrive = os.path.join(sub_dest, pers, cap, nombre)
             ruta_abs_pendrive = os.path.join(pendrive_montaje, carpeta_raiz, ruta_rel_pendrive)
@@ -814,13 +987,20 @@ def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
             "espacio_total_bytes": info_pendrive["espacio_total_bytes"],
             "margen_libre_bytes": margen_libre
         },
-        "capitulos_seleccionados": [f"{c['personaje']}/{c['capitulo']}" for c in capitulos_seleccionados],
+        "capitulos_seleccionados": [f"{c['personaje']}/{c.get('carpeta') or c.get('capitulo')}" for c in carpetas_seleccionadas],
+        "carpetas_seleccionadas": [f"{c['personaje']}/{c.get('carpeta') or c.get('capitulo')}" for c in carpetas_seleccionadas],
         "archivos_a_copiar": archivos_a_copiar,
         "archivos_omitidos": archivos_omitidos,
         "archivos_conflictos": archivos_conflictos,
         "archivos_bloqueados": archivos_bloqueados,
         "archivos_no_multimedia": archivos_no_multimedia,
         "avisos": avisos,
+        "advertencias": avisos,
+        "total_archivos_a_enviar": len(archivos_a_copiar),
+        "bytes_a_enviar": bytes_a_copiar,
+        "bytes_a_enviar_fmt": formatear_bytes(bytes_a_copiar),
+        "pendrive_id": info_pendrive.get("id"),
+        "punto_montaje": pendrive_montaje,
         "totales": {
             "total_evaluados": len(archivos_a_copiar) + len(archivos_omitidos) + len(archivos_conflictos) + len(archivos_bloqueados),
             "a_copiar_cantidad": len(archivos_a_copiar),
@@ -1045,6 +1225,7 @@ def ejecutar_envio_pendrive(simulacion_o_capitulos: Any,
         "fecha": fecha_iso,
         "pendrive_id": pendrive_id,
         "total_transferidos": len(archivos_transferidos),
+        "total_archivos_enviados": len(archivos_transferidos),
         "bytes_totales": sum(r["bytes"] for r in archivos_transferidos),
         "capitulos": sorted(list({r["capitulo"] for r in archivos_transferidos})),
         "archivos": [

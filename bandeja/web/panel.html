@@ -265,14 +265,19 @@
       <div class="card">
         <div class="card-header">
           <div>
-            <h2>Capítulos listos para enviar al pendrive</h2>
-            <small style="color:var(--text-muted)">Material clasificado en la sala de espera (~/Descargas/_lucie/)</small>
+            <h2>Carpetas en sala de espera</h2>
+            <small style="color:var(--text-muted)">Material clasificado en la sala de espera (~/Descargas/_lucie/) para transferir al pendrive</small>
           </div>
-          <button class="btn-sm" id="btn-enviar-todos-pendrive" onclick="abrirModalPlanEnvio()" style="background:var(--teal); color:#000; font-weight:600; padding:6px 14px;">
-            Enviar todos al pendrive
-          </button>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <button class="btn-sm btn-secundario" id="btn-sel-todas-carpetas-pendrive" onclick="seleccionarTodasCarpetasPendrive()">Seleccionar todas</button>
+            <button class="btn-sm btn-secundario" id="btn-sel-ninguna-carpetas-pendrive" onclick="seleccionarNingunaCarpetasPendrive()">Ninguna</button>
+            <button class="btn-sm" id="btn-enviar-seleccionadas-pendrive" onclick="enviarCarpetasSeleccionadasPendrive()" style="background:var(--teal); color:#000; font-weight:600; padding:6px 14px;" disabled title="Seleccioná al menos una carpeta y asegurate de tener un pendrive vinculado conectado">
+              Enviar seleccionadas (0)
+            </button>
+            <button id="btn-enviar-todos-pendrive" style="display:none;"></button>
+          </div>
         </div>
-        <div id="contenedor-capitulos-pendrive">Cargando capítulos...</div>
+        <div id="contenedor-capitulos-pendrive">Cargando carpetas...</div>
       </div>
 
       <div class="card" id="card-part-pendrive" style="display:none;">

@@ -475,6 +475,13 @@ class VigilanteBandeja:
         with self._lock:
             return self._mapa_media.get(id_media)
 
+    def registrar_ruta_media(self, ruta_completa: str) -> str:
+        """Registra una ruta multimedia y retorna su id_media opaco."""
+        id_media = hashlib.sha256(f"media:{ruta_completa}".encode("utf-8")).hexdigest()[:32]
+        with self._lock:
+            self._mapa_media[id_media] = ruta_completa
+        return id_media
+
     def obtener_token_version(self) -> str:
         """
         Calcula un token determinista basado en todo lo que afecta a la vista:

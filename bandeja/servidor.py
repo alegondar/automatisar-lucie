@@ -44,6 +44,9 @@ from bandeja.pendrive import (
     detectar_unidad_candidata_sin_vincular,
     simular_vinculacion_pendrive,
     vincular_pendrive,
+    escanear_sala_espera_carpetas,
+    detectar_pendrive,
+    leer_manifiesto_pendrive,
 )
 from bandeja.vigilante import VigilanteBandeja
 
@@ -224,6 +227,10 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
                 "banner_pendrive": estado_pen.get("banner_reactivo"),
                 "horas_material_reciente": getattr(self.config, "horas_material_reciente", 168)
             }, solo_cabeceras=True)
+        elif ruta == "/api/pendrive/carpetas":
+            self._handle_pendrive_carpetas(solo_cabeceras=True)
+        elif ruta == "/api/pendrive/estado":
+            self._handle_pendrive_estado(solo_cabeceras=True)
         else:
             self._enviar_error(HTTPStatus.NOT_FOUND, "Ruta no encontrada.", solo_cabeceras=True)
 
@@ -293,15 +300,42 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._enviar_json({"capitulo_activo": cap_activo})
         elif ruta == "/api/pendrive/estado":
             self._handle_pendrive_estado()
+        elif ruta == "/api/pendrive/carpetas":
+            self._handle_pendrive_carpetas()
         else:
             self._enviar_error(HTTPStatus.NOT_FOUND, "Ruta no encontrada.")
 
-    def _handle_pendrive_estado(self):
+    def _handle_pendrive_estado(self, solo_cabeceras: bool = False):
         try:
             res = obtener_estado_pendrive(self.config, self.db, timeout_segundos=3.0)
-            self._enviar_json(res)
+            self._enviar_json(res, solo_cabeceras=solo_cabeceras)
         except Exception as e:
-            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al consultar estado de pendrive: {e}")
+            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al consultar estado de pendrive: {e}", solo_cabeceras=solo_cabeceras)
+
+    def _handle_pendrive_carpetas(self, solo_cabeceras: bool = False):
+        try:
+            hashes_manifiesto = set()
+            try:
+                info_pen = detectar_pendrive(self.config)
+                if info_pen and info_pen.get("conectado"):
+                    punto = info_pen.get("punto_montaje") or info_pen.get("ruta_montaje")
+                    entradas_m = leer_manifiesto_pendrive(punto, getattr(self.config, "carpeta_raiz_pendrive", "LucieSinReglas"))
+                    for ent in entradas_m:
+                        h = ent.get("sha256")
+                        if h and ent.get("estado") != "revertido":
+                            hashes_manifiesto.add(h.lower())
+            except Exception:
+                pass
+
+            carpetas = escanear_sala_espera_carpetas(
+                self.config.ruta_destino_base,
+                db=self.db,
+                hashes_manifiesto=hashes_manifiesto,
+                vigilante=self.vigilante
+            )
+            self._enviar_json({"carpetas": carpetas, "total_carpetas": len(carpetas)}, solo_cabeceras=solo_cabeceras)
+        except Exception as e:
+            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al listar carpetas de sala de espera: {e}", solo_cabeceras=solo_cabeceras)
 
     def _handle_capitulos_estado(self):
         cap_foco = self.db.obtener_capitulo_en_foco()
@@ -576,25 +610,29 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
     def _handle_pendrive_envio_simular(self, body: Dict[str, Any]):
         capitulos = body.get("capitulos")
-        if isinstance(capitulos, str):
-            capitulos = [capitulos]
-        elif not isinstance(capitulos, list):
-            capitulos = None
+        carpetas = body.get("carpetas")
+        seleccion = carpetas if carpetas is not None else capitulos
+        if isinstance(seleccion, str):
+            seleccion = [seleccion]
+        elif not isinstance(seleccion, list):
+            seleccion = None
         try:
-            res = simular_envio_capitulos(capitulos, self.config, self.db)
+            res = simular_envio_capitulos(seleccion, self.config, self.db, carpetas=carpetas)
             self._enviar_json(res)
         except Exception as e:
             self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al simular envío: {e}")
 
     def _handle_pendrive_envio(self, body: Dict[str, Any]):
         capitulos = body.get("capitulos")
+        carpetas = body.get("carpetas")
         simulacion = body.get("simulacion")
-        if isinstance(capitulos, str):
-            capitulos = [capitulos]
-        elif not isinstance(capitulos, list):
-            capitulos = None
+        seleccion = carpetas if carpetas is not None else capitulos
+        if isinstance(seleccion, str):
+            seleccion = [seleccion]
+        elif not isinstance(seleccion, list):
+            seleccion = None
 
-        arg = simulacion if simulacion else capitulos
+        arg = simulacion if simulacion else seleccion
         try:
             res = ejecutar_envio_pendrive(arg, self.config, self.db, self.movimientos)
             if self.vigilante:

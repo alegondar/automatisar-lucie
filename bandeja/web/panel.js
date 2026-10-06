@@ -1272,6 +1272,12 @@
       let listaArchivos = [];
       if (loteId === 'sin_identificar') {
         listaArchivos = datosEstado.sin_identificar || [];
+      } else if (loteId && loteId.startsWith('pendrive:')) {
+        const cKey = loteId.slice(9);
+        const cObj = (carpetasPendriveData || []).find(c => `${c.personaje}/${c.carpeta}` === cKey);
+        if (cObj) {
+          listaArchivos = (cObj.archivos || []).filter(a => a.tipo === 'video' || a.tipo === 'foto');
+        }
       } else {
         const todosLotes = (datosEstado.lotes || []).concat(datosEstado.lotes_anteriores || []);
         const lote = todosLotes.find(l => l.lote_id === loteId);
@@ -1320,16 +1326,21 @@
         let loteDesc = '';
         if (visorLoteIdActual === 'sin_identificar') {
           loteDesc = 'Sin identificar';
+        } else if (visorLoteIdActual && visorLoteIdActual.startsWith('pendrive:')) {
+          const cKey = visorLoteIdActual.slice(9);
+          loteDesc = `Sala de espera: ${cKey}`;
         } else {
           const todosLotes = (datosEstado.lotes || []).concat(datosEstado.lotes_anteriores || []);
           const l = todosLotes.find(lot => lot.lote_id === visorLoteIdActual);
           loteDesc = l ? (l.es_anterior ? `Lote #${l.numero} (Anteriores)` : `Lote #${l.numero}`) : 'Lote';
         }
-        divMeta.innerText = `${loteDesc} • ${formatearBytes(archivo.tamanio)} • 🕒 ${archivo.fecha_llegada || archivo.fecha || ''}`;
+        const pesoFmt = archivo.tamanio_fmt || formatearBytes(archivo.tamanio || archivo.tamanio_bytes || 0);
+        const fechaTxt = archivo.fecha_modificacion || archivo.fecha_llegada || archivo.fecha || '';
+        divMeta.innerText = `${loteDesc} • ${pesoFmt} • 🕒 ${fechaTxt}`;
       }
 
       if (chk) {
-        if (visorLoteIdActual === 'sin_identificar') {
+        if (visorLoteIdActual === 'sin_identificar' || (visorLoteIdActual && visorLoteIdActual.startsWith('pendrive:'))) {
           if (lblChk) lblChk.style.display = 'none';
         } else {
           if (lblChk) lblChk.style.display = 'flex';
@@ -1374,7 +1385,7 @@
     }
 
     function toggleSeleccionVisor(marcado) {
-      if (!visorArchivoActual || !visorLoteIdActual || visorLoteIdActual === 'sin_identificar') return;
+      if (!visorArchivoActual || !visorLoteIdActual || visorLoteIdActual === 'sin_identificar' || visorLoteIdActual.startsWith('pendrive:')) return;
       const cbTarjeta = document.querySelector(`.chk-lote-${visorLoteIdActual}[data-id="${visorArchivoActual.id_db}"]`);
       if (cbTarjeta) {
         cbTarjeta.checked = marcado;
@@ -2316,7 +2327,12 @@
         cont.innerHTML = '<p style="color:var(--text-muted); padding:20px 0;">Calculando simulación de envío y verificando pendrive...</p>';
         modal.style.display = 'flex';
 
-        const body = capitulo ? { capitulos: [capitulo] } : {};
+        let body = {};
+        if (Array.isArray(capitulo)) {
+          body = { carpetas: capitulo };
+        } else if (typeof capitulo === 'string' && capitulo.trim()) {
+          body = { carpetas: [capitulo.trim()] };
+        }
         const sim = await apiFetch('/api/pendrive/envio-simular', {
           method: 'POST',
           body: JSON.stringify(body)
@@ -2454,6 +2470,125 @@
       }
     }
 
+    let carpetasPendriveData = [];
+    let estadoPendriveActual = null;
+    window.carpetasPendriveSeleccionadas = window.carpetasPendriveSeleccionadas || new Set();
+    window.carpetasPendriveInicializadas = window.carpetasPendriveInicializadas || false;
+    window.carpetasPendriveDesplegadas = window.carpetasPendriveDesplegadas || new Set();
+
+    function seleccionarTodasCarpetasPendrive() {
+      if (!window.carpetasPendriveSeleccionadas) window.carpetasPendriveSeleccionadas = new Set();
+      carpetasPendriveData.forEach(c => {
+        window.carpetasPendriveSeleccionadas.add(`${c.personaje}/${c.carpeta}`);
+      });
+      actualizarEstadoCheckboxesPendrive();
+    }
+
+    function seleccionarNingunaCarpetasPendrive() {
+      if (window.carpetasPendriveSeleccionadas) {
+        window.carpetasPendriveSeleccionadas.clear();
+      }
+      actualizarEstadoCheckboxesPendrive();
+    }
+
+    function toggleSeleccionCarpetaPendrive(carpetaKey, marcado) {
+      if (!window.carpetasPendriveSeleccionadas) window.carpetasPendriveSeleccionadas = new Set();
+      if (marcado) {
+        window.carpetasPendriveSeleccionadas.add(carpetaKey);
+      } else {
+        window.carpetasPendriveSeleccionadas.delete(carpetaKey);
+      }
+      actualizarEstadoCheckboxesPendrive();
+    }
+
+    function toggleSeleccionarTodasCarpetasCheckbox(marcado) {
+      if (marcado) {
+        seleccionarTodasCarpetasPendrive();
+      } else {
+        seleccionarNingunaCarpetasPendrive();
+      }
+    }
+
+    function toggleVerArchivosCarpeta(safeKey) {
+      const fila = document.getElementById(`fila-archivos-${safeKey}`);
+      const btn = document.getElementById(`btn-toggle-archivos-${safeKey}`);
+      if (!fila) return;
+      const estaVisible = (fila.style.display !== 'none');
+      if (estaVisible) {
+        fila.style.display = 'none';
+        if (window.carpetasPendriveDesplegadas) window.carpetasPendriveDesplegadas.delete(safeKey);
+        if (btn) btn.innerText = btn.innerText.replace('Ocultar archivos', 'Ver archivos');
+      } else {
+        fila.style.display = 'table-row';
+        if (window.carpetasPendriveDesplegadas) window.carpetasPendriveDesplegadas.add(safeKey);
+        if (btn) btn.innerText = btn.innerText.replace('Ver archivos', 'Ocultar archivos');
+      }
+    }
+
+    function enviarCarpetasSeleccionadasPendrive() {
+      if (!window.carpetasPendriveSeleccionadas || window.carpetasPendriveSeleccionadas.size === 0) {
+        mostrarError("No seleccionaste ninguna carpeta para enviar.");
+        return;
+      }
+      abrirModalPlanEnvio(Array.from(window.carpetasPendriveSeleccionadas));
+    }
+
+    function actualizarEstadoCheckboxesPendrive() {
+      const cbs = document.querySelectorAll('.chk-carpeta-pendrive');
+      let cantMarcadas = 0;
+      cbs.forEach(cb => {
+        const k = cb.getAttribute('data-carpeta-key');
+        if (window.carpetasPendriveSeleccionadas && window.carpetasPendriveSeleccionadas.has(k)) {
+          cb.checked = true;
+          cantMarcadas++;
+        } else {
+          cb.checked = false;
+        }
+      });
+
+      const chkMaestro = document.getElementById('chk-maestro-carpetas-pendrive');
+      if (chkMaestro) {
+        if (cbs.length > 0 && cantMarcadas === cbs.length) {
+          chkMaestro.checked = true;
+          chkMaestro.indeterminate = false;
+        } else if (cantMarcadas > 0 && cantMarcadas < cbs.length) {
+          chkMaestro.checked = false;
+          chkMaestro.indeterminate = true;
+        } else {
+          chkMaestro.checked = false;
+          chkMaestro.indeterminate = false;
+        }
+      }
+
+      const btnEnviar = document.getElementById('btn-enviar-seleccionadas-pendrive');
+      if (btnEnviar) {
+        btnEnviar.innerText = `Enviar seleccionadas (${cantMarcadas})`;
+        const puedeEnviar = estadoPendriveActual && estadoPendriveActual.conectado && !estadoPendriveActual.sin_respuesta;
+        if (!puedeEnviar) {
+          btnEnviar.disabled = true;
+          btnEnviar.style.opacity = '0.5';
+          btnEnviar.style.cursor = 'not-allowed';
+          if (estadoPendriveActual && estadoPendriveActual.sin_respuesta) {
+            btnEnviar.title = "El pendrive no responde a las lecturas.";
+          } else if (estadoPendriveActual && estadoPendriveActual.unidad_candidata) {
+            btnEnviar.title = "Unidad candidata detectada sin vincular. Hacé clic en 'Vincular pendrive' para configurarla.";
+          } else {
+            btnEnviar.title = "No hay ningún pendrive vinculado conectado.";
+          }
+        } else if (cantMarcadas === 0) {
+          btnEnviar.disabled = true;
+          btnEnviar.style.opacity = '0.5';
+          btnEnviar.style.cursor = 'not-allowed';
+          btnEnviar.title = "Seleccioná al menos una carpeta para enviar";
+        } else {
+          btnEnviar.disabled = false;
+          btnEnviar.style.opacity = '1';
+          btnEnviar.style.cursor = 'pointer';
+          btnEnviar.title = `Enviar ${cantMarcadas} carpeta(s) al pendrive`;
+        }
+      }
+    }
+
     async function cargarVistaPendrive() {
       const contEstado = document.getElementById('contenedor-estado-pendrive');
       const contCaps = document.getElementById('contenedor-capitulos-pendrive');
@@ -2461,18 +2596,44 @@
       const contPart = document.getElementById('contenedor-part-pendrive');
       const contHist = document.getElementById('contenedor-historial-pendrive');
       const btnVincular = document.getElementById('btn-vincular-pendrive');
-      const btnEnviarTodos = document.getElementById('btn-enviar-todos-pendrive');
 
       if (!contEstado) return;
 
       try {
-        const [estadoPen, histRes] = await Promise.all([
-          apiFetch('/api/pendrive/estado'),
+        const [carpetasRes, estadoPen, histRes] = await Promise.all([
+          apiFetch('/api/pendrive/carpetas').catch(e => ({ carpetas: [], error: e.message })),
+          apiFetch('/api/pendrive/estado').catch(e => ({ sin_respuesta: true, error: e.message })),
           apiFetch('/api/historial').catch(() => ({ historial: [] }))
         ]);
 
-        // 1. Tarjeta Estado Físico
+        estadoPendriveActual = estadoPen;
+        carpetasPendriveData = carpetasRes.carpetas || [];
+
+        // Inicialización o poda de selecciones
+        if (!window.carpetasPendriveInicializadas) {
+          window.carpetasPendriveSeleccionadas = new Set();
+          carpetasPendriveData.forEach(c => {
+            if (!c.es_heredada && (c.pendientes_conteo > 0 || c.total_archivos > 0)) {
+              window.carpetasPendriveSeleccionadas.add(`${c.personaje}/${c.carpeta}`);
+            }
+          });
+          window.carpetasPendriveInicializadas = true;
+        } else {
+          const keysActuales = new Set(carpetasPendriveData.map(c => `${c.personaje}/${c.carpeta}`));
+          for (const k of Array.from(window.carpetasPendriveSeleccionadas)) {
+            if (!keysActuales.has(k)) {
+              window.carpetasPendriveSeleccionadas.delete(k);
+            }
+          }
+        }
+
+        // 1. Tarjeta Estado Físico del Pendrive (4 estados)
+        let puedeEnviarPendrive = false;
+        let motivoDeshabilitado = "";
+
         if (estadoPen.sin_respuesta) {
+          puedeEnviarPendrive = false;
+          motivoDeshabilitado = "El pendrive no responde a las lecturas dentro del tiempo límite.";
           contEstado.innerHTML = `
             <div style="background:rgba(245, 158, 11, 0.15); border:1px solid #f59e0b; padding:16px; border-radius:6px; color:#fef3c7;">
               <h3 style="display:flex; align-items:center; gap:8px;">⚠️ Pendrive sin respuesta</h3>
@@ -2480,17 +2641,20 @@
             </div>
           `;
           if (btnVincular) btnVincular.style.display = 'none';
-          if (btnEnviarTodos) btnEnviarTodos.disabled = true;
         } else if (!estadoPen.conectado) {
           const cand = estadoPen.unidad_candidata;
           if (cand) {
+            puedeEnviarPendrive = false;
+            motivoDeshabilitado = "Unidad candidata detectada sin vincular. Hacé clic en 'Vincular pendrive' para configurarla.";
             contEstado.innerHTML = `
               <div style="background:rgba(99, 102, 241, 0.1); border:1px solid #6366f1; padding:16px; border-radius:6px;">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
                   <div>
-                    <h3 style="color:#e0e7ff;">Unidad candidata detectada (sin vincular)</h3>
+                    <h3 style="color:#e0e7ff; display:flex; align-items:center; gap:8px;">
+                      🔍 Unidad candidata detectada (sin vincular)
+                    </h3>
                     <p style="color:var(--text-muted); font-size:0.85rem; margin-top:4px;">
-                      Punto de montaje: <code>${escapeHTML(cand.punto_montaje)}</code> &bull; Filesystem: <code>${escapeHTML(cand.sistema_archivos || 'desconocido')}</code> &bull; Libre: ${escapeHTML(cand.espacio_libre_fmt)}
+                      Punto de montaje: <code>${escapeHTML(cand.punto_montaje)}</code> &bull; Filesystem: <code>${escapeHTML(cand.sistema_archivos || 'desconocido')}</code> &bull; Libre: <strong>${escapeHTML(cand.espacio_libre_fmt)}</strong>
                     </p>
                   </div>
                   <button class="btn-sm" onclick="abrirModalVincularPendrive('${escapeHTML(cand.punto_montaje)}')" style="background:var(--accent); color:#000; font-weight:700; padding:8px 18px; border:none; border-radius:4px; cursor:pointer;">
@@ -2501,6 +2665,8 @@
             `;
             if (btnVincular) btnVincular.style.display = 'none';
           } else {
+            puedeEnviarPendrive = false;
+            motivoDeshabilitado = "No hay ningún pendrive vinculado conectado.";
             contEstado.innerHTML = `
               <div style="background:var(--card-alt); padding:16px; border-radius:6px; color:var(--text-muted);">
                 <p>🔌 Ningún pendrive vinculado detectado en el sistema.</p>
@@ -2509,11 +2675,11 @@
             `;
             if (btnVincular) btnVincular.style.display = 'inline-block';
           }
-          if (btnEnviarTodos) btnEnviarTodos.disabled = true;
         } else {
           // Pendrive Conectado y Vinculado
+          puedeEnviarPendrive = true;
+          motivoDeshabilitado = "";
           if (btnVincular) btnVincular.style.display = 'none';
-          if (btnEnviarTodos) btnEnviarTodos.disabled = (estadoPen.archivos_pendientes_conteo === 0);
 
           contEstado.innerHTML = `
             <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px;">
@@ -2543,42 +2709,155 @@
           `;
         }
 
-        // 2. Capítulos Pendientes
-        const capsPendientes = estadoPen.capitulos_pendientes || [];
-        if (!capsPendientes.length) {
-          contCaps.innerHTML = '<p style="color:var(--text-muted); padding:16px;">No hay archivos en la sala de espera listos para transferir.</p>';
+        // 2. Tabla de Carpetas de Sala de Espera
+        if (!carpetasPendriveData.length) {
+          contCaps.innerHTML = '<p style="color:var(--text-muted); padding:16px;">No hay carpetas con archivos en la sala de espera (~/Descargas/_lucie/).</p>';
         } else {
           contCaps.innerHTML = `
             <table class="tabla-historial">
               <thead>
                 <tr>
-                  <th style="width:15%;">Personaje</th>
-                  <th style="width:25%;">Capítulo</th>
-                  <th style="width:12%; text-align:center;">Videos</th>
-                  <th style="width:12%; text-align:center;">Fotos</th>
-                  <th style="width:16%;">Tamaño</th>
-                  <th style="width:20%; text-align:center;">Acción</th>
+                  <th style="width:5%; text-align:center;">
+                    <input type="checkbox" id="chk-maestro-carpetas-pendrive" onchange="toggleSeleccionarTodasCarpetasCheckbox(this.checked)" title="Seleccionar o deseleccionar todas">
+                  </th>
+                  <th style="width:12%;">Personaje</th>
+                  <th style="width:23%;">Carpeta</th>
+                  <th style="width:15%;">Tipo</th>
+                  <th style="width:17%;">Archivos y peso</th>
+                  <th style="width:13%;">Transferencia</th>
+                  <th style="width:15%; text-align:center;">Acciones</th>
                 </tr>
               </thead>
               <tbody>
-                ${capsPendientes.map(c => `
-                  <tr>
-                    <td><code>${escapeHTML(c.personaje)}</code></td>
-                    <td><strong>${escapeHTML(c.capitulo)}</strong></td>
-                    <td style="text-align:center;"><span class="tag-tipo tag-video">${c.videos}</span></td>
-                    <td style="text-align:center;"><span class="tag-tipo tag-imagen">${c.fotos}</span></td>
-                    <td>${escapeHTML(c.bytes_totales_fmt)}</td>
-                    <td style="text-align:center;">
-                      <button class="btn-sm" onclick="abrirModalPlanEnvio('${escapeHTML(c.personaje)}/${escapeHTML(c.capitulo)}')" style="background:#10b981; color:#000; font-weight:600; padding:6px 14px; border:none; border-radius:4px; cursor:pointer;" title="Enviar este capítulo">
-                        Enviar al pendrive
-                      </button>
-                    </td>
-                  </tr>
-                `).join('')}
+                ${carpetasPendriveData.map(c => {
+                  const cKey = `${c.personaje}/${c.carpeta}`;
+                  const safeKey = `${c.personaje}__${c.carpeta}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+                  const estaMarcada = window.carpetasPendriveSeleccionadas.has(cKey);
+                  const estaDesplegada = window.carpetasPendriveDesplegadas.has(safeKey);
+
+                  let badgeTipo = '';
+                  if (c.tipo === 'Capítulo en foco') {
+                    badgeTipo = '<span class="badge-tipo-foco">Capítulo en foco</span>';
+                  } else if (c.tipo === 'Capítulo abierto') {
+                    badgeTipo = '<span class="badge-tipo-abierto">Capítulo abierto</span>';
+                  } else if (c.tipo === 'Capítulo cerrado') {
+                    badgeTipo = '<span class="badge-tipo-cerrado">Capítulo cerrado</span>';
+                  } else if (c.es_heredada || c.tipo === 'Carpeta heredada') {
+                    badgeTipo = '<span class="badge-tipo-heredada" title="Carpeta preexistente sin estructura estándar de capítulo">⚠️ Carpeta heredada</span>';
+                  } else {
+                    badgeTipo = '<span class="badge-tipo-escena">Escena suelta</span>';
+                  }
+
+                  let transferInfo = '';
+                  if (estadoPen.conectado) {
+                    transferInfo = `<div><strong style="color:var(--teal)">${c.enviados_conteo}</strong> enviados</div><div style="color:var(--text-muted); font-size:0.8rem;">${c.pendientes_conteo} pendientes</div>`;
+                  } else {
+                    transferInfo = `<span style="color:var(--text-muted); font-size:0.85rem;">${c.total_archivos} pendientes</span>`;
+                  }
+
+                  const tagsMedia = `
+                    <div style="display:flex; gap:4px; flex-wrap:wrap; align-items:center;">
+                      <span class="tag-tipo tag-video">${c.videos} vid</span>
+                      <span class="tag-tipo tag-imagen">${c.fotos} fot</span>
+                      ${c.no_multimedia > 0 ? `<span class="tag-no-media" title="${c.no_multimedia} archivo(s) no multimedia (no se envían)">${c.no_multimedia} otros</span>` : ''}
+                    </div>
+                    <div style="font-size:0.8rem; color:var(--text-muted); margin-top:2px;">${escapeHTML(c.bytes_totales_fmt)}</div>
+                  `;
+
+                  const filaEnvioInhabilitada = !puedeEnviarPendrive || (estadoPen.conectado && c.pendientes_conteo === 0);
+                  const motivoFila = !puedeEnviarPendrive ? motivoDeshabilitado : 'Todos los archivos ya fueron transferidos';
+
+                  return `
+                    <tr>
+                      <td style="text-align:center;">
+                        <input type="checkbox" class="chk-carpeta-pendrive" data-carpeta-key="${escapeHTML(cKey)}" onchange="toggleSeleccionCarpetaPendrive('${escapeHTML(cKey)}', this.checked)" ${estaMarcada ? 'checked' : ''}>
+                      </td>
+                      <td><code>${escapeHTML(c.personaje)}</code></td>
+                      <td>
+                        <strong>${escapeHTML(c.carpeta)}</strong>
+                        <div style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">Último: ${escapeHTML(c.fecha_ultimo_archivo)}</div>
+                      </td>
+                      <td>${badgeTipo}</td>
+                      <td>${tagsMedia}</td>
+                      <td>${transferInfo}</td>
+                      <td style="text-align:center;">
+                        <div style="display:flex; flex-direction:column; gap:6px; align-items:center;">
+                          <button class="btn-sm" id="btn-toggle-archivos-${safeKey}" onclick="toggleVerArchivosCarpeta('${safeKey}')" style="background:var(--card-alt); border:1px solid var(--border); color:var(--text); padding:4px 8px; font-size:0.8rem; border-radius:4px; cursor:pointer; width:100%;">
+                            ${estaDesplegada ? 'Ocultar archivos' : `Ver archivos (${c.total_archivos})`}
+                          </button>
+                          <button class="btn-sm btn-enviar-fila-pendrive" onclick="abrirModalPlanEnvio(['${escapeHTML(cKey)}'])" ${filaEnvioInhabilitada ? `disabled title="${escapeHTML(motivoFila)}" style="background:#555; opacity:0.5; cursor:not-allowed; padding:4px 8px; font-size:0.8rem; width:100%;"` : 'style="background:#10b981; color:#000; font-weight:600; padding:4px 8px; font-size:0.8rem; border:none; border-radius:4px; cursor:pointer; width:100%;" title="Enviar esta carpeta al pendrive"'}>
+                            Enviar esta carpeta
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                    <tr id="fila-archivos-${safeKey}" class="desplegable-archivos-fila" style="display:${estaDesplegada ? 'table-row' : 'none'};">
+                      <td colspan="7">
+                        <div class="desplegable-archivos-box">
+                          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                            <strong>Contenido de <code>${escapeHTML(c.personaje)}/${escapeHTML(c.carpeta)}</code>:</strong>
+                            <small style="color:var(--text-muted)">${c.total_archivos} archivo(s) &bull; ${escapeHTML(c.bytes_totales_fmt)}</small>
+                          </div>
+                          ${c.es_heredada ? `
+                            <div style="background:rgba(245, 158, 11, 0.15); border:1px solid #f59e0b; color:#fef3c7; padding:8px 12px; border-radius:6px; margin-bottom:8px; font-size:0.85rem;">
+                              ⚠️ <strong>Carpeta heredada:</strong> No tiene estructura canónica de capítulo. Revisá el contenido antes de decidir su envío.
+                            </div>
+                          ` : ''}
+                          ${c.no_multimedia > 0 ? `
+                            <div style="background:rgba(239, 68, 68, 0.15); border:1px solid #ef4444; color:#fca5a5; padding:8px 12px; border-radius:6px; margin-bottom:8px; font-size:0.85rem;">
+                              ⚠️ <strong>Archivos no multimedia (${c.no_multimedia}):</strong> Se omitirán en la transferencia hacia el pendrive y permanecerán intactos en la sala de espera sin borrarse.
+                            </div>
+                          ` : ''}
+                          <table class="tabla-archivos-carpeta">
+                            <thead>
+                              <tr>
+                                <th style="width:30%;">Archivo</th>
+                                <th style="width:25%;">Ubicación relativa</th>
+                                <th style="width:10%;">Tipo</th>
+                                <th style="width:12%;">Tamaño</th>
+                                <th style="width:13%;">Estado</th>
+                                <th style="width:10%; text-align:center;">Vista previa</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              ${(c.archivos || []).map(a => {
+                                const esMedia = (a.tipo === 'video' || a.tipo === 'foto');
+                                const onclickVisor = esMedia ? `onclick="abrirVisorMedia('pendrive:${escapeHTML(cKey)}', '${escapeHTML(a.id_media)}')"` : '';
+                                const cursorStyle = esMedia ? 'cursor:pointer; text-decoration:underline;' : '';
+                                return `
+                                  <tr>
+                                    <td>
+                                      <span ${onclickVisor} style="${cursorStyle} font-weight:500;" title="${esMedia ? 'Clic para ver en el visor' : ''}">
+                                        ${esMedia ? (a.tipo === 'video' ? '🎬 ' : '🖼️ ') : '📄 '}${escapeHTML(a.nombre)}
+                                      </span>
+                                    </td>
+                                    <td><code>${escapeHTML(a.ruta_relativa)}</code></td>
+                                    <td><span class="tag-tipo ${a.tipo === 'video' ? 'tag-video' : (a.tipo === 'foto' ? 'tag-imagen' : 'tag-no-media')}">${escapeHTML(a.tipo)}</span></td>
+                                    <td>${escapeHTML(a.tamanio_fmt)}</td>
+                                    <td>${a.ya_enviado ? '<span class="badge-enviado">Ya en pendrive</span>' : '<span class="badge-pendiente">Pendiente</span>'}</td>
+                                    <td style="text-align:center;">
+                                      ${esMedia ? `
+                                        <button class="btn-sm" onclick="abrirVisorMedia('pendrive:${escapeHTML(cKey)}', '${escapeHTML(a.id_media)}')" style="background:transparent; border:1px solid var(--border); color:var(--text); padding:2px 8px; font-size:0.8rem; border-radius:4px; cursor:pointer;" title="Abrir visor">
+                                          👁️ Ver
+                                        </button>
+                                      ` : '<span style="color:var(--text-muted); font-size:0.8rem;">-</span>'}
+                                    </td>
+                                  </tr>
+                                `;
+                              }).join('')}
+                            </tbody>
+                          </table>
+                        </div>
+                      </td>
+                    </tr>
+                  `;
+                }).join('')}
               </tbody>
             </table>
           `;
         }
+
+        actualizarEstadoCheckboxesPendrive();
 
         // 3. Archivos .part huérfanos
         const parts = estadoPen.archivos_part_huerfanos || [];

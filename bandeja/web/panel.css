@@ -650,3 +650,119 @@
       color: #fca5a5;
       max-width: 500px;
     }
+
+    /* Badges de clasificación de carpetas de sala de espera */
+    .badge-tipo-foco {
+      background: rgba(3, 218, 198, 0.2);
+      color: var(--teal);
+      border: 1px solid var(--teal);
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 4px;
+      display: inline-block;
+    }
+    .badge-tipo-abierto {
+      background: rgba(96, 165, 250, 0.2);
+      color: #60a5fa;
+      border: 1px solid #60a5fa;
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 4px;
+      display: inline-block;
+    }
+    .badge-tipo-cerrado {
+      background: rgba(156, 163, 175, 0.2);
+      color: #9ca3af;
+      border: 1px solid #6b7280;
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 4px;
+      display: inline-block;
+    }
+    .badge-tipo-heredada {
+      background: rgba(245, 158, 11, 0.2);
+      color: #f59e0b;
+      border: 1px solid #f59e0b;
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 4px;
+      display: inline-block;
+    }
+    .badge-tipo-escena {
+      background: rgba(187, 134, 252, 0.2);
+      color: var(--accent);
+      border: 1px solid var(--accent);
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 4px;
+      display: inline-block;
+    }
+
+    .tag-no-media {
+      background: rgba(239, 68, 68, 0.2);
+      color: #f87171;
+      border: 1px solid #ef4444;
+      font-size: 0.75rem;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 600;
+      display: inline-block;
+    }
+
+    .desplegable-archivos-fila td {
+      background: #18181b !important;
+      padding: 16px !important;
+      border-bottom: 2px solid var(--border);
+    }
+
+    .desplegable-archivos-box {
+      background: var(--card-alt);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px;
+    }
+
+    .tabla-archivos-carpeta {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 0.85rem;
+    }
+
+    .tabla-archivos-carpeta th {
+      text-align: left;
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-muted);
+    }
+
+    .tabla-archivos-carpeta td {
+      padding: 6px 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .badge-enviado {
+      background: rgba(16, 185, 129, 0.2);
+      color: #10b981;
+      font-size: 0.75rem;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 500;
+      display: inline-block;
+    }
+
+    .badge-pendiente {
+      background: rgba(56, 189, 248, 0.15);
+      color: #38bdf8;
+      font-size: 0.75rem;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 500;
+      display: inline-block;
+    }
+
