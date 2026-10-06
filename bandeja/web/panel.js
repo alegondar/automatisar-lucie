@@ -233,6 +233,26 @@
       if (banner) banner.style.display = 'flex';
     }
 
+    function mostrarAvisoSinIdentificar(nombre, hash, ruta, esProyecto) {
+      operacionAvisoActual = {
+        tipo: 'sin_identificar',
+        hash: hash,
+        ruta: ruta,
+        nombre: nombre,
+        esProyecto: esProyecto
+      };
+      const banner = document.getElementById('banner-aviso');
+      const msg = document.getElementById('banner-aviso-msg');
+      if (msg) {
+        if (esProyecto) {
+          msg.innerHTML = `Agregado a Lotes Detectados: <strong>${escapeHTML(nombre)}</strong>. <a href="#" onclick="mostrarPestana('lotes'); return false;" style="color:#38bdf8; text-decoration:underline; font-weight:600; margin-left:8px;">Ver en Lotes Detectados &rarr;</a>`;
+        } else {
+          msg.innerHTML = `Archivo <strong>${escapeHTML(nombre)}</strong> marcado como ignorado.`;
+        }
+      }
+      if (banner) banner.style.display = 'flex';
+    }
+
     function cerrarAviso() {
       const banner = document.getElementById('banner-aviso');
       banner.style.display = 'none';
@@ -241,6 +261,21 @@
 
     async function deshacerDesdeAviso() {
       if (!operacionAvisoActual) return;
+      if (typeof operacionAvisoActual === 'object' && operacionAvisoActual.tipo === 'sin_identificar') {
+        const op = operacionAvisoActual;
+        try {
+          await apiFetch('/api/deshacer-clasificar-sin-identificar', {
+            method: 'POST',
+            body: JSON.stringify({ hash: op.hash, ruta: op.ruta })
+          });
+          cerrarAviso();
+          await cargarDatos();
+          mostrarToastLlegada(`Se restableció "${op.nombre}" en Sin Identificar`);
+        } catch (e) {
+          mostrarError(`Error al deshacer: ${e.message}`);
+        }
+        return;
+      }
       const idOp = operacionAvisoActual;
       if (!confirm("¿Confirmás deshacer esta operación? Los archivos regresarán a sus rutas originales.")) {
         return;
@@ -1467,13 +1502,15 @@
     }
 
     function generarHtmlCardLote(lote) {
+      const esLoteAdoptado = Boolean(lote.adoptado_a_mano || (lote.archivos || []).some(a => a.adoptado_a_mano));
+
       const capFoco = (datosEstado.capitulo_foco && datosEstado.capitulo_foco.habilitado) ? datosEstado.capitulo_foco : 
                       ((datosEstado.capitulo_activo && datosEstado.capitulo_activo.habilitado) ? datosEstado.capitulo_activo : null);
       const capsAbiertos = datosEstado.capitulos_abiertos || [];
       const nombresAbiertos = new Set(capsAbiertos.map(c => c.nombre));
 
       const persPre = capFoco ? capFoco.personaje : (lote.personaje_sugerido || datosEstado.ultimo_personaje || 'lucie');
-      const escenaPre = capFoco ? capFoco.nombre : (lote.escena_sugerida || '');
+      const escenaPre = esLoteAdoptado ? '' : (capFoco ? capFoco.nombre : (lote.escena_sugerida || ''));
 
       const persOptions = datosEstado.personajes.map(p => 
         `<option value="${p.id}" ${p.id === persPre ? 'selected' : ''}>${p.nombre}</option>`
@@ -1481,21 +1518,23 @@
 
       let optFoco = '';
       if (capFoco) {
-        optFoco = `<option value="${escapeHTML(capFoco.nombre)}" data-tipo="capitulo_foco" data-personaje="${escapeHTML(capFoco.personaje)}" selected>[Capítulo en foco] ${escapeHTML(capFoco.nombre)}</option>`;
+        const isSelectedFoco = (!esLoteAdoptado);
+        optFoco = `<option value="${escapeHTML(capFoco.nombre)}" data-tipo="capitulo_foco" data-personaje="${escapeHTML(capFoco.personaje)}" ${isSelectedFoco ? 'selected' : ''}>[Capítulo en foco] ${escapeHTML(capFoco.nombre)}</option>`;
       }
 
       const optsAbiertosSecundarios = capsAbiertos
         .filter(c => !capFoco || c.id !== capFoco.id)
         .map(c => {
-          const isSelected = (!capFoco && c.nombre === escenaPre);
+          const isSelected = (!esLoteAdoptado && !capFoco && c.nombre === escenaPre);
           return `<option value="${escapeHTML(c.nombre)}" data-tipo="capitulo_abierto" data-personaje="${escapeHTML(c.personaje)}" ${isSelected ? 'selected' : ''}>[Capítulo abierto] ${escapeHTML(c.personaje)}/${escapeHTML(c.nombre)}</option>`;
         })
         .join('');
 
-      const matchAbiertoSecundario = !capFoco && capsAbiertos.some(c => c.nombre === escenaPre);
-      const matchOtraEscena = !capFoco && (datosEstado.escenas || []).some(e => !nombresAbiertos.has(e.nombre) && e.nombre === escenaPre);
-      const esNueva = !capFoco && !matchAbiertoSecundario && !matchOtraEscena;
+      const matchAbiertoSecundario = !esLoteAdoptado && !capFoco && capsAbiertos.some(c => c.nombre === escenaPre);
+      const matchOtraEscena = !esLoteAdoptado && !capFoco && (datosEstado.escenas || []).some(e => !nombresAbiertos.has(e.nombre) && e.nombre === escenaPre);
+      const esNueva = !esLoteAdoptado && !capFoco && !matchAbiertoSecundario && !matchOtraEscena;
 
+      const optElegir = esLoteAdoptado ? `<option value="" selected disabled>-- Elegir escena o capítulo --</option>` : '';
       const optNueva = `<option value="__nueva__" ${esNueva ? 'selected' : ''}>+ Crear nueva escena...</option>`;
 
       const otrasEscenas = (datosEstado.escenas || [])
@@ -1503,17 +1542,19 @@
         .map(e => `<option value="${escapeHTML(e.nombre)}" data-tipo="${e.tipo}" ${(matchOtraEscena && e.nombre === escenaPre) ? 'selected' : ''}>[${e.tipo === 'descargas_alias' ? 'En Descargas' : 'Destino'}] ${escapeHTML(e.nombre)}</option>`)
         .join('');
 
-      const escenasOptions = optFoco + optsAbiertosSecundarios + optNueva + otrasEscenas;
+      const escenasOptions = optElegir + optFoco + optsAbiertosSecundarios + optNueva + otrasEscenas;
       const totalArchivosLote = (lote.archivos || []).length;
       const archivosSeleccionadosIniciales = (lote.archivos || []).filter(a => !(a.duplicado && a.duplicado.es_duplicado)).length;
       const todosTildados = totalArchivosLote > 0 && archivosSeleccionadosIniciales === totalArchivosLote;
+      const listoParaMover = todosTildados && !esLoteAdoptado;
+      const badgeAdoptadoHeader = esLoteAdoptado ? `<span class="badge" style="background:#7c3aed; color:#fff; font-weight:600; margin-left:8px; font-size:0.75rem;">Adoptado a mano</span>` : '';
 
       return `
         <div class="card" id="card-${lote.lote_id}">
           <div class="card-header">
             <div style="display:flex; align-items:center; gap:10px;">
-              <input type="checkbox" class="cb-lote-listo" data-lote-id="${lote.lote_id}" ${todosTildados ? 'checked' : ''} title="Tildar para mover con 'Mover lotes listos'" onchange="seleccionarTodosLote('${lote.lote_id}', this.checked)">
-              <h3>Lote #${lote.numero} (${lote.total_archivos} archivos &bull; ${formatearBytes(lote.total_bytes)})</h3>
+              <input type="checkbox" class="cb-lote-listo" data-lote-id="${lote.lote_id}" ${listoParaMover ? 'checked' : ''} title="Tildar para mover con 'Mover lotes listos'" onchange="seleccionarTodosLote('${lote.lote_id}', this.checked)">
+              <h3>Lote #${lote.numero} (${lote.total_archivos} archivos &bull; ${formatearBytes(lote.total_bytes)})${badgeAdoptadoHeader}</h3>
             </div>
             <span style="color:var(--text-muted);font-size:0.85rem">${lote.fecha}</span>
           </div>
@@ -1529,6 +1570,7 @@
               const esDup = Boolean(a.duplicado && a.duplicado.es_duplicado);
               const isChecked = !esDup;
               const badgeDup = esDup ? `<span class="badge-duplicado" title="${escapeHTML(a.duplicado.mensaje || 'Archivo duplicado')}">Duplicado</span>` : '';
+              const badgeAdop = a.adoptado_a_mano ? `<span class="badge" style="background:#7c3aed; color:#fff; font-size:0.7rem; padding:1px 5px; border-radius:3px; margin-left:4px; font-weight:600;" title="Adoptado a mano desde Sin Identificar">Adoptado a mano</span>` : '';
               const detalleDup = esDup ? `<div class="archivo-duplicado-info" style="font-size:0.72rem; color:#ef4444; margin-top:2px;" title="${escapeHTML(a.duplicado.mensaje || '')}">${escapeHTML(a.duplicado.mensaje || 'Duplicado')}</div>` : '';
               return `
               <div class="archivo-item" title="Archivo: ${a.nombre}&#10;Fecha llegada: ${a.fecha_llegada || a.fecha || ''}&#10;Fecha modificación: ${a.fecha || ''}&#10;Tamaño: ${formatearBytes(a.tamanio)}">
@@ -1537,7 +1579,7 @@
                 </div>
                 ${generarHtmlMiniatura(lote.lote_id, a)}
                 <div class="archivo-meta">
-                  <div class="archivo-nombre" title="${a.nombre}">${escapeHTML(a.nombre)} ${badgeDup}</div>
+                  <div class="archivo-nombre" title="${a.nombre}">${escapeHTML(a.nombre)} ${badgeDup} ${badgeAdop}</div>
                   <div class="archivo-peso">${formatearBytes(a.tamanio)}</div>
                   ${detalleDup}
                   <div class="archivo-llegada" style="font-size:0.75rem; color:var(--text-muted);" title="Fecha de llegada: ${a.fecha_llegada || a.fecha || ''}">🕒 ${a.fecha_llegada || a.fecha || ''}</div>
@@ -1942,7 +1984,7 @@
           </thead>
           <tbody>
             ${datosEstado.sin_identificar.map(a => `
-              <tr>
+              <tr id="row-sin-id-${a.hash}">
                 <td style="padding:6px;">
                   <div style="width:60px; height:45px; border-radius:4px; overflow:hidden;">
                     ${generarHtmlMiniatura('sin_identificar', a)}
@@ -1951,8 +1993,8 @@
                 <td><span style="cursor:pointer; font-weight:500;" onclick="abrirVisorMedia('sin_identificar', '${a.id_media}')" title="Clic para vista previa">${escapeHTML(a.nombre)}</span></td>
                 <td>${formatearBytes(a.tamanio)}</td>
                 <td>
-                  <button class="btn-accion" style="padding:4px 8px;font-size:0.75rem;" onclick="clasificarSinId('${a.hash}', '${a.ruta.replace(/'/g, "\\\\\\'")}', true)">Del Proyecto</button>
-                  <button class="btn-cancelar" style="padding:4px 8px;font-size:0.75rem;" onclick="clasificarSinId('${a.hash}', '${a.ruta.replace(/'/g, "\\\\\\'")}', false)">Ignorar</button>
+                  <button class="btn-accion btn-sin-id-proyecto" style="padding:4px 8px;font-size:0.75rem;" onclick="clasificarSinId('${a.hash}', true)">Del Proyecto</button>
+                  <button class="btn-cancelar btn-sin-id-ignorar" style="padding:4px 8px;font-size:0.75rem;" onclick="clasificarSinId('${a.hash}', false)">Ignorar</button>
                 </td>
               </tr>
             `).join('')}
@@ -1962,7 +2004,27 @@
       inicializarLazyLoaderVideos();
     }
 
-    async function clasificarSinId(hash, ruta, esProyecto) {
+    async function clasificarSinId(hash, esProyecto) {
+      const arch = (datosEstado.sin_identificar || []).find(x => x.hash === hash);
+      const ruta = arch ? arch.ruta : '';
+      const nombre = arch ? arch.nombre : 'Archivo';
+
+      // Salida visual inmediata de la fila
+      const fila = document.getElementById(`row-sin-id-${hash}`);
+      if (fila) {
+        fila.remove();
+        const tbody = document.querySelector('#contenedor-sin-identificar tbody');
+        if (tbody && !tbody.children.length) {
+          document.getElementById('contenedor-sin-identificar').innerHTML = '<p style="color:var(--text-muted)">No hay archivos multimedia sin clasificar.</p>';
+        }
+      }
+
+      // Remover del estado local en memoria
+      datosEstado.sin_identificar = (datosEstado.sin_identificar || []).filter(x => x.hash !== hash);
+
+      // Aviso con enlace y Deshacer
+      mostrarAvisoSinIdentificar(nombre, hash, ruta, esProyecto);
+
       try {
         await apiFetch('/api/clasificar-sin-identificar', {
           method: 'POST',
@@ -1970,7 +2032,8 @@
         });
         await cargarDatos();
       } catch (e) {
-        mostrarError(e.message);
+        mostrarError(`Error al clasificar: ${e.message}`);
+        await cargarDatos();
       }
     }
 
@@ -2095,6 +2158,13 @@
       let nombreEscena = selEscena;
       let esExistenteDescargas = false;
 
+      if (!selEscena || selEscena.trim() === '') {
+        mostrarError("Debés elegir o escribir una escena o capítulo para el lote.");
+        const sel = document.getElementById(`sel-escena-${loteId}`);
+        if (sel) sel.focus();
+        return;
+      }
+
       if (selEscena === '__nueva__') {
         if (!validarInputEscena(loteId, true)) {
           const txt = document.getElementById(`txt-nueva-escena-${loteId}`);
@@ -2152,6 +2222,13 @@
         const selEscena = document.getElementById(`sel-escena-${loteId}`).value;
         let nombreEscena = selEscena;
         let esExistenteDescargas = false;
+
+        if (!selEscena || selEscena.trim() === '') {
+          mostrarError("Debés elegir o escribir una escena o capítulo para todos los lotes seleccionados.");
+          const sel = document.getElementById(`sel-escena-${loteId}`);
+          if (sel) sel.focus();
+          return;
+        }
 
         if (selEscena === '__nueva__') {
           if (!validarInputEscena(loteId, true)) {

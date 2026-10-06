@@ -98,6 +98,7 @@ def buscar_puntos_montaje_candidatos(config: Any = None,
         for r in rutas_cfg:
             if r and os.path.isdir(r):
                 candidatos.append(os.path.realpath(r))
+        return list(dict.fromkeys(candidatos))
 
     # 2. Linux / POSIX: puntos de montaje habituales
     if os.name == "posix":

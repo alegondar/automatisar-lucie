@@ -171,11 +171,12 @@ class AgrupadorLotes:
             lote_id = f"lote_{int(mtime_min)}_{idx}"
 
             es_ant = any(bool(g.get("es_anterior")) for g in grupo)
+            es_adop = any(bool(g.get("adoptado_a_mano")) for g in grupo)
 
             # Extraer personaje y escena sugeridos para el lote si están disponibles
-            personaje_sug = next((g.get("personaje") for g in grupo if g.get("personaje")), None)
-            escena_sug = "" if es_ant else next((g.get("escena") for g in grupo if g.get("escena")), None)
-            raiz_sug = "" if es_ant else next((g.get("raiz_escena") for g in grupo if g.get("raiz_escena")), None)
+            personaje_sug = None if es_adop else next((g.get("personaje") for g in grupo if g.get("personaje")), None)
+            escena_sug = "" if (es_ant or es_adop) else next((g.get("escena") for g in grupo if g.get("escena")), None)
+            raiz_sug = "" if (es_ant or es_adop) else next((g.get("raiz_escena") for g in grupo if g.get("raiz_escena")), None)
 
             for arch in grupo:
                 if "fecha" not in arch and "mtime" in arch:
@@ -186,6 +187,8 @@ class AgrupadorLotes:
                 if es_ant:
                     arch["es_anterior"] = True
                     arch["escena"] = ""
+                if arch.get("adoptado_a_mano"):
+                    arch["adoptado_a_mano"] = True
 
             resultado.append({
                 "lote_id": lote_id,
@@ -199,6 +202,7 @@ class AgrupadorLotes:
                 "escena_sugerida": escena_sug,
                 "raiz_escena": raiz_sug,
                 "es_anterior": es_ant,
+                "adoptado_a_mano": es_adop,
                 "archivos": grupo
             })
 

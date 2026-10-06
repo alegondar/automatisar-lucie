@@ -577,6 +577,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
         if ruta == "/api/clasificar-sin-identificar":
             self._handle_clasificar_sin_identificar(body)
+        elif ruta == "/api/deshacer-clasificar-sin-identificar":
+            self._handle_deshacer_clasificar_sin_identificar(body)
         elif ruta == "/api/capitulos/empezar":
             self._handle_capitulos_empezar(body)
         elif ruta == "/api/capitulos/en-foco":
@@ -955,9 +957,27 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             return
 
         self.db.guardar_decision_sin_identificar(hash_val, ruta_archivo, es_proyecto)
-        # Forzar reescaneo para reflejar la decisión
-        self.vigilante.escanear()
+        # Forzar reescaneo y actualización inmediata del token de versión
+        if hasattr(self.vigilante, "forzar_actualizacion_version"):
+            self.vigilante.forzar_actualizacion_version()
+        else:
+            self.vigilante.escanear()
         self._enviar_json({"exito": True, "hash": hash_val, "es_proyecto": es_proyecto})
+
+    def _handle_deshacer_clasificar_sin_identificar(self, body: Dict[str, Any]):
+        hash_val = body.get("hash")
+        ruta_archivo = body.get("ruta")
+
+        if not hash_val and not ruta_archivo:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "Se requiere al menos 'hash' o 'ruta'.")
+            return
+
+        revertido = self.db.revertir_decision_sin_identificar(hash_val, ruta_archivo)
+        if hasattr(self.vigilante, "forzar_actualizacion_version"):
+            self.vigilante.forzar_actualizacion_version()
+        else:
+            self.vigilante.escanear()
+        self._enviar_json({"exito": True, "revertido": revertido, "hash": hash_val, "ruta": ruta_archivo})
 
     def _generar_html_simulacion_multilote(self, simulaciones_lotes: List[Dict[str, Any]]) -> str:
         total_archivos = sum(len(item["simulacion"].get("movimientos", [])) for item in simulaciones_lotes)

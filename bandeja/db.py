@@ -47,6 +47,11 @@ class GestorBaseDatosBandeja:
         con = sqlite3.connect(self.ruta_db, timeout=10.0)
         con.row_factory = sqlite3.Row
         try:
+            con.execute("PRAGMA journal_mode=WAL;")
+            con.execute("PRAGMA busy_timeout=5000;")
+        except Exception:
+            pass
+        try:
             with con:
                 yield con
         finally:
@@ -63,7 +68,8 @@ class GestorBaseDatosBandeja:
                 estado TEXT NOT NULL, -- 'detectado', 'clasificado', 'ignorado', 'movido'
                 personaje TEXT,
                 escena TEXT,
-                fecha TEXT NOT NULL
+                fecha TEXT NOT NULL,
+                adoptado_a_mano INTEGER DEFAULT 0
             );
             """)
             cur.execute("""
@@ -98,6 +104,11 @@ class GestorBaseDatosBandeja:
             if "en_foco" not in cols_cap:
                 cur.execute("ALTER TABLE bandeja_capitulos ADD COLUMN en_foco INTEGER DEFAULT 0;")
 
+            cur.execute("PRAGMA table_info(bandeja_archivos);")
+            cols_arch = [r["name"] for r in cur.fetchall()]
+            if "adoptado_a_mano" not in cols_arch:
+                cur.execute("ALTER TABLE bandeja_archivos ADD COLUMN adoptado_a_mano INTEGER DEFAULT 0;")
+
             cur.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_capitulo_en_foco
             ON bandeja_capitulos(en_foco) WHERE en_foco = 1;
@@ -119,20 +130,24 @@ class GestorBaseDatosBandeja:
 
     def registrar_o_actualizar(self, hash_val: str, ruta_actual: str, estado: str,
                                personaje: Optional[str] = None, escena: Optional[str] = None,
-                               limpiar_escena: bool = False) -> int:
+                               limpiar_escena: bool = False,
+                               adoptado_a_mano: Optional[bool] = None) -> int:
         fecha_iso = datetime.datetime.now().isoformat()
+        adop_int = 1 if adoptado_a_mano is True else (0 if adoptado_a_mano is False else None)
         with self._lock, self._conectar() as con:
             cur = con.cursor()
             cur.execute("""
-            INSERT INTO bandeja_archivos (hash, ruta_actual, estado, personaje, escena, fecha)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO bandeja_archivos (hash, ruta_actual, estado, personaje, escena, fecha, adoptado_a_mano)
+            VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, 0))
             ON CONFLICT(hash) DO UPDATE SET
                 ruta_actual = excluded.ruta_actual,
                 estado = excluded.estado,
                 personaje = COALESCE(excluded.personaje, bandeja_archivos.personaje),
                 escena = CASE WHEN ? THEN NULL ELSE COALESCE(excluded.escena, bandeja_archivos.escena) END,
-                fecha = excluded.fecha;
-            """, (hash_val, ruta_actual, estado, personaje, escena, fecha_iso, 1 if limpiar_escena else 0))
+                fecha = excluded.fecha,
+                adoptado_a_mano = CASE WHEN ? IS NOT NULL THEN ? ELSE bandeja_archivos.adoptado_a_mano END;
+            """, (hash_val, ruta_actual, estado, personaje, escena, fecha_iso, adop_int,
+                  1 if limpiar_escena else 0, adop_int, adop_int))
             con.commit()
             cur.execute("SELECT id FROM bandeja_archivos WHERE hash = ?", (hash_val,))
             row = cur.fetchone()
@@ -168,7 +183,26 @@ class GestorBaseDatosBandeja:
 
     def guardar_decision_sin_identificar(self, hash_val: str, ruta_actual: str, es_proyecto: bool) -> int:
         estado = "clasificado" if es_proyecto else "ignorado"
-        return self.registrar_o_actualizar(hash_val, ruta_actual, estado)
+        return self.registrar_o_actualizar(
+            hash_val, ruta_actual, estado,
+            limpiar_escena=True,
+            adoptado_a_mano=es_proyecto
+        )
+
+    def revertir_decision_sin_identificar(self, hash_val: str, ruta_actual: Optional[str] = None) -> bool:
+        """
+        Revierte la decisión de un archivo sin identificar (sea clasificado o ignorado).
+        Lo restablece al estado 'detectado' con adoptado_a_mano = 0 y sin personaje ni escena.
+        """
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            cur.execute("""
+            UPDATE bandeja_archivos
+            SET estado = 'detectado', adoptado_a_mano = 0, personaje = NULL, escena = NULL
+            WHERE hash = ? OR (ruta_actual = ? AND ? IS NOT NULL)
+            """, (hash_val, ruta_actual, ruta_actual))
+            con.commit()
+            return cur.rowcount > 0
 
     def obtener_ultimo_personaje(self) -> Optional[str]:
         with self._lock, self._conectar() as con:

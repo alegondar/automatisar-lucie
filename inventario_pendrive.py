@@ -264,8 +264,17 @@ class CacheInventario:
             os.makedirs(os.path.dirname(self.ruta_cache), exist_ok=True)
             self._init_db()
 
+    def _conectar_db(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.ruta_cache, timeout=10.0)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA busy_timeout=5000;")
+        except Exception:
+            pass
+        return conn
+
     def _init_db(self):
-        conn = sqlite3.connect(self.ruta_cache)
+        conn = self._conectar_db()
         try:
             cursor = conn.cursor()
             cursor.execute("""
@@ -288,7 +297,7 @@ class CacheInventario:
             return None
         conn = None
         try:
-            conn = sqlite3.connect(self.ruta_cache)
+            conn = self._conectar_db()
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT sha256, duration, size_bytes, mtime FROM cache_archivos WHERE rel_path = ?",
@@ -313,7 +322,7 @@ class CacheInventario:
             return
         conn = None
         try:
-            conn = sqlite3.connect(self.ruta_cache)
+            conn = self._conectar_db()
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT OR REPLACE INTO cache_archivos 
@@ -334,7 +343,7 @@ class CacheInventario:
         if os.path.exists(self.ruta_cache):
             conn = None
             try:
-                conn = sqlite3.connect(self.ruta_cache)
+                conn = self._conectar_db()
                 conn.execute("DELETE FROM cache_archivos")
                 conn.commit()
                 print(f"[+] Caché vaciada: {self.ruta_cache}")

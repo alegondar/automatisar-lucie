@@ -55,7 +55,13 @@ class VigilanteBandeja:
         self._ultimo_conteo_lotes = 0
         self._estado_pendrive: Dict[str, Any] = {"conectado": False, "sin_respuesta": False}
         self._mapa_media: Dict[str, str] = {}
+        self._version_forzada: int = 0
         self._lock = threading.Lock()
+
+    def forzar_actualizacion_version(self):
+        with self._lock:
+            self._version_forzada += 1
+        self.escanear()
 
     def iniciar(self):
         self._hilo = threading.Thread(target=self._bucle_sondeo, daemon=True, name="VigilanteBandeja")
@@ -208,7 +214,23 @@ class VigilanteBandeja:
                     "mensaje": f"Ya enviado a pendrive ({nombre_pen})"
                 }
 
-            if es_anterior:
+            es_adoptado_mano = bool(reg and reg.get("adoptado_a_mano"))
+            es_ignorado = bool(reg and reg.get("estado") == "ignorado")
+
+            if es_adoptado_mano:
+                id_db = reg["id"]
+                estado_actual = "clasificado"
+                personaje_actual = reg.get("personaje")
+                escena_actual = reg.get("escena")
+                raiz_escena = f"{personaje_actual}::{escena_actual}" if escena_actual else None
+                es_anterior = False
+            elif es_ignorado:
+                id_db = reg["id"]
+                estado_actual = "ignorado"
+                personaje_actual = None
+                escena_actual = None
+                raiz_escena = None
+            elif es_anterior:
                 # Regla 2: Archivo anterior al inicio del capítulo activo o según ventana reciente:
                 # NO se asigna al capítulo ni se preselecciona.
                 pers_alias = self.filtro.obtener_personaje_de_alias_inicial(entrada) if tipo_clasificacion == "candidato" else None
@@ -331,6 +353,7 @@ class VigilanteBandeja:
                 "escena": escena_actual,
                 "raiz_escena": raiz_escena,
                 "es_anterior": es_anterior,
+                "adoptado_a_mano": es_adoptado_mano,
                 "duplicado": duplicado_info
             }
 
@@ -530,7 +553,8 @@ class VigilanteBandeja:
             cap_foco.get("id"),
             cap_foco.get("en_foco"),
             balance,
-            pen_token
+            pen_token,
+            getattr(self, "_version_forzada", 0)
         )
         return hashlib.sha256(repr(raw_payload).encode("utf-8")).hexdigest()[:16]
 
