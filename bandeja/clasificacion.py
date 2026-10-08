@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import unicodedata
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from bandeja.config import (
@@ -21,6 +22,7 @@ from bandeja.config import (
     EXTENSIONES_MEDIA_DEFECTO,
     NOMBRES_RESERVADOS_WINDOWS,
 )
+from bandeja.plataforma import esta_confinado_en_raiz, validar_longitud_ruta
 
 logger = logging.getLogger("bandeja.clasificacion")
 
@@ -47,11 +49,11 @@ class FiltroListaBlanca:
         alias_set = {"lucie", "luci", "roli", "laroli", "magui", "mailen"}
         if os.path.exists(ruta_alias):
             try:
-                with open(ruta_alias, "r", encoding="utf-8") as f:
+                with open(ruta_alias, "r", encoding="utf-8", newline="\n") as f:
                     datos = json.load(f)
                 for r in datos.get("reglas", []):
                     for pat in r.get("patrones", []):
-                        limpio = pat.replace("*", "").strip().lower()
+                        limpio = unicodedata.normalize("NFC", pat.replace("*", "").strip().lower())
                         if limpio:
                             alias_set.add(limpio)
             except Exception:
@@ -60,7 +62,7 @@ class FiltroListaBlanca:
 
     def es_carpeta_escena_existente(self, nombre_carpeta: str) -> bool:
         """Verifica si una carpeta de Descargas comienza con un alias de personaje."""
-        nombre_lower = nombre_carpeta.strip().lower()
+        nombre_lower = unicodedata.normalize("NFC", nombre_carpeta).strip().lower()
         if (nombre_lower.startswith("_") or 
             "_descartados" in nombre_lower or 
             "_enviados" in nombre_lower or 
@@ -74,7 +76,7 @@ class FiltroListaBlanca:
 
     def obtener_personaje_de_carpeta_escena(self, nombre_carpeta: str) -> str:
         """Deduce el personaje principal a partir del nombre de la carpeta con alias."""
-        nombre_lower = nombre_carpeta.strip().lower()
+        nombre_lower = unicodedata.normalize("NFC", nombre_carpeta).strip().lower()
         if "roli" in nombre_lower or "magui" in nombre_lower:
             return "roli"
         if "lucie" in nombre_lower or "luci" in nombre_lower:
@@ -90,7 +92,7 @@ class FiltroListaBlanca:
         Si el nombre contiene menciones a otros personajes en posiciones posteriores
         (ej: 'rolitirandoaguaalucie.jpg'), el personaje inicial ('roli') prevalece sin cambios.
         """
-        nombre_lower = os.path.basename(nombre_archivo).lower()
+        nombre_lower = unicodedata.normalize("NFC", os.path.basename(nombre_archivo)).lower()
         for al in self.alias_personajes:
             if nombre_lower.startswith(al):
                 if al in ("roli", "laroli", "magui"):
@@ -115,16 +117,14 @@ class FiltroListaBlanca:
         - Remueve el sufijo de duplicados de Chrome ' (n)'.
         - Remueve números finales.
         - Conserva intacto el prefijo del personaje.
-        Ejemplos:
-          'lucie atendiendo (1).mp4' -> 'lucie atendiendo'
-          'roliyacussi 02.mp4' -> 'roliyacussi'
-          'lucieasado.mp4' -> 'lucieasado'
+        - Normaliza a NFC.
         """
         nombre_base, _ = os.path.splitext(os.path.basename(nombre_archivo))
+        nombre_base = unicodedata.normalize("NFC", nombre_base)
         sug = re.sub(r"\s*\(\d+\)$", "", nombre_base)
         sug = re.sub(r"[\s_\-]*\d+$", "", sug).strip()
         sug = sug.rstrip(" _-").strip()
-        return sug if sug else nombre_base
+        return unicodedata.normalize("NFC", sug if sug else nombre_base)
 
     def obtener_raiz_escena(self, nombre_archivo: str) -> Optional[str]:
         """
@@ -207,6 +207,9 @@ class ValidadorEscenas:
         if not nombre or not nombre.strip():
             return False, "El nombre de la escena no puede estar vacío."
 
+        # Normalización a NFC
+        nombre = unicodedata.normalize("NFC", nombre)
+
         # Caracteres prohibidos y de control
         if ".." in nombre or "/" in nombre or "\\" in nombre:
             return False, "El nombre de la escena no puede contener separadores de ruta ('/', '\\') ni '..'."
@@ -232,23 +235,23 @@ class ValidadorEscenas:
             return False, f"El nombre contiene caracteres inválidos en sistemas de archivos: {' '.join(set(infracciones_caracteres))}"
 
         # Nombres reservados en Windows/exFAT
-        base_sin_ext = nombre.split(".")[0].upper()
-        if base_sin_ext in NOMBRES_RESERVADOS_WINDOWS:
+        base_sin_ext = nombre.split(".")[0].upper().strip()
+        if base_sin_ext in NOMBRES_RESERVADOS_WINDOWS or nombre.upper().strip() in NOMBRES_RESERVADOS_WINDOWS:
             return False, f"'{nombre}' es un nombre de dispositivo reservado en sistemas Windows/exFAT."
 
-        # Validación de confinamiento mediante realpath
+        # Validación de confinamiento y longitud de ruta mediante utilitarios de plataforma
         try:
             if es_existente_descargas:
                 ruta_final = os.path.join(ruta_descargas, nombre)
-                base_confinada = os.path.realpath(ruta_descargas)
-                ruta_final_real = os.path.realpath(ruta_final)
-                if not (ruta_final_real == base_confinada or ruta_final_real.startswith(base_confinada + os.sep)):
+                if not validar_longitud_ruta(ruta_final):
+                    return False, f"La ruta de la escena excede los 260 caracteres permitidos (MAX_PATH): '{ruta_final}'."
+                if not esta_confinado_en_raiz(ruta_final, ruta_descargas):
                     return False, "La ruta de la escena escapa de los límites permitidos del directorio de destino."
             else:
-                base_confinada = os.path.realpath(ruta_destino_base)
                 ruta_final = os.path.join(ruta_destino_base, personaje, nombre)
-                ruta_final_real = os.path.realpath(ruta_final)
-                if not (ruta_final_real == base_confinada or ruta_final_real.startswith(base_confinada + os.sep)):
+                if not validar_longitud_ruta(ruta_final):
+                    return False, f"La ruta de la escena excede los 260 caracteres permitidos (MAX_PATH): '{ruta_final}'."
+                if not esta_confinado_en_raiz(ruta_final, ruta_destino_base):
                     return False, "La ruta de la escena escapa de los límites permitidos del directorio de destino."
         except Exception as e:
             return False, f"Error al validar confinamiento de la escena: {str(e)}"
@@ -268,8 +271,8 @@ def asegurar_carpeta_capitulo(
     Valida previamente el nombre con ValidadorEscenas y el confinamiento con realpath.
     Si ya existía, no modifica ni borra nada y contabiliza los archivos existentes.
     """
-    nombre_limpio = (nombre or "").strip()
-    personaje_limpio = (personaje or "").strip().lower()
+    nombre_limpio = unicodedata.normalize("NFC", (nombre or "").strip())
+    personaje_limpio = unicodedata.normalize("NFC", (personaje or "").strip().lower())
     if personaje_limpio not in ("lucie", "roli", "mailen"):
         raise ValueError(f"Personaje inválido: '{personaje}'. Debe ser 'lucie', 'roli' o 'mailen'.")
 
@@ -284,10 +287,11 @@ def asegurar_carpeta_capitulo(
         raise ValueError(f"Nombre de capítulo inválido: {motivo}")
 
     carpeta = os.path.join(ruta_destino_base, personaje_limpio, nombre_limpio)
-    base_confinada = os.path.realpath(ruta_destino_base)
-    carpeta_real = os.path.realpath(carpeta)
-    if not (carpeta_real == base_confinada or carpeta_real.startswith(base_confinada + os.sep)):
+    if not validar_longitud_ruta(carpeta):
+        raise ValueError(f"La ruta del capítulo excede los 260 caracteres permitidos (MAX_PATH): '{carpeta}'.")
+    if not esta_confinado_en_raiz(carpeta, ruta_destino_base):
         raise ValueError("La ruta del capítulo escapa de los límites permitidos del directorio de destino.")
+
 
     ya_existia = os.path.exists(carpeta)
     total_archivos = 0

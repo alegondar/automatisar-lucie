@@ -1466,6 +1466,7 @@ class TestControlMontajePendrive(unittest.TestCase):
         finally:
             bandeja.pendrive._operacion_pendrive_activa = False
 
+    @unittest.skipUnless(os.name == "posix", "Requiere comandos udisksctl e inspección /proc exclusivos de Linux")
     @patch("bandeja.pendrive.detectar_particiones_removibles_linux")
     @patch("bandeja.pendrive.listar_procesos_ocupando_montaje")
     @patch("subprocess.run")
@@ -1482,6 +1483,7 @@ class TestControlMontajePendrive(unittest.TestCase):
         self.assertEqual(res["procesos_ocupando"][0]["pid"], 4321)
         self.assertIn("ocupada", res["error"].lower())
 
+    @unittest.skipUnless(os.name == "posix", "Requiere udisksctl power-off exclusivo de Linux")
     @patch("bandeja.pendrive.detectar_particiones_removibles_linux")
     @patch("subprocess.run")
     def test_expulsar_ejecuta_power_off_solo_si_desmontaje_exitoso(self, mock_subp, mock_rem):
@@ -1520,6 +1522,7 @@ class TestControlMontajePendrive(unittest.TestCase):
             self.assertNotIn("desmontar", estado["acciones_disponibles"])
             self.assertNotIn("expulsar", estado["acciones_disponibles"])
 
+    @unittest.skipUnless(os.name == "posix", "Requiere endpoints udisksctl de Linux")
     @patch("bandeja.pendrive.detectar_particiones_removibles_linux")
     @patch("subprocess.run")
     def test_servidor_http_endpoints_montar_desmontar_expulsar(self, mock_subp, mock_rem):

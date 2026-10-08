@@ -157,7 +157,7 @@ class VigilanteBandeja:
                 tamanio = st.st_size
                 mtime = st.st_mtime
                 fecha_llegada = obtener_fecha_llegada(st)
-            except OSError:
+            except (PermissionError, OSError):
                 continue
 
             # Comprobar si el archivo es anterior al capítulo en foco o según horas_material_reciente
@@ -174,7 +174,12 @@ class VigilanteBandeja:
 
             # Comprobar en base de datos SQLite si ya tiene decisión tomada
             reg = self.db.obtener_por_ruta(ruta_completa)
-            hash_val = reg["hash"] if reg else calcular_sha256(ruta_completa)
+            try:
+                hash_val = reg["hash"] if reg else calcular_sha256(ruta_completa)
+            except (PermissionError, OSError) as e_hash:
+                logger.debug(f"[BANDEJA][VIGILANTE] Archivo bloqueado o inaccesible al calcular hash '{ruta_completa}': {e_hash}")
+                continue
+
             if not reg:
                 reg_hash = self.db.obtener_por_hash(hash_val)
                 if reg_hash and reg_hash.get("ruta_actual") == ruta_completa:

@@ -166,7 +166,7 @@ def analizar_ast_codigo(codigo_fuente: str, nombre_archivo: str = "<codigo>") ->
 
 def analizar_ast_archivo(ruta_archivo: str) -> List[ViolacionAntiBorrado]:
     """Lee un archivo Python y busca llamadas a primitivas de borrado prohibidas."""
-    with open(ruta_archivo, "r", encoding="utf-8") as f:
+    with open(ruta_archivo, "r", encoding="utf-8", newline="\n") as f:
         contenido = f.read()
     return analizar_ast_codigo(contenido, nombre_archivo=ruta_archivo)
 

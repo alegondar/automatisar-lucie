@@ -10,12 +10,17 @@ cumpliendo estrictamente con las Reglas de Oro anti-borrado.
 from bandeja.plataforma import (
     notificar_escritorio,
     obtener_sistema_archivos,
+    obtener_sistema_archivos_windows,
+    obtener_unidades_windows,
     obtener_espacio_disco,
     buscar_puntos_montaje_candidatos,
     detectar_particiones_removibles_linux,
     diagnosticar_todas_particiones_linux,
     obtener_disco_padre_particion,
     listar_procesos_ocupando_montaje,
+    esta_confinado_en_raiz,
+    validar_longitud_ruta,
+    obtener_ruta_descargas_windows,
 )
 
 from bandeja.config import (
@@ -105,6 +110,11 @@ __all__ = [
     "diagnosticar_todas_particiones_linux",
     "obtener_disco_padre_particion",
     "listar_procesos_ocupando_montaje",
+    "esta_confinado_en_raiz",
+    "validar_longitud_ruta",
+    "obtener_ruta_descargas_windows",
+    "obtener_sistema_archivos_windows",
+    "obtener_unidades_windows",
     # Configuración y constantes
     "RUTA_DESCARGAS_DEFECTO",
     "RUTA_DESTINO_DEFECTO",

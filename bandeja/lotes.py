@@ -20,21 +20,45 @@ logger = logging.getLogger("bandeja_descargas")
 
 def obtener_fecha_llegada(archivo_o_stat: Union[str, os.stat_result, Any]) -> float:
     """
-    Retorna la fecha de llegada efectiva de un archivo: max(st_mtime, st_ctime).
-    st_ctime se actualiza al crear, descargar, escribir, renombrar o copiar en el sistema de
-    archivos local y no puede ser manipulado con os.utime, evitando que archivos descargados
-    con Last-Modified antiguo del servidor caigan erróneamente en material anterior.
+    Retorna la fecha de llegada efectiva de un archivo: max(st_mtime, fecha_creacion_o_cambio).
+    En Windows / Python 3.12+ se utiliza st_birthtime para obtener la fecha de creación real
+    evitando la advertencia de obsolescencia de st_ctime.
+    En sistemas POSIX st_ctime representa el cambio de inodo/metadatos.
+    st_ctime/st_birthtime se actualizan al crear, descargar, escribir, renombrar o copiar en el
+    sistema de archivos local y no pueden ser manipulados con os.utime, evitando que archivos
+    descargados con Last-Modified antiguo del servidor caigan erróneamente en material anterior.
     """
-    if hasattr(archivo_o_stat, "st_mtime") and hasattr(archivo_o_stat, "st_ctime"):
-        return max(float(archivo_o_stat.st_mtime), float(archivo_o_stat.st_ctime))
-    if isinstance(archivo_o_stat, dict):
-        mt = archivo_o_stat.get("st_mtime", archivo_o_stat.get("mtime", 0.0))
-        ct = archivo_o_stat.get("st_ctime", archivo_o_stat.get("ctime", 0.0))
-        return max(float(mt), float(ct))
     if isinstance(archivo_o_stat, (int, float)):
         return float(archivo_o_stat)
-    st = os.stat(str(archivo_o_stat))
-    return max(float(st.st_mtime), float(st.st_ctime))
+
+    mtime = 0.0
+    ctime_o_birth = 0.0
+
+    if isinstance(archivo_o_stat, dict):
+        mtime = float(archivo_o_stat.get("st_mtime", archivo_o_stat.get("mtime", 0.0)))
+        birth = archivo_o_stat.get("st_birthtime", archivo_o_stat.get("birthtime"))
+        if birth is not None:
+            ctime_o_birth = float(birth)
+        else:
+            ctime_o_birth = float(archivo_o_stat.get("st_ctime", archivo_o_stat.get("ctime", 0.0)))
+        return max(mtime, ctime_o_birth)
+
+    st = archivo_o_stat if hasattr(archivo_o_stat, "st_mtime") else os.stat(str(archivo_o_stat))
+
+    mtime = float(getattr(st, "st_mtime", 0.0))
+    birth = getattr(st, "st_birthtime", None)
+    if birth is not None:
+        try:
+            ctime_o_birth = float(birth)
+        except (ValueError, TypeError):
+            pass
+    elif hasattr(st, "st_ctime"):
+        try:
+            ctime_o_birth = float(st.st_ctime)
+        except (ValueError, TypeError, DeprecationWarning):
+            pass
+
+    return max(mtime, ctime_o_birth)
 
 
 class DetectorDescargasActivas:
@@ -51,14 +75,17 @@ class DetectorDescargasActivas:
             st = os.stat(ruta_completa)
             tamanio_actual = st.st_size
             ahora = time.time()
-        except OSError:
+        except (PermissionError, OSError) as e:
+            # En Windows (WinError 32) o descargas en curso bloqueadas, clasificar como no estable transitorio
+            logger.debug(f"[BANDEJA][ESTABILIDAD] Archivo en uso o no accesible transitoriamente '{ruta_completa}': {e}")
             return False
 
         if ruta_completa not in self._historial_tamanio:
             self._historial_tamanio[ruta_completa] = (tamanio_actual, ahora)
+            ts_creacion = getattr(st, "st_birthtime", getattr(st, "st_ctime", 0.0))
             logger.info(
                 f"[BANDEJA][DETECTADO] Archivo: '{os.path.basename(ruta_completa)}' | "
-                f"Tamaño: {tamanio_actual} B | mtime: {st.st_mtime:.2f} | ctime: {st.st_ctime:.2f} | "
+                f"Tamaño: {tamanio_actual} B | mtime: {st.st_mtime:.2f} | ctime: {ts_creacion:.2f} | "
                 f"ts: {datetime.datetime.now().isoformat()}"
             )
             return False

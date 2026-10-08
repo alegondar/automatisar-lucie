@@ -16,6 +16,7 @@ import logging
 import os
 import secrets
 import time
+import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
 from bandeja.config import (
@@ -27,15 +28,19 @@ from bandeja.config import (
     formatear_bytes,
 )
 from bandeja.clasificacion import ValidadorEscenas
+from bandeja.plataforma import esta_confinado_en_raiz, validar_longitud_ruta
 
 logger = logging.getLogger("bandeja_descargas")
 
 
 def validar_confinamiento_destino_base(ruta: str, ruta_destino_base: str):
     """Asegura que la ruta canónica permanezca estrictamente dentro de ruta_destino_base y rechaza symlinks."""
-    base_confinada = os.path.realpath(ruta_destino_base)
-    real = os.path.realpath(ruta)
-    if not (real == base_confinada or real.startswith(base_confinada + os.sep)):
+    if not validar_longitud_ruta(ruta):
+        raise ErrorSeguridadBandeja(
+            f"Violación de seguridad: la ruta '{ruta}' excede los 260 caracteres permitidos (MAX_PATH)."
+        )
+    if not esta_confinado_en_raiz(ruta, ruta_destino_base):
+        base_confinada = os.path.realpath(ruta_destino_base)
         raise ErrorSeguridadBandeja(
             f"Violación de seguridad: la ruta '{ruta}' escapa del confinamiento de '{base_confinada}'."
         )
@@ -301,7 +306,7 @@ def ejecutar_descartar_capitulo(
             "hashes_verificados": len(hashes_antes),
             "fecha": fecha_iso
         }
-        with open(ruta_bitacora, "a", encoding="utf-8") as f:
+        with open(ruta_bitacora, "a", encoding="utf-8", newline="\n") as f:
             f.write(json.dumps(registro_bitacora, ensure_ascii=False) + "\n")
 
         if movio_carpeta:
@@ -368,7 +373,7 @@ def revertir_descarte_capitulo(
             "fecha": datetime.datetime.now().isoformat(),
             "total_revertidos": total_archivos
         }
-        with open(ruta_bitacora, "a", encoding="utf-8") as f:
+        with open(ruta_bitacora, "a", encoding="utf-8", newline="\n") as f:
             f.write(json.dumps(evento_reversion, ensure_ascii=False) + "\n")
 
         return {

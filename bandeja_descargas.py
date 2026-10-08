@@ -16,13 +16,21 @@ Cumple estrictamente con las 7 Reglas de Oro del proyecto:
 """
 
 import argparse
+import errno
+import logging
 import os
 import secrets
-import logging
+import sys
 from typing import Dict, List, Optional, Set, Tuple, Any, Union
 
 from bandeja import *
 from bandeja.servidor import HandlerServidorBandeja, crear_servidor, GeneradorMiniaturas
+
+# Reconfiguración de consola para evitar fallos de codificación en Windows
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 logger = logging.getLogger("bandeja_descargas")
 if not logger.handlers:
@@ -59,10 +67,19 @@ def main():
     miniaturas = GeneradorMiniaturas(db)
 
     vigilante = VigilanteBandeja(config, db, filtro, detector, agrupador)
-    vigilante.iniciar()
 
     token_csrf = secrets.token_urlsafe(32)
-    servidor = crear_servidor(config, db, vigilante, movimientos, miniaturas, token_csrf=token_csrf)
+    try:
+        servidor = crear_servidor(config, db, vigilante, movimientos, miniaturas, token_csrf=token_csrf)
+    except OSError as e:
+        err_str = str(e).lower()
+        err_code = getattr(e, "winerror", None) or getattr(e, "errno", None)
+        if err_code in (errno.EADDRINUSE, 98, 10048) or "already in use" in err_str or "un solo uso" in err_str or "address already in use" in err_str:
+            print(f"Ya hay una bandeja corriendo en el puerto {config.puerto_servidor}")
+            sys.exit(1)
+        raise
+
+    vigilante.iniciar()
 
     print(f"[*] Bandeja de Descargas iniciada en http://{config.host_servidor}:{config.puerto_servidor}")
     print(f"[*] Vigilando: {config.ruta_descargas}")
@@ -75,6 +92,7 @@ def main():
     finally:
         vigilante.detener()
         servidor.server_close()
+
 
 
 if __name__ == "__main__":

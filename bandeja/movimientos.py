@@ -19,6 +19,7 @@ import re
 import secrets
 import threading
 import time
+import unicodedata
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from bandeja.config import (
@@ -44,6 +45,7 @@ from bandeja.capitulos import (
     revertir_descarte_capitulo,
     validar_confinamiento_destino_base,
 )
+from bandeja.plataforma import esta_confinado_en_raiz, validar_longitud_ruta
 
 logger = logging.getLogger("bandeja_descargas")
 
@@ -167,27 +169,27 @@ class GestorMovimientosBandeja:
         }
         if ruta_alias and os.path.exists(ruta_alias):
             try:
-                with open(ruta_alias, "r", encoding="utf-8") as f:
+                with open(ruta_alias, "r", encoding="utf-8", newline="\n") as f:
                     datos = json.load(f)
                 if isinstance(datos, dict):
                     if "reglas" in datos:
                         for r in datos.get("reglas", []):
-                            pers = str(r.get("personaje", "")).strip().lower()
+                            pers = unicodedata.normalize("NFC", str(r.get("personaje", "")).strip().lower())
                             if pers:
                                 if pers not in alias_map:
                                     alias_map[pers] = {pers}
                                 for pat in r.get("patrones", []):
-                                    limpio = pat.replace("*", "").strip().lower()
+                                    limpio = unicodedata.normalize("NFC", pat.replace("*", "").strip().lower())
                                     if limpio:
                                         alias_map[pers].add(limpio)
                     else:
                         for pers, pats in datos.items():
-                            p_key = str(pers).strip().lower()
+                            p_key = unicodedata.normalize("NFC", str(pers).strip().lower())
                             if p_key not in alias_map:
                                 alias_map[p_key] = {p_key}
                             if isinstance(pats, list):
                                 for pat in pats:
-                                    limpio = str(pat).replace("*", "").strip().lower()
+                                    limpio = unicodedata.normalize("NFC", str(pat).replace("*", "").strip().lower())
                                     if limpio:
                                         alias_map[p_key].add(limpio)
             except Exception:
@@ -196,8 +198,9 @@ class GestorMovimientosBandeja:
 
     def _validar_confinamiento(self, ruta: str):
         """Asegura que la ruta canónica permanezca estrictamente dentro de ~/Descargas."""
-        real = os.path.realpath(ruta)
-        if not (real == self.ruta_descargas or real.startswith(self.ruta_descargas + os.sep)):
+        if not validar_longitud_ruta(ruta):
+            raise ErrorSeguridadBandeja(f"Violación de seguridad: la ruta '{ruta}' excede los 260 caracteres permitidos (MAX_PATH).")
+        if not esta_confinado_en_raiz(ruta, self.ruta_descargas):
             raise ErrorSeguridadBandeja(f"Violación de seguridad: la ruta '{ruta}' no pertenece a ~/Descargas.")
 
     def _validar_confinamiento_destino_base(self, ruta: str):
@@ -213,9 +216,10 @@ class GestorMovimientosBandeja:
         - Elimina todos los espacios internos y caracteres de separación visual para dejar
           un estilo compacto (ej. 'lucie trapitos' -> 'lucietrapitos').
         - Garantiza que obtener_personaje_de_alias_inicial deduzca exactamente el personaje elegido.
+        - Normaliza a NFC.
         """
-        pers = (personaje or "lucie").strip().lower()
-        escena_raw = (nombre_escena or "").strip().lower()
+        pers = unicodedata.normalize("NFC", (personaje or "lucie").strip().lower())
+        escena_raw = unicodedata.normalize("NFC", (nombre_escena or "").strip().lower())
         escena_compacta = re.sub(r'[\s]+', '', escena_raw)
 
         pers_canonico = pers
@@ -456,6 +460,7 @@ class GestorMovimientosBandeja:
         """Ejecuta los movimientos atómicos con os.rename renombrando al destino y los asienta en la bitácora .jsonl."""
         with self._lock:
             movimientos_realizados = []
+            archivos_en_uso = []
             id_operacion = f"op_{int(time.time())}_{secrets.token_hex(4)}"
             fecha_iso = datetime.datetime.now().isoformat()
 
@@ -468,6 +473,14 @@ class GestorMovimientosBandeja:
                 if not os.path.exists(origen):
                     raise FileNotFoundError(f"El archivo de origen '{origen}' ya no existe.")
 
+                # Validar que origen y destino compartan unidad antes de intentar rename
+                drive_orig, _ = os.path.splitdrive(os.path.abspath(origen))
+                drive_dest, _ = os.path.splitdrive(os.path.abspath(destino))
+                if drive_orig.upper() != drive_dest.upper():
+                    raise ErrorMovimiento(
+                        f"No es posible mover con rename entre diferentes unidades ({drive_orig} -> {drive_dest})."
+                    )
+
                 dir_destino = os.path.dirname(destino)
                 if not simulacion.get("es_existente_descargas"):
                     self._validar_confinamiento_destino_base(dir_destino)
@@ -477,7 +490,20 @@ class GestorMovimientosBandeja:
 
                 destino_final = self.resolver_destino_sin_colision(destino)
 
-                os.rename(origen, destino_final)
+                # Intentar mover el archivo manejando posibles bloqueos de proceso en Windows
+                try:
+                    os.rename(origen, destino_final)
+                except (PermissionError, OSError) as e_lock:
+                    # Capturar WinError 32 o PermissionError
+                    cod = getattr(e_lock, "winerror", None) or getattr(e_lock, "errno", None)
+                    if isinstance(e_lock, PermissionError) or cod in (32, 13):
+                        logger.warning(f"Archivo en uso o bloqueado al mover '{origen}': {e_lock}")
+                        archivos_en_uso.append({
+                            "archivo": origen,
+                            "motivo": "archivo en uso"
+                        })
+                        continue
+                    raise
 
                 hash_val = item.get("hash") or calcular_sha256(destino_final)
 
@@ -516,18 +542,21 @@ class GestorMovimientosBandeja:
                 "movimientos": movimientos_realizados
             }
 
-            with open(self.ruta_bitacora, "a", encoding="utf-8") as f:
+            with open(self.ruta_bitacora, "a", encoding="utf-8", newline="\n") as f:
                 f.write(json.dumps(registro_bitacora, ensure_ascii=False) + "\n")
 
             personaje = simulacion.get("personaje", "")
             escena = simulacion.get("escena", "")
             total_movidos = len(movimientos_realizados)
             mensaje_aviso = f"Se movieron {total_movidos} archivos a {personaje}/{escena}"
+            if archivos_en_uso:
+                mensaje_aviso += f" ({len(archivos_en_uso)} archivos en uso no se pudieron mover)"
 
             return {
                 "exito": True,
                 "id_operacion": id_operacion,
                 "total_movidos": total_movidos,
+                "archivos_en_uso": archivos_en_uso,
                 "personaje": personaje,
                 "escena": escena,
                 "mensaje_aviso": mensaje_aviso
@@ -573,7 +602,7 @@ class GestorMovimientosBandeja:
 
             operacion_encontrada = None
             todas_operaciones = []
-            with open(self.ruta_bitacora, "r", encoding="utf-8") as f:
+            with open(self.ruta_bitacora, "r", encoding="utf-8", newline="\n") as f:
                 for linea in f:
                     linea = linea.strip()
                     if linea:
@@ -653,7 +682,7 @@ class GestorMovimientosBandeja:
                 "fecha": datetime.datetime.now().isoformat(),
                 "total_revertidos": len(archivos_revertidos)
             }
-            with open(self.ruta_bitacora, "a", encoding="utf-8") as f:
+            with open(self.ruta_bitacora, "a", encoding="utf-8", newline="\n") as f:
                 f.write(json.dumps(evento_reversion, ensure_ascii=False) + "\n")
 
             return {
@@ -674,7 +703,7 @@ class GestorMovimientosBandeja:
 
             entradas = []
             try:
-                with open(self.ruta_bitacora, "r", encoding="utf-8") as f:
+                with open(self.ruta_bitacora, "r", encoding="utf-8", newline="\n") as f:
                     for linea in f:
                         linea = linea.strip()
                         if linea:

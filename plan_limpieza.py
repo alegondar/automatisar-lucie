@@ -81,7 +81,7 @@ def cargar_configuracion(ruta_config: str = "config_limpieza.json") -> Configura
     
     if os.path.exists(ruta_config):
         try:
-            with open(ruta_config, "r", encoding="utf-8") as f:
+            with open(ruta_config, "r", encoding="utf-8", newline="\n") as f:
                 data = json.load(f)
             if "carpetas_ignoradas" in data:
                 config.carpetas_ignoradas = data["carpetas_ignoradas"]
@@ -113,7 +113,7 @@ def cargar_configuracion(ruta_config: str = "config_limpieza.json") -> Configura
 
     if os.path.exists(ruta_alias):
         try:
-            with open(ruta_alias, "r", encoding="utf-8") as f:
+            with open(ruta_alias, "r", encoding="utf-8", newline="\n") as f:
                 data_alias = json.load(f)
             config.reglas_alias = data_alias.get("reglas", [])
         except Exception as e:
@@ -607,7 +607,7 @@ class GeneradorPlanLimpieza:
         """Exporta el plan a formato JSON con sangría legible."""
         self.validar_seguridad_salida(ruta_salida)
         os.makedirs(os.path.dirname(os.path.abspath(ruta_salida)), exist_ok=True)
-        with open(ruta_salida, "w", encoding="utf-8") as f:
+        with open(ruta_salida, "w", encoding="utf-8", newline="\n") as f:
             json.dump(plan_data, f, indent=2, ensure_ascii=False)
         print(f"[+] Plan JSON guardado exitosamente: {ruta_salida}")
 
@@ -740,7 +740,7 @@ class GeneradorPlanLimpieza:
         """Guarda el informe en Markdown en la ruta del repositorio local."""
         self.validar_seguridad_salida(ruta_salida)
         os.makedirs(os.path.dirname(os.path.abspath(ruta_salida)), exist_ok=True)
-        with open(ruta_salida, "w", encoding="utf-8") as f:
+        with open(ruta_salida, "w", encoding="utf-8", newline="\n") as f:
             f.write(markdown_str)
         print(f"[+] Plan Markdown guardado exitosamente: {ruta_salida}")
 
@@ -846,7 +846,7 @@ def main():
         if not os.path.exists(args.salida_json):
             print(f"[!] Error: no existe el plan JSON para validar: {args.salida_json}", file=sys.stderr)
             sys.exit(1)
-        with open(args.salida_json, "r", encoding="utf-8") as f:
+        with open(args.salida_json, "r", encoding="utf-8", newline="\n") as f:
             plan_data = json.load(f)
         valido, errores = validar_huella_pre_ejecucion(args.raiz, plan_data)
         if valido:

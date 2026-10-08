@@ -2574,6 +2574,7 @@ class TestDescartarCapitulo(unittest.TestCase):
         descartados = data_desc.get("descartados", [])
         self.assertTrue(any(c["nombre"] == "ensayo" for c in descartados))
 
+    @unittest.skipUnless(os.name == "posix", "Requiere enlaces simbólicos sin privilegios (POSIX)")
     def test_confinamiento_traversal_o_symlink_saliente_rechazado(self):
         """Path traversal o enlaces simbólicos que apunten fuera de _lucie se rechazan tajantemente."""
         cap = self.db.empezar_capitulo("lucie", "test_symlink")
@@ -5056,6 +5057,7 @@ class TestVistaPreviaMedia(unittest.TestCase):
         self.assertEqual(headers.get("x-content-type-options"), "nosniff")
         self.assertEqual(len(body), 0)
 
+    @unittest.skipUnless(os.name == "posix", "Requiere enlaces simbólicos sin privilegios (POSIX)")
     def test_api_media_seguridad_id_inexistente_ruta_arbitraria_symlink_host_invalido(self):
         """ID inexistente -> 404; no se admiten rutas; symlink que escapa -> 403; Host inválido -> 403."""
         contenido = b"VIDEO_SEGURO_ABC"
@@ -5524,6 +5526,7 @@ class TestListaEnvioPendrivePorCarpetas(unittest.TestCase):
         self.assertNotIn("_descartados", nombres)
         self.assertNotIn("_a_revisar", nombres)
 
+    @unittest.skipUnless(os.name == "posix", "Requiere enlaces simbólicos sin privilegios (POSIX)")
     def test_no_sigue_symlinks_ni_profundidad_mayor_6(self):
         """followlinks=False no sigue symlinks externos y el escaneo respeta tope de 6 niveles."""
         from bandeja.pendrive import escanear_sala_espera_carpetas
@@ -5603,7 +5606,7 @@ class TestListaEnvioPendrivePorCarpetas(unittest.TestCase):
         # Montaje falso de pendrive vinculado
         punto_pen = os.path.join(self.tmp_dir, "mock_pendrive")
         os.makedirs(os.path.join(punto_pen, "LucieSinReglas"), exist_ok=True)
-        with open(os.path.join(punto_pen, ".lucie_pendrive.json"), "w") as f:
+        with open(os.path.join(punto_pen, ".lucie_pendrive.json"), "w", encoding="utf-8", newline="\n") as f:
             json.dump({"id": "mock_id", "version": 1}, f)
 
         with patch("bandeja.pendrive.detectar_pendrive", return_value={
@@ -5621,7 +5624,7 @@ class TestListaEnvioPendrivePorCarpetas(unittest.TestCase):
         """Simula y ejecuta el envío consolidado de múltiples carpetas seleccionadas en un solo lote."""
         punto_pen = os.path.join(self.tmp_dir, "mock_pendrive_lote")
         os.makedirs(os.path.join(punto_pen, "LucieSinReglas"), exist_ok=True)
-        with open(os.path.join(punto_pen, ".lucie_pendrive.json"), "w") as f:
+        with open(os.path.join(punto_pen, ".lucie_pendrive.json"), "w", encoding="utf-8", newline="\n") as f:
             json.dump({"id": "mock_lote_id", "version": 1}, f)
 
         # Dos carpetas con archivos multimedia

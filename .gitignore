@@ -5,3 +5,11 @@ __pycache__/
 *.jsonl
 bitacoras/
 frontend/
+config_bandeja.local.json
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+verificacion_windows.txt
+_verificacion_windows/
+

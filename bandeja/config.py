@@ -78,8 +78,13 @@ def formatear_bytes(total_bytes: int) -> str:
 class ConfiguracionBandeja:
     """Gestiona la carga y validación de config_bandeja.json."""
 
-    def __init__(self, ruta_config: str = "config_bandeja.json"):
+    def __init__(self, ruta_config: str = "config_bandeja.json", ruta_config_local: Optional[str] = None):
         self.ruta_config = ruta_config
+        if ruta_config_local is not None:
+            self.ruta_config_local = ruta_config_local
+        else:
+            dir_base = os.path.dirname(os.path.abspath(ruta_config))
+            self.ruta_config_local = os.path.join(dir_base, "config_bandeja.local.json")
         self.ruta_descargas = obtener_ruta_descargas_defecto()
         self.ruta_destino_base = obtener_ruta_destino_defecto()
         self.puerto_servidor = 8766
@@ -106,66 +111,104 @@ class ConfiguracionBandeja:
         self.carpeta_raiz_pendrive = CARPETA_RAIZ_PENDRIVE_DEFECTO
         self.rutas_candidatas_pendrive: List[str] = []
         self.margen_libre_bytes = 1024 * 1024 * 1024  # 1 GiB por defecto
+        self._inicializar_config_local_windows()
         self.cargar()
 
+    def _inicializar_config_local_windows(self):
+        """Crea config_bandeja.local.json en Windows en modo 'xb' si no existe."""
+        if os.name == "nt" and not os.path.exists(self.ruta_config_local):
+            datos_locales = {
+                "ruta_descargas": "auto"
+            }
+            try:
+                with open(self.ruta_config_local, "xb") as f:
+                    contenido = json.dumps(datos_locales, indent=2, ensure_ascii=False) + "\n"
+                    f.write(contenido.encode("utf-8"))
+            except FileExistsError:
+                pass
+            except Exception as e:
+                logger.debug(f"No se pudo crear {self.ruta_config_local}: {e}")
+
     def cargar(self):
+        datos = {}
         if os.path.exists(self.ruta_config):
-            with open(self.ruta_config, "r", encoding="utf-8") as f:
+            with open(self.ruta_config, "r", encoding="utf-8", newline="\n") as f:
                 datos = json.load(f)
-            if "ruta_descargas" in datos:
-                self.ruta_descargas = os.path.abspath(os.path.expanduser(datos["ruta_descargas"]))
-            if "ruta_destino_base" in datos:
-                self.ruta_destino_base = os.path.abspath(os.path.expanduser(datos["ruta_destino_base"]))
-            if "puerto_servidor" in datos:
-                self.puerto_servidor = int(datos["puerto_servidor"])
-            if "host_servidor" in datos:
-                self.host_servidor = str(datos["host_servidor"])
-            if "horas_alerta_capitulo_olvidado" in datos:
-                self.horas_alerta_capitulo_olvidado = max(1, int(datos["horas_alerta_capitulo_olvidado"]))
-            if "minutos_antes_inicio_capitulo" in datos:
-                self.minutos_antes_inicio_capitulo = max(0, int(datos["minutos_antes_inicio_capitulo"]))
-            if "horas_material_reciente" in datos:
-                try:
-                    self.horas_material_reciente = max(0.0, float(datos["horas_material_reciente"]))
-                except (ValueError, TypeError):
-                    self.horas_material_reciente = 0.0
-            if "refresco_panel_segundos" in datos:
-                try:
-                    self.refresco_panel_segundos = max(0, int(datos["refresco_panel_segundos"]))
-                except (ValueError, TypeError):
-                    self.refresco_panel_segundos = 4
-            if "subcarpeta_fotos" in datos:
-                val = str(datos["subcarpeta_fotos"]).strip()
-                if val:
-                    self.subcarpeta_fotos = val
-            if "subcarpeta_videos" in datos:
-                val = str(datos["subcarpeta_videos"]).strip()
-                if val:
-                    self.subcarpeta_videos = val
-            if "carpeta_raiz_pendrive" in datos:
-                val = str(datos["carpeta_raiz_pendrive"]).strip()
-                if val:
-                    self.carpeta_raiz_pendrive = val
-            if "rutas_candidatas_pendrive" in datos and isinstance(datos["rutas_candidatas_pendrive"], list):
-                self.rutas_candidatas_pendrive = [os.path.abspath(os.path.expanduser(str(r))) for r in datos["rutas_candidatas_pendrive"] if str(r).strip()]
-            if "margen_libre_bytes" in datos:
-                try:
-                    self.margen_libre_bytes = max(0, int(datos["margen_libre_bytes"]))
-                except (ValueError, TypeError):
-                    self.margen_libre_bytes = 1024 * 1024 * 1024
-            if "intervalo_sondeo_segundos" in datos:
-                self.intervalo_sondeo_segundos = max(1, int(datos["intervalo_sondeo_segundos"]))
-            if "ventana_lote_minutos" in datos:
-                self.ventana_lote_minutos = max(1, int(datos["ventana_lote_minutos"]))
-            if "extensiones_media" in datos:
-                self.extensiones_media = [ext.lower() for ext in datos["extensiones_media"]]
-            if "extensiones_temporales" in datos:
-                self.extensiones_temporales = [ext.lower() for ext in datos["extensiones_temporales"]]
-            if "patrones_candidatos" in datos:
-                if isinstance(datos["patrones_candidatos"], dict):
-                    self.patrones_candidatos.update(datos["patrones_candidatos"])
-                elif isinstance(datos["patrones_candidatos"], list):
-                    for idx, pat in enumerate(datos["patrones_candidatos"]):
-                        self.patrones_candidatos[f"patron_{idx}"] = pat
-            if "patrones_ignorar" in datos:
-                self.patrones_ignorar = [str(p) for p in datos["patrones_ignorar"]]
+
+        if os.path.exists(self.ruta_config_local):
+            try:
+                with open(self.ruta_config_local, "r", encoding="utf-8", newline="\n") as f_local:
+                    datos_local = json.load(f_local)
+                    if isinstance(datos_local, dict):
+                        datos.update(datos_local)
+            except Exception as e:
+                logger.warning(f"Error al leer {self.ruta_config_local}: {e}")
+
+        if "ruta_descargas" in datos:
+            val_desc = str(datos["ruta_descargas"]).strip()
+            if val_desc.lower() == "auto":
+                self.ruta_descargas = obtener_ruta_descargas_defecto()
+            else:
+                self.ruta_descargas = os.path.abspath(os.path.expanduser(val_desc))
+            if "ruta_destino_base" not in datos:
+                self.ruta_destino_base = os.path.join(self.ruta_descargas, "_lucie")
+
+        if "ruta_destino_base" in datos:
+            val_dest = str(datos["ruta_destino_base"]).strip()
+            if val_dest.lower() == "auto":
+                self.ruta_destino_base = os.path.join(self.ruta_descargas, "_lucie")
+            else:
+                self.ruta_destino_base = os.path.abspath(os.path.expanduser(val_dest))
+        if "puerto_servidor" in datos:
+            self.puerto_servidor = int(datos["puerto_servidor"])
+        if "host_servidor" in datos:
+            self.host_servidor = str(datos["host_servidor"])
+        if "horas_alerta_capitulo_olvidado" in datos:
+            self.horas_alerta_capitulo_olvidado = max(1, int(datos["horas_alerta_capitulo_olvidado"]))
+        if "minutos_antes_inicio_capitulo" in datos:
+            self.minutos_antes_inicio_capitulo = max(0, int(datos["minutos_antes_inicio_capitulo"]))
+        if "horas_material_reciente" in datos:
+            try:
+                self.horas_material_reciente = max(0.0, float(datos["horas_material_reciente"]))
+            except (ValueError, TypeError):
+                self.horas_material_reciente = 0.0
+        if "refresco_panel_segundos" in datos:
+            try:
+                self.refresco_panel_segundos = max(0, int(datos["refresco_panel_segundos"]))
+            except (ValueError, TypeError):
+                self.refresco_panel_segundos = 4
+        if "subcarpeta_fotos" in datos:
+            val = str(datos["subcarpeta_fotos"]).strip()
+            if val:
+                self.subcarpeta_fotos = val
+        if "subcarpeta_videos" in datos:
+            val = str(datos["subcarpeta_videos"]).strip()
+            if val:
+                self.subcarpeta_videos = val
+        if "carpeta_raiz_pendrive" in datos:
+            val = str(datos["carpeta_raiz_pendrive"]).strip()
+            if val:
+                self.carpeta_raiz_pendrive = val
+        if "rutas_candidatas_pendrive" in datos and isinstance(datos["rutas_candidatas_pendrive"], list):
+            self.rutas_candidatas_pendrive = [os.path.abspath(os.path.expanduser(str(r))) for r in datos["rutas_candidatas_pendrive"] if str(r).strip()]
+        if "margen_libre_bytes" in datos:
+            try:
+                self.margen_libre_bytes = max(0, int(datos["margen_libre_bytes"]))
+            except (ValueError, TypeError):
+                self.margen_libre_bytes = 1024 * 1024 * 1024
+        if "intervalo_sondeo_segundos" in datos:
+            self.intervalo_sondeo_segundos = max(1, int(datos["intervalo_sondeo_segundos"]))
+        if "ventana_lote_minutos" in datos:
+            self.ventana_lote_minutos = max(1, int(datos["ventana_lote_minutos"]))
+        if "extensiones_media" in datos:
+            self.extensiones_media = [ext.lower() for ext in datos["extensiones_media"]]
+        if "extensiones_temporales" in datos:
+            self.extensiones_temporales = [ext.lower() for ext in datos["extensiones_temporales"]]
+        if "patrones_candidatos" in datos:
+            if isinstance(datos["patrones_candidatos"], dict):
+                self.patrones_candidatos.update(datos["patrones_candidatos"])
+            elif isinstance(datos["patrones_candidatos"], list):
+                for idx, pat in enumerate(datos["patrones_candidatos"]):
+                    self.patrones_candidatos[f"patron_{idx}"] = pat
+        if "patrones_ignorar" in datos:
+            self.patrones_ignorar = [str(p) for p in datos["patrones_ignorar"]]

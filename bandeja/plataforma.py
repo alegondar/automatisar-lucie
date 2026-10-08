@@ -24,8 +24,67 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("bandeja.plataforma")
 
 
+def obtener_ruta_descargas_windows() -> str:
+    """
+    Resuelve la carpeta de descargas real del usuario en Windows mediante SHGetKnownFolderPath (FOLDERID_Downloads).
+    En caso de error o entorno sin soporte, utiliza como respaldo %USERPROFILE%\\Downloads.
+    """
+    respaldo = os.path.join(os.environ.get("USERPROFILE", os.path.expanduser("~")), "Downloads")
+    if os.name != "nt":
+        return respaldo
+
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class GUID(ctypes.Structure):
+            _fields_ = [
+                ("Data1", wintypes.DWORD),
+                ("Data2", wintypes.WORD),
+                ("Data3", wintypes.WORD),
+                ("Data4", wintypes.BYTE * 8)
+            ]
+
+        # FOLDERID_Downloads: {374DE290-123F-4565-9164-39C4925E467B}
+        FOLDERID_Downloads = GUID(
+            0x374DE290, 0x123F, 0x4565,
+            (wintypes.BYTE * 8)(0x91, 0x64, 0x39, 0xC4, 0x92, 0x5E, 0x46, 0x7B)
+        )
+
+        windll = getattr(ctypes, "windll", None)
+        if not windll:
+            return respaldo
+
+        SHGetKnownFolderPath = windll.shell32.SHGetKnownFolderPath
+        SHGetKnownFolderPath.argtypes = [
+            ctypes.POINTER(GUID),
+            wintypes.DWORD,
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.LPWSTR)
+        ]
+        SHGetKnownFolderPath.restype = ctypes.c_long
+
+        CoTaskMemFree = windll.ole32.CoTaskMemFree
+        CoTaskMemFree.argtypes = [wintypes.LPVOID]
+        CoTaskMemFree.restype = None
+
+        path_ptr = wintypes.LPWSTR()
+        hr = SHGetKnownFolderPath(ctypes.byref(FOLDERID_Downloads), 0, None, ctypes.byref(path_ptr))
+        if hr == 0 and path_ptr.value:
+            res = str(path_ptr.value)
+            CoTaskMemFree(path_ptr)
+            return res
+    except Exception as e:
+        logger.debug(f"Error al invocar SHGetKnownFolderPath: {e}")
+
+    return respaldo
+
+
 def obtener_ruta_descargas_defecto() -> str:
-    """Retorna la ruta por defecto a la carpeta de descargas del usuario."""
+    """Retorna la ruta por defecto a la carpeta de descargas del usuario según la plataforma."""
+    if os.name == "nt":
+        return obtener_ruta_descargas_windows()
+
     ruta_usuario = os.path.expanduser("~/Descargas")
     if os.path.isdir(ruta_usuario):
         return ruta_usuario
@@ -35,22 +94,165 @@ def obtener_ruta_descargas_defecto() -> str:
     return ruta_usuario
 
 
+
 def obtener_ruta_destino_defecto() -> str:
     """Retorna la ruta de destino base por defecto (~/Descargas/_lucie)."""
     return os.path.join(obtener_ruta_descargas_defecto(), "_lucie")
 
 
+def esta_confinado_en_raiz(ruta: str, raiz: str) -> bool:
+    """
+    Verifica de manera canónica y segura si 'ruta' reside estrictamente dentro de 'raiz'.
+    Utiliza os.path.realpath para resolver enlaces simbólicos y evasiones ('..'),
+    os.path.normcase para insensibilidad a mayúsculas/minúsculas en Windows, y
+    os.path.commonpath para evitar colisiones de prefijo parcial.
+    Rechaza rutas en letras de unidad distintas o rutas UNC fuera del árbol.
+    """
+    if not ruta or not raiz:
+        return False
+    try:
+        if os.name == "posix":
+            import re
+            if re.match(r"^[a-zA-Z]:", str(ruta)) or str(ruta).startswith("\\\\"):
+                return False
+        real_ruta = os.path.normcase(os.path.realpath(ruta))
+        real_raiz = os.path.normcase(os.path.realpath(raiz))
+        return os.path.commonpath([real_ruta, real_raiz]) == real_raiz
+    except (ValueError, OSError):
+        return False
+
+
+def validar_longitud_ruta(ruta: str, max_longitud: int = 260) -> bool:
+    """Verifica si la ruta excede el límite de 260 caracteres (MAX_PATH en Windows)."""
+    if not ruta:
+        return True
+    try:
+        return len(os.path.abspath(ruta)) < max_longitud
+    except Exception:
+        return len(str(ruta)) < max_longitud
+
+
+
+def obtener_sistema_archivos_windows(unidad: str) -> str:
+    """
+    Consulta el sistema de archivos de un volumen en Windows utilizando GetVolumeInformationW (ctypes).
+    Retorna el nombre en minúsculas (ej. 'exfat', 'fat32', 'ntfs') o 'desconocido'.
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        # Normalizar a raíz con barra final ("D:\\")
+        drive, _ = os.path.splitdrive(os.path.abspath(unidad))
+        raiz = (drive + "\\") if drive else (unidad if unidad.endswith("\\") else unidad + "\\")
+
+        windll = getattr(ctypes, "windll", None)
+        if not windll or not hasattr(windll, "kernel32"):
+            return "desconocido"
+
+        k32 = windll.kernel32
+        SEM_FAILCRITICALERRORS = 0x0001
+        SEM_NOOPENFILEERRORBOX = 0x8000
+        modo_previo = k32.SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX)
+        try:
+            fs_name_buffer = ctypes.create_unicode_buffer(261)
+            vol_name_buffer = ctypes.create_unicode_buffer(261)
+            serial_num = wintypes.DWORD()
+            max_component_len = wintypes.DWORD()
+            fs_flags = wintypes.DWORD()
+
+            res = k32.GetVolumeInformationW(
+                ctypes.c_wchar_p(raiz),
+                vol_name_buffer,
+                ctypes.sizeof(vol_name_buffer),
+                ctypes.byref(serial_num),
+                ctypes.byref(max_component_len),
+                ctypes.byref(fs_flags),
+                fs_name_buffer,
+                ctypes.sizeof(fs_name_buffer)
+            )
+            if res != 0 and fs_name_buffer.value:
+                return fs_name_buffer.value.strip().lower()
+        finally:
+            k32.SetErrorMode(modo_previo)
+    except Exception as e:
+        logger.debug(f"Error al consultar sistema de archivos en Windows para '{unidad}': {e}")
+
+    return "desconocido"
+
+
+def obtener_unidades_windows() -> List[Dict[str, Any]]:
+    """
+    Enumera las unidades de disco en Windows mediante GetLogicalDrives y GetDriveTypeW (ctypes),
+    aplicando SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX) para evitar diálogos modales.
+    Retorna una lista de diccionarios con info de cada unidad.
+    """
+    unidades: List[Dict[str, Any]] = []
+    try:
+        import ctypes
+
+        windll = getattr(ctypes, "windll", None)
+        if not windll or not hasattr(windll, "kernel32"):
+            for letra in string.ascii_uppercase:
+                u = f"{letra}:\\"
+                if os.path.exists(u):
+                    unidades.append({"letra": letra, "unidad": u, "tipo": "desconocido", "tipo_codigo": 0})
+            return unidades
+
+        k32 = windll.kernel32
+        SEM_FAILCRITICALERRORS = 0x0001
+        SEM_NOOPENFILEERRORBOX = 0x8000
+        modo_previo = k32.SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX)
+        try:
+            bitmask = k32.GetLogicalDrives()
+            tipos_nombre = {
+                0: "desconocido",
+                1: "sin_raiz",
+                2: "removible",
+                3: "fija",
+                4: "red",
+                5: "cdrom",
+                6: "ramdisk"
+            }
+            for i in range(26):
+                if bitmask & (1 << i):
+                    letra = chr(ord('A') + i)
+                    raiz = f"{letra}:\\"
+                    tipo_codigo = k32.GetDriveTypeW(ctypes.c_wchar_p(raiz))
+                    unidades.append({
+                        "letra": letra,
+                        "unidad": raiz,
+                        "tipo": tipos_nombre.get(tipo_codigo, "desconocido"),
+                        "tipo_codigo": tipo_codigo
+                    })
+        finally:
+            k32.SetErrorMode(modo_previo)
+    except Exception as e:
+        logger.debug(f"Error al enumerar unidades con ctypes en Windows: {e}")
+        for letra in string.ascii_uppercase:
+            u = f"{letra}:\\"
+            if os.path.exists(u):
+                unidades.append({"letra": letra, "unidad": u, "tipo": "desconocido", "tipo_codigo": 0})
+
+    return unidades
+
+
 def obtener_sistema_archivos(punto_montaje: str) -> str:
     """
     Determina el sistema de archivos del punto de montaje especificado.
-    En Linux consulta /proc/mounts; si no está disponible o falla, retorna 'desconocido'.
+    En Linux consulta /proc/mounts.
+    En Windows consulta GetVolumeInformationW vía ctypes.
+    Si no está disponible o falla, retorna 'desconocido'.
     """
+    if os.name == "nt":
+        return obtener_sistema_archivos_windows(punto_montaje)
+
     try:
         punto_real = os.path.realpath(punto_montaje)
         if os.name == "posix" and os.path.exists("/proc/mounts"):
             mejor_coincidencia = ""
             mejor_fstype = "desconocido"
-            with open("/proc/mounts", "r", encoding="utf-8", errors="replace") as f:
+            with open("/proc/mounts", "r", encoding="utf-8", errors="replace", newline="\n") as f:
                 for linea in f:
                     partes = linea.strip().split()
                     if len(partes) >= 3:
@@ -136,7 +338,7 @@ def buscar_puntos_montaje_candidatos(config: Any = None,
         # También revisar /proc/mounts por si hay montajes en /media o /run/media
         if os.path.exists("/proc/mounts"):
             try:
-                with open("/proc/mounts", "r", encoding="utf-8", errors="replace") as f:
+                with open("/proc/mounts", "r", encoding="utf-8", errors="replace", newline="\n") as f:
                     for linea in f:
                         partes = linea.strip().split()
                         if len(partes) >= 2:
@@ -147,12 +349,13 @@ def buscar_puntos_montaje_candidatos(config: Any = None,
             except Exception:
                 pass
 
-    # 3. Windows: letras de unidad A:\ a Z:\
+    # 3. Windows: unidades lógicas detectadas con GetLogicalDrives / GetDriveTypeW
     elif os.name == "nt":
-        for letra in string.ascii_uppercase:
-            unidad = f"{letra}:\\"
-            if os.path.exists(unidad) and os.path.isdir(unidad):
-                candidatos.append(os.path.realpath(unidad))
+        unidades_win = obtener_unidades_windows()
+        for u_info in unidades_win:
+            raiz_u = u_info["unidad"]
+            if os.path.exists(raiz_u) and os.path.isdir(raiz_u):
+                candidatos.append(os.path.realpath(raiz_u))
 
     # Deduplicar manteniendo orden
     vistos = set()
@@ -190,7 +393,7 @@ def _parsear_montajes_linux(proc_dir: str = "/proc") -> Dict[str, Dict[str, Any]
     mountinfo_path = os.path.join(proc_dir, "self", "mountinfo")
     if os.path.exists(mountinfo_path):
         try:
-            with open(mountinfo_path, "r", encoding="utf-8", errors="replace") as f:
+            with open(mountinfo_path, "r", encoding="utf-8", errors="replace", newline="\n") as f:
                 for linea in f:
                     partes = linea.strip().split()
                     if len(partes) >= 7 and " - " in linea:
@@ -221,7 +424,7 @@ def _parsear_montajes_linux(proc_dir: str = "/proc") -> Dict[str, Dict[str, Any]
     mounts_path = os.path.join(proc_dir, "mounts")
     if os.path.exists(mounts_path):
         try:
-            with open(mounts_path, "r", encoding="utf-8", errors="replace") as f:
+            with open(mounts_path, "r", encoding="utf-8", errors="replace", newline="\n") as f:
                 for linea in f:
                     partes = linea.strip().split()
                     if len(partes) >= 3:
@@ -280,7 +483,7 @@ def _leer_info_udev_bloque(maj_min: str, udev_dir: str = "/run/udev/data") -> Di
     archivo = os.path.join(udev_dir, f"b{maj_min}")
     if os.path.isfile(archivo):
         try:
-            with open(archivo, "r", encoding="utf-8", errors="replace") as f:
+            with open(archivo, "r", encoding="utf-8", errors="replace", newline="\n") as f:
                 for linea in f:
                     linea_strip = linea.strip()
                     if linea_strip.startswith("E:ID_FS_TYPE="):
@@ -329,7 +532,7 @@ def detectar_particiones_removibles_linux(sys_dir: str = "/sys",
 
         if os.path.isfile(removable_path):
             try:
-                with open(removable_path, "r", encoding="utf-8", errors="replace") as f:
+                with open(removable_path, "r", encoding="utf-8", errors="replace", newline="\n") as f:
                     es_removible = (f.read().strip() == "1")
             except Exception:
                 pass
@@ -359,7 +562,7 @@ def detectar_particiones_removibles_linux(sys_dir: str = "/sys",
             size_path = os.path.join(nodo_dir, "size")
             if os.path.isfile(size_path):
                 try:
-                    with open(size_path, "r", encoding="utf-8", errors="replace") as f:
+                    with open(size_path, "r", encoding="utf-8", errors="replace", newline="\n") as f:
                         tam_bytes = int(f.read().strip()) * 512
                 except Exception:
                     pass
@@ -368,7 +571,7 @@ def detectar_particiones_removibles_linux(sys_dir: str = "/sys",
             dev_file = os.path.join(nodo_dir, "dev")
             if os.path.isfile(dev_file):
                 try:
-                    with open(dev_file, "r", encoding="utf-8", errors="replace") as f:
+                    with open(dev_file, "r", encoding="utf-8", errors="replace", newline="\n") as f:
                         maj_min = f.read().strip()
                 except Exception:
                     pass
@@ -453,7 +656,7 @@ def diagnosticar_todas_particiones_linux(sys_dir: str = "/sys",
 
         if os.path.isfile(removable_path):
             try:
-                with open(removable_path, "r", encoding="utf-8", errors="replace") as f:
+                with open(removable_path, "r", encoding="utf-8", errors="replace", newline="\n") as f:
                     es_removible = (f.read().strip() == "1")
             except Exception:
                 pass
@@ -480,7 +683,7 @@ def diagnosticar_todas_particiones_linux(sys_dir: str = "/sys",
             size_path = os.path.join(nodo_dir, "size")
             if os.path.isfile(size_path):
                 try:
-                    with open(size_path, "r", encoding="utf-8", errors="replace") as f:
+                    with open(size_path, "r", encoding="utf-8", errors="replace", newline="\n") as f:
                         tam_bytes = int(f.read().strip()) * 512
                 except Exception:
                     pass
@@ -489,7 +692,7 @@ def diagnosticar_todas_particiones_linux(sys_dir: str = "/sys",
             dev_file = os.path.join(nodo_dir, "dev")
             if os.path.isfile(dev_file):
                 try:
-                    with open(dev_file, "r", encoding="utf-8", errors="replace") as f:
+                    with open(dev_file, "r", encoding="utf-8", errors="replace", newline="\n") as f:
                         maj_min = f.read().strip()
                 except Exception:
                     pass
@@ -611,7 +814,7 @@ def listar_procesos_ocupando_montaje(punto_montaje: str, proc_dir: str = "/proc"
             comm = ""
             comm_file = os.path.join(p_dir, "comm")
             try:
-                with open(comm_file, "r", encoding="utf-8", errors="replace") as f:
+                with open(comm_file, "r", encoding="utf-8", errors="replace", newline="\n") as f:
                     comm = f.read().strip()
             except Exception:
                 pass
@@ -619,7 +822,7 @@ def listar_procesos_ocupando_montaje(punto_montaje: str, proc_dir: str = "/proc"
             cmdline = ""
             cmdline_file = os.path.join(p_dir, "cmdline")
             try:
-                with open(cmdline_file, "r", encoding="utf-8", errors="replace") as f:
+                with open(cmdline_file, "r", encoding="utf-8", errors="replace", newline="\n") as f:
                     cmdline = f.read().replace("\x00", " ").strip()
             except Exception:
                 pass

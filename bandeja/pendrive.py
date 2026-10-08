@@ -38,6 +38,8 @@ from bandeja.plataforma import (
     diagnosticar_todas_particiones_linux,
     obtener_disco_padre_particion,
     listar_procesos_ocupando_montaje,
+    esta_confinado_en_raiz,
+    validar_longitud_ruta,
 )
 from bandeja.config import (
     ConfiguracionBandeja,
@@ -128,7 +130,7 @@ def leer_marcador_pendrive(ruta_raiz: str) -> Optional[Dict[str, Any]]:
         return None
 
     try:
-        with open(ruta_marcador, "r", encoding="utf-8") as f:
+        with open(ruta_marcador, "r", encoding="utf-8", newline="\n") as f:
             datos = json.load(f)
         valido, marcador, err = validar_marcador_pendrive(datos)
         if valido:
@@ -314,7 +316,7 @@ def leer_manifiesto_pendrive(ruta_montaje: str, carpeta_raiz: str = "LucieSinReg
 
     entradas = []
     try:
-        with open(ruta_manifiesto, "r", encoding="utf-8", errors="replace") as f:
+        with open(ruta_manifiesto, "r", encoding="utf-8", errors="replace", newline="\n") as f:
             for linea in f:
                 linea_str = linea.strip()
                 if linea_str:
@@ -894,6 +896,14 @@ def montar_unidad_pendrive(dispositivo: str,
         raise ValueError("El nodo de dispositivo no puede estar vacío.")
 
     disp_limpio = dispositivo.strip()
+    if os.name == "nt":
+        return {
+            "exito": False,
+            "error": "El montaje de unidades con udisksctl no está disponible en Windows.",
+            "no_soportado": True,
+            "dispositivo": disp_limpio
+        }
+
     if not re.match(r"^/dev/[a-zA-Z0-9_\-]+$", disp_limpio):
         raise ValueError(f"Formato de dispositivo inválido o inseguro: '{disp_limpio}'")
 
@@ -995,6 +1005,14 @@ def desmontar_unidad_pendrive(dispositivo: str,
         raise ValueError("El nodo de dispositivo no puede estar vacío.")
 
     disp_limpio = dispositivo.strip()
+    if os.name == "nt":
+        return {
+            "exito": False,
+            "error": "El desmontaje de unidades con udisksctl no está disponible en Windows.",
+            "no_soportado": True,
+            "dispositivo": disp_limpio
+        }
+
     if not re.match(r"^/dev/[a-zA-Z0-9_\-]+$", disp_limpio):
         raise ValueError(f"Formato de dispositivo inválido o inseguro: '{disp_limpio}'")
 
@@ -1031,11 +1049,12 @@ def desmontar_unidad_pendrive(dispositivo: str,
         if len(parts_huerfanos) > 0:
             logger.info(f"Desmontando con {len(parts_huerfanos)} archivos .part preservados en pendrive.")
 
-    # os.sync() antes de desmontar
-    try:
-        os.sync()
-    except Exception as e_sync:
-        logger.debug(f"os.sync previo al unmount: {e_sync}")
+    # os.sync() antes de desmontar (solo si está disponible en la plataforma)
+    if hasattr(os, "sync"):
+        try:
+            os.sync()
+        except Exception as e_sync:
+            logger.debug(f"os.sync previo al unmount: {e_sync}")
 
     cmd_unmount = ["udisksctl", "unmount", "-b", disp_limpio]
     try:
@@ -1443,25 +1462,26 @@ def _ejecutar_envio_pendrive_interno(simulacion_o_capitulos: Any,
     # 2. Transferencia física archivo por archivo
     for item in archivos_a_copiar:
         ruta_orig = item["ruta_origen"]
-        ruta_orig_real = os.path.realpath(ruta_orig)
+        validar_longitud_ruta(ruta_orig)
 
         # Confinamiento de origen
-        if os.path.islink(ruta_orig) or not (ruta_orig_real == base_origen or ruta_orig_real.startswith(base_origen + os.sep)):
+        if os.path.islink(ruta_orig) or not esta_confinado_en_raiz(ruta_orig, base_origen):
             raise ErrorSeguridadBandeja(f"Violación de confinamiento: archivo de origen fuera de la sala de espera: '{ruta_orig}'")
 
         if not os.path.exists(ruta_orig):
             raise FileNotFoundError(f"El archivo de origen '{ruta_orig}' ya no existe.")
 
-        rel_dest = item["ruta_relativa_pendrive"]
-        if ".." in rel_dest or rel_dest.startswith("/") or rel_dest.startswith("\\"):
+        rel_dest = item["ruta_relativa_pendrive"].replace("\\", "/")
+        if ".." in rel_dest or rel_dest.startswith("/"):
             raise ErrorSeguridadBandeja(f"Intento de path traversal en ruta relativa: '{rel_dest}'")
 
-        ruta_dest = os.path.abspath(os.path.join(pendrive_raiz, rel_dest))
+        partes_rel = [p for p in rel_dest.split("/") if p]
+        ruta_dest = os.path.abspath(os.path.join(pendrive_raiz, *partes_rel))
+        validar_longitud_ruta(ruta_dest)
         dest_dir = os.path.dirname(ruta_dest)
-        dest_dir_real = os.path.realpath(dest_dir)
 
         # Confinamiento de destino
-        if not (dest_dir_real == pendrive_raiz or dest_dir_real.startswith(pendrive_raiz + os.sep)):
+        if not esta_confinado_en_raiz(dest_dir, pendrive_raiz):
             raise ErrorSeguridadBandeja(f"Violación de confinamiento en destino del pendrive: '{ruta_dest}'")
 
         if os.path.exists(ruta_dest):
@@ -1556,7 +1576,7 @@ def _ejecutar_envio_pendrive_interno(simulacion_o_capitulos: Any,
     dir_lucie = os.path.join(pendrive_raiz, ".lucie")
     os.makedirs(dir_lucie, exist_ok=True)
     ruta_manifiesto = os.path.join(dir_lucie, NOMBRE_MANIFIESTO_PENDRIVE)
-    with open(ruta_manifiesto, "a", encoding="utf-8") as f_man:
+    with open(ruta_manifiesto, "a", encoding="utf-8", newline="\n") as f_man:
         for r in archivos_transferidos:
             ent = {
                 "id_envio": r["id_envio"],
@@ -1590,7 +1610,7 @@ def _ejecutar_envio_pendrive_interno(simulacion_o_capitulos: Any,
         "capitulos": sorted(list({r["capitulo"] for r in archivos_transferidos})),
         "archivos": archivos_transferidos
     }
-    with open(ruta_bitacora, "a", encoding="utf-8") as f_bit:
+    with open(ruta_bitacora, "a", encoding="utf-8", newline="\n") as f_bit:
         f_bit.write(json.dumps(evento_bitacora, ensure_ascii=False) + "\n")
         f_bit.flush()
 
@@ -1643,7 +1663,7 @@ def _deshacer_envio_pendrive_interno(id_operacion: str,
     if not op_encontrada:
         if not os.path.exists(bit_path):
             raise ErrorDeshacer("No existe archivo de bitácora para deshacer operaciones.")
-        with open(bit_path, "r", encoding="utf-8") as f:
+        with open(bit_path, "r", encoding="utf-8", newline="\n") as f:
             for linea in f:
                 linea = linea.strip()
                 if linea:
@@ -1659,7 +1679,7 @@ def _deshacer_envio_pendrive_interno(id_operacion: str,
 
     # Validar que no haya sido ya deshecha
     if os.path.exists(bit_path):
-        with open(bit_path, "r", encoding="utf-8") as f:
+        with open(bit_path, "r", encoding="utf-8", newline="\n") as f:
             for linea in f:
                 linea = linea.strip()
                 if linea:
@@ -1744,7 +1764,7 @@ def _deshacer_envio_pendrive_interno(id_operacion: str,
     ruta_manifiesto = os.path.join(dir_lucie, NOMBRE_MANIFIESTO_PENDRIVE)
     try:
         os.makedirs(dir_lucie, exist_ok=True)
-        with open(ruta_manifiesto, "a", encoding="utf-8") as f_man:
+        with open(ruta_manifiesto, "a", encoding="utf-8", newline="\n") as f_man:
             for _, _, _, _, r in items_plan:
                 ent = {
                     "id_envio": id_operacion,
@@ -1774,7 +1794,7 @@ def _deshacer_envio_pendrive_interno(id_operacion: str,
         "fecha": datetime.datetime.now().isoformat(),
         "total_revertidos": len(items_plan)
     }
-    with open(bit_path, "a", encoding="utf-8") as f_bit:
+    with open(bit_path, "a", encoding="utf-8", newline="\n") as f_bit:
         f_bit.write(json.dumps(evento_reversion, ensure_ascii=False) + "\n")
         f_bit.flush()
 

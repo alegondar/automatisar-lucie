@@ -190,7 +190,7 @@ class TestPlanLimpiezaSimulacion(unittest.TestCase):
         dir_cuarentena = os.path.join(self.tmp_pendrive, "_a_revisar")
         os.makedirs(dir_code, exist_ok=True)
         os.makedirs(dir_cuarentena, exist_ok=True)
-        with open(os.path.join(dir_code, "script.py"), "w") as f:
+        with open(os.path.join(dir_code, "script.py"), "w", encoding="utf-8", newline="\n") as f:
             f.write("print('codigo ignorado')")
         with open(os.path.join(dir_cuarentena, "aislado.mp4"), "wb") as f:
             f.write(b"YA_EN_CUARENTENA")

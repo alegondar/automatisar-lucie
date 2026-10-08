@@ -1202,7 +1202,7 @@ def main():
     os.makedirs(os.path.dirname(salida_abs), exist_ok=True)
     if args.formato == "markdown":
         contenido = generador.renderizar_markdown(datos)
-        with open(salida_abs, "w", encoding="utf-8") as f:
+        with open(salida_abs, "w", encoding="utf-8", newline="\n") as f:
             f.write(contenido)
     elif args.formato == "json":
         # Para serializar dataclasses y sets
@@ -1213,12 +1213,12 @@ def main():
                 return asdict(obj)
             return str(obj)
 
-        with open(salida_abs, "w", encoding="utf-8") as f:
+        with open(salida_abs, "w", encoding="utf-8", newline="\n") as f:
             json.dump(datos, f, indent=2, ensure_ascii=False, default=serializador)
     else:
         # Texto plano
         contenido = generador.renderizar_markdown(datos)
-        with open(salida_abs, "w", encoding="utf-8") as f:
+        with open(salida_abs, "w", encoding="utf-8", newline="\n") as f:
             f.write(contenido)
 
     tiempo_total = time.time() - inicio

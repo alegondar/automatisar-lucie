@@ -25,6 +25,7 @@ from urllib.parse import parse_qs, urlparse
 
 logger = logging.getLogger("bandeja_descargas")
 
+from bandeja.plataforma import esta_confinado_en_raiz, validar_longitud_ruta
 from bandeja.config import (
     ConfiguracionBandeja,
     ErrorSeguridadBandeja,
@@ -429,20 +430,14 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
         # Resolver con realpath para mitigar enlaces simbólicos y evasión de directorio
         real_ruta = os.path.realpath(ruta)
+        validar_longitud_ruta(real_ruta)
 
         raices_permitidas = [
-            os.path.realpath(self.config.ruta_descargas),
-            os.path.realpath(self.config.ruta_destino_base)
+            self.config.ruta_descargas,
+            self.config.ruta_destino_base
         ]
 
-        dentro_de_raices = False
-        for raiz in raices_permitidas:
-            try:
-                if os.path.commonpath([real_ruta, raiz]) == raiz:
-                    dentro_de_raices = True
-                    break
-            except (ValueError, OSError):
-                continue
+        dentro_de_raices = any(esta_confinado_en_raiz(real_ruta, raiz) for raiz in raices_permitidas)
 
         if not dentro_de_raices:
             self._enviar_error(HTTPStatus.FORBIDDEN, "Acceso no permitido: el archivo está fuera de las raíces autorizadas.", solo_cabeceras=solo_cabeceras)
@@ -1183,6 +1178,10 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             return
 
         ruta_archivo = os.path.join(RUTA_WEB, nombre_archivo)
+        if not esta_confinado_en_raiz(ruta_archivo, RUTA_WEB):
+            self._enviar_error(HTTPStatus.FORBIDDEN, "Acceso no permitido.", solo_cabeceras=solo_cabeceras)
+            return
+
         if not os.path.isfile(ruta_archivo):
             self._enviar_error(HTTPStatus.NOT_FOUND, "Recurso no encontrado.", solo_cabeceras=solo_cabeceras)
             return
@@ -1205,7 +1204,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     def _servir_html_spa(self, solo_cabeceras: bool = False):
         ruta_archivo = os.path.join(RUTA_WEB, "panel.html")
         try:
-            with open(ruta_archivo, "r", encoding="utf-8") as f:
+            with open(ruta_archivo, "r", encoding="utf-8", newline="\n") as f:
                 plantilla = f.read()
         except Exception:
             self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Error al cargar la plantilla web.", solo_cabeceras=solo_cabeceras)
@@ -1231,10 +1230,24 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self.wfile.write(cuerpo)
 
 
+class ServidorBandejaHTTPServer(ThreadingHTTPServer):
+    """Servidor HTTP multihilo adaptado para instancia única y exclusividad de socket."""
+
+    def server_bind(self):
+        if os.name == "nt":
+            self.allow_reuse_address = False
+            so_exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", -5)
+            try:
+                self.socket.setsockopt(socket.SOL_SOCKET, so_exclusive, 1)
+            except OSError:
+                pass
+        super().server_bind()
+
+
 def crear_servidor(config: ConfiguracionBandeja, db: GestorBaseDatosBandeja,
                    vigilante: VigilanteBandeja, movimientos: GestorMovimientosBandeja,
-                   miniaturas: GeneradorMiniaturas, token_csrf: Optional[str] = None) -> ThreadingHTTPServer:
-    """Crea y configura la instancia de ThreadingHTTPServer."""
+                   miniaturas: GeneradorMiniaturas, token_csrf: Optional[str] = None) -> ServidorBandejaHTTPServer:
+    """Crea y configura la instancia de ThreadingHTTPServer con política de socket por plataforma."""
     token = token_csrf or secrets.token_urlsafe(32)
 
     class CustomHandler(HandlerServidorBandeja):
@@ -1247,10 +1260,11 @@ def crear_servidor(config: ConfiguracionBandeja, db: GestorBaseDatosBandeja,
     CustomHandler.miniaturas = miniaturas
     CustomHandler.token_csrf = token
 
-    servidor = ThreadingHTTPServer((config.host_servidor, config.puerto_servidor), CustomHandler)
+    servidor = ServidorBandejaHTTPServer((config.host_servidor, config.puerto_servidor), CustomHandler)
     servidor.daemon_threads = True
     if config.puerto_servidor == 0:
         config.puerto_servidor = servidor.server_address[1]
     return servidor
+
 
 
