@@ -21,6 +21,8 @@ from bandeja.plataforma import (
     esta_confinado_en_raiz,
     validar_longitud_ruta,
     obtener_ruta_descargas_windows,
+    normalizar_ruta_relativa_posix,
+    convertir_ruta_relativa_a_local,
 )
 
 from bandeja.config import (
@@ -113,6 +115,8 @@ __all__ = [
     "esta_confinado_en_raiz",
     "validar_longitud_ruta",
     "obtener_ruta_descargas_windows",
+    "normalizar_ruta_relativa_posix",
+    "convertir_ruta_relativa_a_local",
     "obtener_sistema_archivos_windows",
     "obtener_unidades_windows",
     # Configuración y constantes

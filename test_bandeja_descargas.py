@@ -2041,10 +2041,11 @@ class TestCapituloSoloMaterialNuevo(unittest.TestCase):
             f.write(b"random")
 
         time.sleep(0.02)
-        ahora = datetime.datetime.now()
-        ts_ini = ahora.timestamp()
+        ts_ini = time.time()
         os.utime(f_grok, (ts_ini - 600, ts_ini - 600))
         os.utime(f_random, (ts_ini - 600, ts_ini - 600))
+        time.sleep(0.02)
+        ahora = datetime.datetime.now()
 
         self.db.empezar_capitulo("lucie", "sesion_fotos", fecha_inicio=ahora.isoformat())
 
@@ -2574,9 +2575,22 @@ class TestDescartarCapitulo(unittest.TestCase):
         descartados = data_desc.get("descartados", [])
         self.assertTrue(any(c["nombre"] == "ensayo" for c in descartados))
 
+    def test_confinamiento_traversal_rechazado(self):
+        """Path traversal con '..' o nombres reservados se rechaza en todos los sistemas operativos."""
+        valido, motivo = ValidadorEscenas.validar_nombre_escena(
+            "../escape_directorio", self.destino, self.descargas, es_existente_descargas=False, personaje="lucie"
+        )
+        self.assertFalse(valido)
+        self.assertTrue(".." in motivo or "separadores" in motivo.lower() or "escapa" in motivo.lower())
+
+        valido_res, motivo_res = ValidadorEscenas.validar_nombre_escena(
+            "CON", self.destino, self.descargas, es_existente_descargas=False, personaje="lucie"
+        )
+        self.assertFalse(valido_res)
+
     @unittest.skipUnless(os.name == "posix", "Requiere enlaces simbólicos sin privilegios (POSIX)")
-    def test_confinamiento_traversal_o_symlink_saliente_rechazado(self):
-        """Path traversal o enlaces simbólicos que apunten fuera de _lucie se rechazan tajantemente."""
+    def test_confinamiento_symlink_saliente_rechazado(self):
+        """Enlaces simbólicos que apunten fuera de _lucie se rechazan tajantemente."""
         cap = self.db.empezar_capitulo("lucie", "test_symlink")
         carpeta_escena = os.path.join(self.destino, "lucie", "test_symlink")
         os.makedirs(carpeta_escena, exist_ok=True)
@@ -5057,13 +5071,42 @@ class TestVistaPreviaMedia(unittest.TestCase):
         self.assertEqual(headers.get("x-content-type-options"), "nosniff")
         self.assertEqual(len(body), 0)
 
-    @unittest.skipUnless(os.name == "posix", "Requiere enlaces simbólicos sin privilegios (POSIX)")
-    def test_api_media_seguridad_id_inexistente_ruta_arbitraria_symlink_host_invalido(self):
-        """ID inexistente -> 404; no se admiten rutas; symlink que escapa -> 403; Host inválido -> 403."""
+    def test_api_media_seguridad_id_inexistente_ruta_arbitraria_host_invalido(self):
+        """ID inexistente -> 404; no se admiten rutas arbitrarias -> 404; Host inválido -> 403."""
         contenido = b"VIDEO_SEGURO_ABC"
         ruta_video = os.path.join(self.descargas, "grok-video-safe.mp4")
         self._crear_archivo(ruta_video, contenido)
 
+        self.vigilante.escanear()
+        estado = self.vigilante.obtener_estado()
+
+        archivos = {a["nombre"]: a for l in estado["lotes"] for a in l["archivos"]}
+        id_safe = archivos["grok-video-safe.mp4"]["id_media"]
+
+        self._iniciar_servidor()
+
+        # 1. ID inexistente devuelve 404
+        status, _, _ = self._http_request("GET", "/api/media?id=id_totalmente_inexistente")
+        self.assertEqual(status, 404)
+
+        # 2. Intentos de pedir rutas arbitrarias en el id devuelven 404 (no existe dicho ID)
+        status, _, _ = self._http_request("GET", "/api/media?id=/etc/passwd")
+        self.assertEqual(status, 404)
+        status, _, _ = self._http_request("GET", "/api/media?id=../../config_bandeja.json")
+        self.assertEqual(status, 404)
+        status, _, _ = self._http_request("GET", "/api/media?id=C:\\Windows\\System32\\cmd.exe")
+        self.assertEqual(status, 404)
+
+        # 3. Host inválido devuelve 403
+        status, _, _ = self._http_request(
+            "GET", f"/api/media?id={id_safe}",
+            headers={"Host": "sitio-atacante.org"}
+        )
+        self.assertEqual(status, 403)
+
+    @unittest.skipUnless(os.name == "posix", "Requiere enlaces simbólicos sin privilegios (POSIX)")
+    def test_api_media_seguridad_symlink_escape(self):
+        """Symlink que escapa de las raíces permitidas es rechazado con 403."""
         # Archivo externo y symlink que escapa de Descargas
         ruta_externa = os.path.join(self.tmp_dir, "archivo_externo.mp4")
         with open(ruta_externa, "wb") as f:
@@ -5077,30 +5120,12 @@ class TestVistaPreviaMedia(unittest.TestCase):
         estado = self.vigilante.obtener_estado()
 
         archivos = {a["nombre"]: a for l in estado["lotes"] for a in l["archivos"]}
-        id_safe = archivos["grok-video-safe.mp4"]["id_media"]
         id_symlink = archivos["grok-video-symlink_escape.mp4"]["id_media"]
 
         self._iniciar_servidor()
 
-        # 1. ID inexistente devuelve 404
-        status, _, _ = self._http_request("GET", "/api/media?id=id_totalmente_inexistente")
-        self.assertEqual(status, 404)
-
-        # 2. Intentos de pedir rutas arbitrarias en el id devuelven 404 (no existe dicho ID)
-        status, _, _ = self._http_request("GET", "/api/media?id=/etc/passwd")
-        self.assertEqual(status, 404)
-        status, _, _ = self._http_request("GET", "/api/media?id=../../config_bandeja.json")
-        self.assertEqual(status, 404)
-
-        # 3. Symlink que escapa de las raíces permitidas es rechazado con 403
+        # Symlink que escapa de las raíces permitidas es rechazado con 403
         status, _, _ = self._http_request("GET", f"/api/media?id={id_symlink}")
-        self.assertEqual(status, 403)
-
-        # 4. Host inválido devuelve 403
-        status, _, _ = self._http_request(
-            "GET", f"/api/media?id={id_safe}",
-            headers={"Host": "sitio-atacante.org"}
-        )
         self.assertEqual(status, 403)
 
     def test_api_media_desconexion_cliente_no_deja_trazas(self):
@@ -5526,21 +5551,9 @@ class TestListaEnvioPendrivePorCarpetas(unittest.TestCase):
         self.assertNotIn("_descartados", nombres)
         self.assertNotIn("_a_revisar", nombres)
 
-    @unittest.skipUnless(os.name == "posix", "Requiere enlaces simbólicos sin privilegios (POSIX)")
-    def test_no_sigue_symlinks_ni_profundidad_mayor_6(self):
-        """followlinks=False no sigue symlinks externos y el escaneo respeta tope de 6 niveles."""
+    def test_escaneo_profundidad_maxima_6_niveles(self):
+        """El escaneo respeta tope de 6 niveles relativos; archivos en nivel 7+ se omiten."""
         from bandeja.pendrive import escanear_sala_espera_carpetas
-
-        fuera = os.path.join(self.tmp_dir, "carpeta_externa")
-        self._crear_archivo(os.path.join(fuera, "secreto.mp4"), b"secreto")
-
-        dir_cap = os.path.join(self.destino, "lucie", "cap_seguro")
-        os.makedirs(dir_cap, exist_ok=True)
-        link_path = os.path.join(dir_cap, "enlace_afuera")
-        try:
-            os.symlink(fuera, link_path)
-        except OSError:
-            pass
 
         # Archivo a nivel de profundidad 7 (mayor que el tope de 6 niveles relativos)
         profundo = os.path.join(self.destino, "lucie", "cap_profundo", "1", "2", "3", "4", "5", "6", "7")
@@ -5550,14 +5563,30 @@ class TestListaEnvioPendrivePorCarpetas(unittest.TestCase):
         res = escanear_sala_espera_carpetas(self.destino, db=self.db)
         mapa = {c["carpeta"]: c for c in res}
 
-        if os.path.islink(link_path):
-            nombres_archivos = [a["nombre"] for a in mapa["cap_seguro"]["archivos"]]
-            self.assertNotIn("secreto.mp4", nombres_archivos)
-
         self.assertIn("cap_profundo", mapa)
         nombres_profundo = [a["nombre"] for a in mapa["cap_profundo"]["archivos"]]
         self.assertIn("visible.mp4", nombres_profundo)
         self.assertNotIn("ignorado.mp4", nombres_profundo)
+
+    @unittest.skipUnless(os.name == "posix", "Requiere enlaces simbólicos sin privilegios (POSIX)")
+    def test_escaneo_no_sigue_symlinks_externos(self):
+        """followlinks=False no sigue symlinks externos."""
+        from bandeja.pendrive import escanear_sala_espera_carpetas
+
+        fuera = os.path.join(self.tmp_dir, "carpeta_externa")
+        self._crear_archivo(os.path.join(fuera, "secreto.mp4"), b"secreto")
+
+        dir_cap = os.path.join(self.destino, "lucie", "cap_seguro")
+        os.makedirs(dir_cap, exist_ok=True)
+        link_path = os.path.join(dir_cap, "enlace_afuera")
+        os.symlink(fuera, link_path)
+
+        res = escanear_sala_espera_carpetas(self.destino, db=self.db)
+        mapa = {c["carpeta"]: c for c in res}
+
+        if os.path.islink(link_path):
+            nombres_archivos = [a["nombre"] for a in mapa["cap_seguro"]["archivos"]]
+            self.assertNotIn("secreto.mp4", nombres_archivos)
 
     def test_tipificacion_cruzando_bandeja_capitulos(self):
         """Clasifica correctamente: Capítulo en foco, Capítulo abierto, Capítulo cerrado, Escena suelta y Carpeta heredada."""

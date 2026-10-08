@@ -40,6 +40,8 @@ from bandeja.plataforma import (
     listar_procesos_ocupando_montaje,
     esta_confinado_en_raiz,
     validar_longitud_ruta,
+    normalizar_ruta_relativa_posix,
+    convertir_ruta_relativa_a_local,
 )
 from bandeja.config import (
     ConfiguracionBandeja,
@@ -469,7 +471,7 @@ def escanear_sala_espera_carpetas(ruta_destino_base: str,
 
                     archivos_lista.append({
                         "nombre": f,
-                        "ruta_relativa": os.path.relpath(p_file, ruta_cap),
+                        "ruta_relativa": normalizar_ruta_relativa_posix(os.path.relpath(p_file, ruta_cap)),
                         "ruta_absoluta": p_file,
                         "tamanio_bytes": sz,
                         "tamanio_fmt": formatear_bytes(sz),
@@ -589,7 +591,7 @@ def listar_archivos_part_huerfanos(punto_montaje: str, carpeta_raiz: str = "Luci
                         mtime = ""
                     huerfanos.append({
                         "nombre": f,
-                        "ruta_relativa": os.path.relpath(p, raiz_completa),
+                        "ruta_relativa": normalizar_ruta_relativa_posix(os.path.relpath(p, raiz_completa)),
                         "ruta_absoluta": p,
                         "tamanio_bytes": sz,
                         "tamanio_fmt": formatear_bytes(sz),
@@ -1286,8 +1288,8 @@ def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
         # Evaluar cada archivo candidato
         for ruta_orig, sub_orig, nombre, tipo_media, sub_dest, tam in candidatos_archivos:
 
-            ruta_rel_pendrive = os.path.join(sub_dest, pers, cap, nombre)
-            ruta_abs_pendrive = os.path.join(pendrive_montaje, carpeta_raiz, ruta_rel_pendrive)
+            ruta_rel_pendrive = normalizar_ruta_relativa_posix(os.path.join(sub_dest, pers, cap, nombre))
+            ruta_abs_pendrive = os.path.join(pendrive_montaje, carpeta_raiz, convertir_ruta_relativa_a_local(ruta_rel_pendrive))
             dir_dest_pendrive = os.path.dirname(ruta_abs_pendrive)
 
             sha_orig = calcular_sha256(ruta_orig)
@@ -1471,12 +1473,11 @@ def _ejecutar_envio_pendrive_interno(simulacion_o_capitulos: Any,
         if not os.path.exists(ruta_orig):
             raise FileNotFoundError(f"El archivo de origen '{ruta_orig}' ya no existe.")
 
-        rel_dest = item["ruta_relativa_pendrive"].replace("\\", "/")
+        rel_dest = normalizar_ruta_relativa_posix(item["ruta_relativa_pendrive"])
         if ".." in rel_dest or rel_dest.startswith("/"):
             raise ErrorSeguridadBandeja(f"Intento de path traversal en ruta relativa: '{rel_dest}'")
 
-        partes_rel = [p for p in rel_dest.split("/") if p]
-        ruta_dest = os.path.abspath(os.path.join(pendrive_raiz, *partes_rel))
+        ruta_dest = os.path.abspath(os.path.join(pendrive_raiz, convertir_ruta_relativa_a_local(rel_dest)))
         validar_longitud_ruta(ruta_dest)
         dest_dir = os.path.dirname(ruta_dest)
 
@@ -1715,11 +1716,12 @@ def _deshacer_envio_pendrive_interno(id_operacion: str,
     # Fase 1: Verificaciones preventivas estrictas
     items_plan = []
     for r in archivos:
-        rel_path = r["ruta_relativa"]
-        ruta_en_pendrive = os.path.join(pendrive_raiz, rel_path)
+        rel_path = normalizar_ruta_relativa_posix(r["ruta_relativa"])
+        rel_local = convertir_ruta_relativa_a_local(rel_path)
+        ruta_en_pendrive = os.path.join(pendrive_raiz, rel_local)
         ruta_en_enviados = r["ruta_enviados"]
         ruta_origen_espera = r["ruta_origen_espera"]
-        ruta_dest_revertido = os.path.join(pendrive_raiz, "_revertidos", id_operacion, rel_path)
+        ruta_dest_revertido = os.path.join(pendrive_raiz, "_revertidos", id_operacion, rel_local)
 
         if not os.path.exists(ruta_en_pendrive):
             raise ErrorDeshacer(f"No se puede deshacer: el archivo en pendrive '{ruta_en_pendrive}' ya no existe o fue movido.")

@@ -227,7 +227,7 @@ class ValidadorEscenas:
         if len(nombre) > 100:
             return False, f"El nombre de la escena excede los 100 caracteres permitidos ({len(nombre)})."
 
-        if any(ord(c) < 32 for c in nombre):
+        if any(ord(c) < 32 or ord(c) == 127 or unicodedata.category(c) == "Cc" for c in nombre):
             return False, "El nombre de la escena no puede contener caracteres de control."
 
         infracciones_caracteres = [c for c in nombre if c in CARACTERES_INVALIDOS_ESCENA]

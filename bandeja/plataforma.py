@@ -130,6 +130,31 @@ def validar_longitud_ruta(ruta: str, max_longitud: int = 260) -> bool:
         return len(os.path.abspath(ruta)) < max_longitud
     except Exception:
         return len(str(ruta)) < max_longitud
+def normalizar_ruta_relativa_posix(ruta_relativa: str) -> str:
+    """
+    Normaliza una ruta relativa a formato POSIX con '/' (compatible con as_posix).
+    Elimina barras iniciales o finales redundantes y reemplaza separadores '\\' de Windows.
+    """
+    if not ruta_relativa:
+        return ""
+    s = str(ruta_relativa).replace("\\", "/").strip()
+    partes = [p for p in s.split("/") if p and p != "."]
+    return "/".join(partes)
+
+
+def convertir_ruta_relativa_a_local(ruta_relativa: str) -> str:
+    """
+    Convierte de forma segura una ruta relativa con '/' o '\\' a la convención
+    de ruta local del sistema operativo anfitrión (utilizando os.sep).
+    Previene traversals ('..') y componentes absolutos.
+    """
+    if not ruta_relativa:
+        return ""
+    s = str(ruta_relativa).replace("\\", "/").strip()
+    partes = [p for p in s.split("/") if p and p != "." and p != ".."]
+    if not partes:
+        return ""
+    return os.path.join(*partes)
 
 
 
@@ -260,7 +285,7 @@ def obtener_sistema_archivos(punto_montaje: str) -> str:
                         # Coincidencia exacta o la más larga que contenga punto_real
                         if punto_real == mp:
                             return partes[2].lower()
-                        elif punto_real.startswith(mp + os.sep) and len(mp) > len(mejor_coincidencia):
+                        elif esta_confinado_en_raiz(punto_real, mp) and len(mp) > len(mejor_coincidencia):
                             mejor_coincidencia = mp
                             mejor_fstype = partes[2].lower()
             if mejor_fstype != "desconocido":
@@ -787,7 +812,7 @@ def listar_procesos_ocupando_montaje(punto_montaje: str, proc_dir: str = "/proc"
         cwd_link = os.path.join(p_dir, "cwd")
         try:
             cwd_dest = os.path.realpath(cwd_link)
-            if cwd_dest == punto_real or cwd_dest.startswith(punto_real + os.sep):
+            if esta_confinado_en_raiz(cwd_dest, punto_real):
                 retiene = True
                 detalle_retencion = f"CWD en {cwd_dest}"
         except (PermissionError, FileNotFoundError, OSError):
@@ -801,7 +826,7 @@ def listar_procesos_ocupando_montaje(punto_montaje: str, proc_dir: str = "/proc"
                         fd_link = os.path.join(fd_dir, fd_name)
                         try:
                             fd_dest = os.path.realpath(fd_link)
-                            if fd_dest == punto_real or fd_dest.startswith(punto_real + os.sep):
+                            if esta_confinado_en_raiz(fd_dest, punto_real):
                                 retiene = True
                                 detalle_retencion = f"Archivo abierto en {fd_dest}"
                                 break

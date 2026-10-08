@@ -176,13 +176,13 @@ def simular_descartar_capitulo(
                 d_path = os.path.join(root, d)
                 if os.path.islink(d_path):
                     real_d = os.path.realpath(d_path)
-                    if not (real_d == base_real or real_d.startswith(base_real + os.sep)):
+                    if not esta_confinado_en_raiz(real_d, base_real):
                         raise ErrorSeguridadBandeja(f"Symlink saliente detectado en directorio: '{d_path}' -> '{real_d}'.")
             for f in files:
                 f_path = os.path.join(root, f)
                 if os.path.islink(f_path):
                     real_f = os.path.realpath(f_path)
-                    if not (real_f == base_real or real_f.startswith(base_real + os.sep)):
+                    if not esta_confinado_en_raiz(real_f, base_real):
                         raise ErrorSeguridadBandeja(f"Symlink saliente detectado en archivo: '{f_path}' -> '{real_f}'.")
                 try:
                     sz = os.path.getsize(f_path)

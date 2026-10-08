@@ -15,11 +15,14 @@ Verifica:
 8. Garantía de solo lectura (rechazo de caché o salida dentro del pendrive).
 """
 
+import io
 import os
 import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from inventario_pendrive import (
     normalizar_raiz,
@@ -118,6 +121,13 @@ class TestClasificacionArchivos(unittest.TestCase):
 class TestAuditoriaCompleta(unittest.TestCase):
 
     def setUp(self):
+        self._stdout_original = sys.stdout
+        self._stderr_original = sys.stderr
+        self._stdout_capturado = io.StringIO()
+        self._stderr_capturado = io.StringIO()
+        sys.stdout = self._stdout_capturado
+        sys.stderr = self._stderr_capturado
+
         self.pendrive_simulado = tempfile.mkdtemp(prefix="sim_pendrive_")
         self.repo_simulado = tempfile.mkdtemp(prefix="sim_repo_")
 
@@ -179,6 +189,8 @@ class TestAuditoriaCompleta(unittest.TestCase):
         os.makedirs(os.path.join(self.pendrive_simulado, "carpeta_subvacia", "vacia_nivel2"), exist_ok=True)
 
     def tearDown(self):
+        sys.stdout = self._stdout_original
+        sys.stderr = self._stderr_original
         shutil.rmtree(self.pendrive_simulado, ignore_errors=True)
         shutil.rmtree(self.repo_simulado, ignore_errors=True)
 
@@ -243,6 +255,19 @@ class TestAuditoriaCompleta(unittest.TestCase):
                 ruta_cache=cache_dentro,
                 raiz_real=self.pendrive_simulado
             )
+
+    def test_inventario_cli_raiz_inexistente_sale_con_system_exit(self):
+        """Verifica que invocar inventario_pendrive.main() con --raiz inexistente capture SystemExit(1)."""
+        import inventario_pendrive
+        stdout_capturado = io.StringIO()
+        stderr_capturado = io.StringIO()
+        with patch("sys.argv", ["inventario_pendrive.py", "--raiz", "/no/existe/pendrive/12345"]):
+            with patch("sys.stdout", stdout_capturado):
+                with patch("sys.stderr", stderr_capturado):
+                    with self.assertRaises(SystemExit) as cm:
+                        inventario_pendrive.main()
+                    self.assertEqual(cm.exception.code, 1)
+
 
 
 if __name__ == "__main__":

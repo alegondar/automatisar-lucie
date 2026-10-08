@@ -76,7 +76,7 @@ def main():
         err_code = getattr(e, "winerror", None) or getattr(e, "errno", None)
         if err_code in (errno.EADDRINUSE, 98, 10048) or "already in use" in err_str or "un solo uso" in err_str or "address already in use" in err_str:
             print(f"Ya hay una bandeja corriendo en el puerto {config.puerto_servidor}")
-            sys.exit(1)
+            sys.exit(0)
         raise
 
     vigilante.iniciar()

@@ -26,6 +26,7 @@ from bandeja.config import (
 )
 
 from bandeja.clasificacion import asegurar_carpeta_capitulo
+from bandeja.plataforma import esta_confinado_en_raiz
 
 logger = logging.getLogger("bandeja.db")
 
@@ -556,7 +557,7 @@ class GestorBaseDatosBandeja:
             nuevo_estado = "movido" if es_reversion else "descartado"
             for f in filas:
                 r_act = os.path.realpath(f["ruta_actual"])
-                if r_act == norm_orig or r_act.startswith(norm_orig + os.sep):
+                if esta_confinado_en_raiz(r_act, norm_orig):
                     rel = os.path.relpath(r_act, norm_orig)
                     nueva_ruta = os.path.join(destino_carpeta, rel)
                     cur.execute("""

@@ -18,12 +18,15 @@ Verifica:
 11. Verificación de código del proyecto 100% limpio de primitivas de borrado.
 """
 
+import io
 import json
 import os
 import shutil
+import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from datetime import datetime
 
 from plan_limpieza import (
@@ -89,6 +92,13 @@ class TestPlanLimpiezaSimulacion(unittest.TestCase):
     """Pruebas del Generador de Plan de Limpieza sobre un pendrive simulado en /tmp."""
 
     def setUp(self):
+        self._stdout_original = sys.stdout
+        self._stderr_original = sys.stderr
+        self._stdout_capturado = io.StringIO()
+        self._stderr_capturado = io.StringIO()
+        sys.stdout = self._stdout_capturado
+        sys.stderr = self._stderr_capturado
+
         self.tmp_pendrive = tempfile.mkdtemp(prefix="sim_pendrive_limpieza_")
         self.tmp_repo = tempfile.mkdtemp(prefix="sim_repo_limpieza_")
         self.cache_sqlite = os.path.join(self.tmp_repo, "cache_test.sqlite")
@@ -199,6 +209,8 @@ class TestPlanLimpiezaSimulacion(unittest.TestCase):
         os.makedirs(os.path.join(self.tmp_pendrive, "carpeta_vacia_test"), exist_ok=True)
 
     def tearDown(self):
+        sys.stdout = self._stdout_original
+        sys.stderr = self._stderr_original
         shutil.rmtree(self.tmp_pendrive, ignore_errors=True)
         shutil.rmtree(self.tmp_repo, ignore_errors=True)
 
@@ -414,6 +426,19 @@ class TestPlanLimpiezaSimulacion(unittest.TestCase):
             self.assertIn("tamanio_bytes", c)
             self.assertIn("fecha", c)
             self.assertEqual(c["tamanio_bytes"], len(contenido_especial))
+
+    def test_plan_limpieza_cli_validar_huella_inexistente_sale_con_system_exit(self):
+        """Verifica que invocar plan_limpieza.main() con plan inexistente capture SystemExit(1)."""
+        import plan_limpieza
+        stdout_capturado = io.StringIO()
+        stderr_capturado = io.StringIO()
+        with patch("sys.argv", ["plan_limpieza.py", "--validar-huella", "--salida-json", "/no/existe/plan.json"]):
+            with patch("sys.stdout", stdout_capturado):
+                with patch("sys.stderr", stderr_capturado):
+                    with self.assertRaises(SystemExit) as cm:
+                        plan_limpieza.main()
+                    self.assertEqual(cm.exception.code, 1)
+
 
 
 if __name__ == "__main__":

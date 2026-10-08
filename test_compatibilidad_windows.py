@@ -48,6 +48,8 @@ from bandeja.plataforma import (
     obtener_sistema_archivos_windows,
     obtener_unidades_windows,
     notificar_escritorio,
+    normalizar_ruta_relativa_posix,
+    convertir_ruta_relativa_a_local,
 )
 from bandeja.lotes import (
     obtener_fecha_llegada,
@@ -167,6 +169,71 @@ class TestConfinamientoYValidacionRutas(unittest.TestCase):
         for final_invalido in ["escena.", "escena ", "escena..", "escena   "]:
             valido, _ = validador.validar_nombre_escena(final_invalido, base, base)
             self.assertFalse(valido, f"El nombre '{final_invalido}' debió ser rechazado por terminar en punto o espacio.")
+
+    def test_validador_escenas_exhaustivo_caracteres_control_y_reservados(self):
+        validador = ValidadorEscenas()
+        base = "/tmp/base"
+        desc = "/tmp/desc"
+
+        # 1. Caracteres prohibidos en todos los sistemas: < > : " / \ | ? *
+        for car in ['<', '>', ':', '"', '/', '\\', '|', '?', '*']:
+            valido, msg = validador.validar_nombre_escena(f"escena{car}test", base, desc)
+            self.assertFalse(valido, f"El caracter '{car}' debió ser rechazado.")
+
+        # 2. Caracteres de control (0-31 y 127)
+        for ctrl_code in [0, 1, 9, 10, 13, 27, 31, 127]:
+            ctrl_char = chr(ctrl_code)
+            valido, msg = validador.validar_nombre_escena(f"escena{ctrl_char}test", base, desc)
+            self.assertFalse(valido, f"El caracter de control {ctrl_code} debió ser rechazado.")
+
+        # 3. Nombres terminados en punto o espacio
+        for sufijo in [".", " ", "..", "   ", " . "]:
+            valido, msg = validador.validar_nombre_escena(f"escena{sufijo}", base, desc)
+            self.assertFalse(valido, f"El sufijo '{sufijo}' debió ser rechazado.")
+
+        # 4. Nombres reservados de Windows/exFAT y con extensiones
+        for res in ["CON", "PRN", "AUX", "NUL", "COM1", "COM5", "COM9", "LPT1", "LPT9"]:
+            valido, msg = validador.validar_nombre_escena(res, base, desc)
+            self.assertFalse(valido, f"El nombre reservado '{res}' debió ser rechazado.")
+            valido_ext, msg_ext = validador.validar_nombre_escena(f"{res}.mp4", base, desc)
+            self.assertFalse(valido_ext, f"El nombre reservado con extensión '{res}.mp4' debió ser rechazado.")
+
+    def test_normalizacion_ruta_relativa_simulada_con_backslashes(self):
+        # Simula rutas con backslashes típicas de Windows y comprueba la normalización a '/'
+        ruta_win = r"videos sin editar\lucie\capitulo_01\toma_01.mp4"
+        norm = normalizar_ruta_relativa_posix(ruta_win)
+        self.assertEqual(norm, "videos sin editar/lucie/capitulo_01/toma_01.mp4")
+        self.assertNotIn("\\", norm)
+
+        # Conversión segura a local según el SO
+        local_p = convertir_ruta_relativa_a_local(norm)
+        partes = ["videos sin editar", "lucie", "capitulo_01", "toma_01.mp4"]
+        self.assertEqual(local_p, os.path.join(*partes))
+
+        # Traversal relativo neutralizado
+        ruta_traversal = r"..\..\videos\peligro.mp4"
+        norm_traversal = normalizar_ruta_relativa_posix(ruta_traversal)
+        local_traversal = convertir_ruta_relativa_a_local(norm_traversal)
+        self.assertNotIn("..", local_traversal)
+
+    def test_simular_descartar_capitulo_confinamiento(self):
+        from bandeja.capitulos import simular_descartar_capitulo
+        with tempfile.TemporaryDirectory() as tmp:
+            dest_base = os.path.join(tmp, "descargas", "_lucie")
+            desc = os.path.join(tmp, "descargas")
+            os.makedirs(dest_base, exist_ok=True)
+            db = GestorBaseDatosBandeja(os.path.join(tmp, "db.sqlite"))
+            cap = db.empezar_capitulo("lucie", "capitulo_seguro")
+            cap_id = cap["id"]
+
+            carp_cap = os.path.join(dest_base, "lucie", "capitulo_seguro")
+            os.makedirs(carp_cap, exist_ok=True)
+            f_valido = os.path.join(carp_cap, "video.mp4")
+            with open(f_valido, "wb") as f:
+                f.write(b"video")
+
+            res = simular_descartar_capitulo(db, dest_base, desc, cap_id)
+            self.assertTrue(res["valido"])
 
 
 class TestCodificacionYNormalizacionNFC(unittest.TestCase):
@@ -362,6 +429,48 @@ class TestServidorHTTPYExclusividad(unittest.TestCase):
             finally:
                 srv.shutdown()
                 srv.server_close()
+
+    def test_instancia_unica_linux_puerto_ocupado_sale_limpio(self):
+        import io
+        import bandeja_descargas
+
+        # Ocupar un puerto temporal
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("127.0.0.1", 0))
+        sock.listen(1)
+        puerto = sock.getsockname()[1]
+
+        stdout_capturado = io.StringIO()
+        stderr_capturado = io.StringIO()
+        try:
+            with patch("sys.argv", ["bandeja_descargas.py", "--puerto", str(puerto)]):
+                with patch("sys.stdout", stdout_capturado):
+                    with patch("sys.stderr", stderr_capturado):
+                        with self.assertRaises(SystemExit) as cm:
+                            bandeja_descargas.main()
+                        self.assertEqual(cm.exception.code, 0)
+            salida = stdout_capturado.getvalue()
+            self.assertIn(f"Ya hay una bandeja corriendo en el puerto {puerto}", salida)
+        finally:
+            sock.close()
+
+    def test_instancia_unica_windows_puerto_ocupado_sale_limpio(self):
+        import io
+        import bandeja_descargas
+
+        stdout_capturado = io.StringIO()
+        stderr_capturado = io.StringIO()
+        with patch("bandeja_descargas.crear_servidor", side_effect=OSError(10048, "Only one usage of each socket address is normally permitted")):
+            with patch("sys.argv", ["bandeja_descargas.py", "--puerto", "8766"]):
+                with patch("sys.stdout", stdout_capturado):
+                    with patch("sys.stderr", stderr_capturado):
+                        with self.assertRaises(SystemExit) as cm:
+                            bandeja_descargas.main()
+                        self.assertEqual(cm.exception.code, 0)
+            salida = stdout_capturado.getvalue()
+            self.assertIn("Ya hay una bandeja corriendo en el puerto 8766", salida)
+
 
 
 class TestPlataformaExclusivaSO(unittest.TestCase):
