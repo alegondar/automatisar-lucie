@@ -1,109 +1,150 @@
-# 🔍 Auditoría e Inventario Integral de Pendrive (Solo Lectura)
+# 🎬 Lucie & Personajes Digitales — Bandeja de Descargas y Bóveda Multimedia
 
-Script en Python multiplataforma (**Kali Linux** y **Windows**) para auditar, inventariar y analizar todo el contenido de un pendrive o unidad de almacenamiento externo sin modificarlo jamás.
+Plataforma integral desarrollada en Python para la automatización, clasificación, resguardo y auditoría continua del flujo de producción multimedia de personajes digitales (**Lucie**, **Magui la Roli** y **Mailen**).
 
----
+El sistema coordina la captura no invasiva de descargas de inteligencia artificial (Grok, Gemini, Nano Banana, Google Flow), su estructuración por escenas y capítulos, el traslado atómico a la sala de espera y la transferencia segura hacia unidades externas (pendrives compartidos formateados en exFAT) para su posterior montaje y edición en Windows con CapCut.
 
-## 🚀 Características Principales
-
-1. **Garantía Estricta de Solo Lectura:**
-   - **No escribe ni modifica nada dentro del pendrive.**
-   - La base de datos de caché SQLite (`.cache/inventario_pendrive_cache.sqlite`) y los informes generados se guardan **exclusivamente en el repositorio local**.
-   - El script valida y rechaza cualquier intento de almacenar caché o informes dentro de la unidad analizada.
-
-2. **Seguridad y Confinamiento de Rutas:**
-   - Resuelve cada ruta mediante `os.path.realpath`.
-   - Verifica el límite con `os.path.commonpath`.
-   - Symlinks o rutas que apunten fuera de `--raiz` son descartados de inmediato con advertencia de seguridad.
-
-3. **Exclusiones de Sistema y Archivos Ocultos:**
-   - Ignora automáticamente carpetas de sistema: `System Volume Information`, `$RECYCLE.BIN`, `.Trash-*`, `lost+found`.
-   - Ignora archivos y carpetas ocultos por defecto.
-   - Opción `--incluir-ocultos` disponible para auditarlos si se desea.
-
-4. **Clasificación por Tipo de Archivo:**
-   - Categorías: `video`, `foto`, `audio`, `documento`, `subtítulo`, `otro`.
-   - **ffprobe:** La extracción de duración multimedia aplica **únicamente a archivos de video** (tolerante a fallos y timeouts).
-
-5. **Detección Avanzada de Duplicados (Cross-Folder):**
-   - Detección en TODO el pendrive, incluso entre carpetas con distinto tipo de contenido (ej: la misma foto en dos carpetas diferentes o con nombres distintos).
-   - Optimización en 2 fases: agrupación inicial por tamaño en bytes (descarta tamaños únicos al instante) y cálculo SHA-256 en bloques de 1MB por streaming.
-
-6. **Carpetas Vacías y Carpetas Duplicadas:**
-   - Identificación de carpetas vacías (sin archivos válidos tras los filtros).
-   - Detección de carpetas sospechosas por:
-     - 100% contenido idéntico (mismos hashes).
-     - Alta similitud de contenido (>=75%).
-     - Similitud de nombres (ej: copias redundantes).
-
-7. **Auditoría de Archivos Sueltos:**
-   - Archivos sueltos en la raíz del pendrive (`raiz/archivo.ext`).
-   - Archivos sueltos en la raíz de cada carpeta de primer nivel (`raiz/carpeta1/archivo.ext`).
-
-8. **Caché Persistente en Repositorio:**
-   - Reduce el tiempo de análisis de **~47 segundos** a **~0.3 segundos** en escaneos posteriores.
+> [!IMPORTANT]
+> **Repositorio Privado:** Este proyecto es de uso exclusivo y privado. No cuenta con licencia pública de distribución ni redistribución.
 
 ---
 
-## 💻 Requisitos y Compatibilidad
+## 🛡️ Las 7 Reglas de Oro de Seguridad
 
-- **Python 3.8+** (Probado en Python 3.13).
-- **Librerías estándar:** No requiere `pip install` de paquetes de terceros.
-- **ffprobe (FFmpeg):** Opcional pero recomendado para calcular duración de videos (`apt install ffmpeg` en Debian/Kali/Ubuntu o FFmpeg en Windows).
+Dado el valor irreemplazable de las creaciones y grabaciones, toda la plataforma opera bajo siete principios inmutables:
+
+1. **Prohibición Absoluta de Borrado y Pisado Ciego:**  
+   Queda estrictamente prohibida la invocación de primitivas destructivas del sistema operativo (`os.remove`, `os.unlink`, `os.rmdir`, `os.removedirs`, `shutil.rmtree`, `shutil.move`, `os.replace`, `send2trash` o comandos de shell con `rm`). Los descartes se trasladan a carpetas protegidas (`_descartados/`) preservando cada byte original.
+2. **Simulación Previa Obligatoria (Dry-Run):**  
+   Ningún archivo se traslada o copia sin generar antes una simulación detallada que exponga los orígenes, los destinos exactos calculados, los tamaños y el estado del almacenamiento.
+3. **Aprobación Granular por el Usuario:**  
+   El usuario conserva la decisión final sobre cada lote o archivo antes de cualquier alteración en el disco.
+4. **Validación de Destino y Confinamiento de Rutas:**  
+   Toda ruta de archivo se resuelve canónicamente con `realpath` y se verifica contra los límites autorizados mediante `commonpath`, impidiendo cualquier escape por enlaces simbólicos o secuencias de escape de directorio (`../`).
+5. **Verificación de Integridad por SHA-256 y Atomicidad:**  
+   La transferencia hacia pendrives se realiza escribiendo en archivos temporales `.part`, sincronizando buffers físicos con `fsync` y verificando la coincidencia exacta de hash SHA-256 antes del renombrado final.
+6. **Bitácora Append-Only y Operaciones Reversibles:**  
+   Cada movimiento queda documentado en bitácoras cronológicas `.jsonl`. El sistema cuenta con mecanismos de deshacer (`/api/deshacer`) capaces de retornar los archivos a su ubicación original sin colisiones.
+7. **Verificación Estática Continua (AST):**  
+   Un analizador sintáctico automatizado ([`seguridad_anti_borrado.py`](seguridad_anti_borrado.py)) audita el árbol de sintaxis abstracta de cada archivo operativo, garantizando que ninguna actualización introduzca código destructivo.
 
 ---
 
-## 🛠️ Modos de Uso
+## 🔄 El Flujo de Trabajo
 
-### En Kali / Debian / Ubuntu Linux:
+```
+[ Generación IA ]  -->  [ ~/Descargas ] (Archivos crudos)
+                               |
+                               v
+                     [ Vigilante / Bandeja ] (Detección no invasiva + Sondeo de estabilidad)
+                               |
+                               v
+                     [ Capítulo en Foco ] (Preasignación por personaje/escena)
+                               |
+                               v (Simulación previa + Aprobación)
+                     [ Sala de Espera ] (Organizado en ~/Descargas/_lucie/<personaje>/<capítulo>/)
+                               |
+                               v (Transferencia segura con fsync y .part)
+                     [ Bóveda Pendrive ] (Estructura LucieSinReglas/ para edición en Windows)
+```
+
+1. **Crear o Enfocar un Capítulo:** En el panel web se crea o selecciona el capítulo en curso (ej. `lucie/plaza`). Dicho capítulo toma el foco principal.
+2. **Descarga y Detección Automática:** Las descargas provenientes de navegadores caen en la carpeta de descargas. El vigilante supervisa que el tamaño del archivo se mantenga estable (descarga completada) antes de registrarlo.
+3. **Simular y Mover a Sala de Espera:** El lote se inspecciona en la interfaz web; al aprobarlo, los archivos se reubican atómicamente en la sala de espera estructurada (`~/Descargas/_lucie/`).
+4. **Envío Seguro al Pendrive:** Al conectar la unidad externa vinculada, el usuario selecciona los lotes listos, revisa la simulación de espacio y transfiere el material a la bóveda del pendrive (`LucieSinReglas/`).
+
+---
+
+## 📦 Estructura del Proyecto
+
+### Paquete `bandeja/`
+
+* [`bandeja/__init__.py`](bandeja/__init__.py): Interfaz y exportaciones públicas del paquete.
+* [`bandeja/capitulos.py`](bandeja/capitulos.py): Gestión de estados de historias y escenas (abiertos, en foco, cerrados y descartados con reversibilidad).
+* [`bandeja/clasificacion.py`](bandeja/clasificacion.py): Filtros de lista blanca y clasificación por reglas heurísticas y alias de personajes (Grok, Gemini, Nano Banana).
+* [`bandeja/config.py`](bandeja/config.py): Carga y normalización de parámetros generales (`config_bandeja.json`) y configuraciones locales independientes por máquina (`config_bandeja.local.json`).
+* [`bandeja/db.py`](bandeja/db.py): Capa de persistencia en SQLite local configurada en modo `WAL` (`Write-Ahead Logging`) para concurrencia e integridad.
+* [`bandeja/lotes.py`](bandeja/lotes.py): Agrupador temporal de descargas para consolidar ráfagas de archivos en lotes coherentes.
+* [`bandeja/movimientos.py`](bandeja/movimientos.py): Ejecutor seguro de traslados a la sala de espera, cálculo de rutas de destino, simulación previa y reversión atómica.
+* [`bandeja/pendrive.py`](bandeja/pendrive.py): Integración con unidades USB: verificación del marcador `.lucie_pendrive.json`, asistente de vinculación, simulación de capacidad, streaming con `.part` y control seguro de montaje.
+* [`bandeja/plataforma.py`](bandeja/plataforma.py): Abstracción del sistema operativo (Linux / Windows) para detección de unidades, cálculo de espacio libre y normalización de rutas.
+* [`bandeja/servidor.py`](bandeja/servidor.py): Servidor HTTP integrado (API REST, Server-Sent Events para reactividad en vivo, generación de miniaturas y streaming multimedia).
+* [`bandeja/vigilante.py`](bandeja/vigilante.py): Hilo demonio de monitoreo continuo sobre la carpeta de descargas con filtrado de archivos temporales.
+* `bandeja/web/`: Frontend visual sin dependencias externas (HTML, CSS y JS modular) servido directamente por el backend.
+
+### Herramientas Operativas y de Seguridad
+
+* [`bandeja_descargas.py`](bandeja_descargas.py): Punto de inicio principal para arrancar el servidor de la bandeja de descargas.
+* [`inventario_pendrive.py`](inventario_pendrive.py): Herramienta CLI de auditoría en modo estrictamente de solo lectura para unidades USB (duplicados globales por SHA-256, desglose de carpetas y duraciones).
+* [`plan_limpieza.py`](plan_limpieza.py): Generador y validador de planes de ordenamiento y limpieza simulada (dry-run).
+* [`seguridad_anti_borrado.py`](seguridad_anti_borrado.py): Analizador estático AST que valida la ausencia de primitivas destructivas en todos los módulos operativos.
+* [`auditar_repo.py`](auditar_repo.py): Auditor integral del repositorio que inspecciona archivos rastreados y el historial de Git en busca de credenciales, secretos, datos personales o archivos pesados.
+* [`instalar_hooks.py`](instalar_hooks.py): Instalador seguro de creación exclusiva del hook Git `pre-push`.
+* [`verificar_windows.py`](verificar_windows.py): Diagnóstico de compatibilidad de entorno y rutas reservadas para Windows.
+* [`guardia_hermetica.py`](guardia_hermetica.py): Módulo de aislamiento de entorno para pruebas unitarias herméticas.
+
+---
+
+## 🚀 Puesta en Marcha
+
+### En Linux (Kali / Debian / Ubuntu)
+
+1. Abrir una terminal en el repositorio:
+   ```bash
+   python3 bandeja_descargas.py
+   ```
+2. Acceder al panel web desde el navegador:
+   ```text
+   http://127.0.0.1:8766
+   ```
+
+### En Windows 10 / 11
+
+1. Hacer doble clic sobre el lanzador [`iniciar_bandeja.bat`](iniciar_bandeja.bat), o ejecutar en PowerShell:
+   ```powershell
+   python bandeja_descargas.py
+   ```
+2. Para más detalles sobre configuración local, nombres reservados y el montaje de unidades en Windows, consultar la guía específica:  
+   👉 **[README_WINDOWS.md](README_WINDOWS.md)**
+
+---
+
+## 🧪 Pruebas Automatizadas y Auditorías
+
+### Suite Completa de Tests Herméticos
+
+Toda la suite está diseñada para ser completamente hermética (independiente del entorno, de montajes físicos y de puertos fijos):
+
 ```bash
-# Especificando ruta de montaje:
-python3 inventario_pendrive.py --raiz /run/media/<usuario>/<punto-de-montaje>
-
-# Sin --raiz: busca un pendrive vinculado y pide confirmación explícita:
-python3 inventario_pendrive.py
-
-# Incluyendo archivos y carpetas ocultos:
-python3 inventario_pendrive.py --incluir-ocultos
-
-# Exportando informe a formato JSON:
-python3 inventario_pendrive.py --formato json --salida informe.json
-
-# Forzar recálculo completo sin usar la caché local:
-python3 inventario_pendrive.py --sin-cache
+env HOME=/tmp/homefalso python3 -m unittest discover -s . -p "test_*.py"
 ```
 
-### En Windows:
-```cmd
-python inventario_pendrive.py --raiz E:\
-python inventario_pendrive.py --raiz F: --salida informe_windows.md
-```
+### Auditoría AST Anti-Borrado (Regla de Oro #1 y #7)
 
----
-
-## 📋 Parámetros de la Línea de Comandos
-
-| Parámetro | Requerido | Descripción |
-| :--- | :---: | :--- |
-| `--raiz` | No* | Punto de montaje o letra de unidad (ej: `/run/media/<usuario>/<punto-de-montaje>` o `E:\`). Si no se pasa, busca un pendrive vinculado y pide confirmación explícita. |
-| `--incluir-ocultos` | No | Incluye archivos y carpetas ocultos (empiezan con `.` o atributos ocultos). |
-| `--salida` | No | Ruta del informe de salida (por defecto `informe_pendrive.md` en el repo). |
-| `--formato` | No | Formato del informe: `markdown` (defecto), `json` o `texto`. |
-| `--sin-cache` | No | Desactiva la caché y fuerza recálculo de hashes y duraciones. |
-| `--limpiar-cache` | No | Borra la base de datos de caché antes de comenzar. |
-| `--verboso` | No | Muestra mensajes detallados paso a paso. |
-
----
-
-## 🧪 Pruebas Automatizadas
-
-El proyecto cuenta con una suite completa de pruebas unitarias que valida seguridad de rutas, symlinks, clasificación, duplicados cross-folder y exclusiones de sistema:
+Valida que ningún archivo operativo invoque llamadas de borrado o sobrescritura ciega:
 
 ```bash
-python3 test_inventario.py
+python3 seguridad_anti_borrado.py .
 ```
-Resultado:
+
+### Auditoría de Seguridad e Historial
+
+Verifica que el repositorio se encuentre libre de secretos, datos personales, bases de datos o archivos pesados:
+
+```bash
+python3 auditar_repo.py --historial
 ```
-Ran 9 tests in 0.010s
-OK
+
+---
+
+## 🔒 Protección Automática contra Fugas (Hook Pre-Push)
+
+Para evitar que se suban accidentalmente archivos no autorizados, datos personales o reportes generados a GitHub, el proyecto incluye un instalador del hook `pre-push`:
+
+```bash
+python3 instalar_hooks.py
 ```
+
+* El script instala `.git/hooks/pre-push` de forma segura.
+* **Garantía de creación exclusiva:** Si ya existe un hook configurado, no lo sobrescribe.
+* Al ejecutar cualquier comando `git push`, el hook ejecutará automáticamente `python3 auditar_repo.py --historial` y cancelará el envío si se detecta alguna anomalía.
