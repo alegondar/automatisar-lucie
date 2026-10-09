@@ -825,10 +825,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="Generador y Validador del Plan de Limpieza en Modo Simulación (Dry-Run)"
     )
-    # Valor por defecto del pendrive si existe en Linux
-    default_raiz = "/run/media/<usuario>/<pendrive>" if os.path.exists("/run/media/<usuario>/<pendrive>") else None
-    parser.add_argument("--raiz", default=default_raiz, required=(default_raiz is None),
-                        help="Punto de montaje o carpeta raíz del pendrive a auditar.")
+    parser.add_argument("--raiz", default=None,
+                        help="Punto de montaje o carpeta raíz del pendrive a auditar. Si no se especifica, busca un pendrive vinculado pidiendo confirmación.")
     parser.add_argument("--cache", default=".cache/inventario_pendrive_cache.sqlite",
                         help="Ruta a la base de datos SQLite de caché local.")
     parser.add_argument("--config", default="config_limpieza.json",
@@ -842,13 +840,39 @@ def main():
 
     args = parser.parse_args()
 
+    raiz = args.raiz
+    if not raiz:
+        try:
+            from bandeja.pendrive import detectar_pendrive
+            from bandeja.config import ConfiguracionBandeja
+            cfg = ConfiguracionBandeja()
+            info_pen = detectar_pendrive(cfg)
+        except Exception:
+            info_pen = None
+
+        if not info_pen or not info_pen.get("punto_montaje"):
+            print("[!] Error: No se especificó --raiz y no se detectó ningún pendrive vinculado con marcador .lucie_pendrive.json.", file=sys.stderr)
+            sys.exit(1)
+
+        ruta_detectada = os.path.realpath(info_pen["punto_montaje"])
+        print(f"[*] Pendrive vinculado detectado: '{ruta_detectada}' (ID: {info_pen.get('id')})")
+        try:
+            confirmacion = input(f"¿Desea usar la ruta resuelta '{ruta_detectada}'? [s/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            confirmacion = "n"
+
+        if confirmacion not in ("s", "si", "y", "yes"):
+            print("[!] Operación cancelada por el usuario. Especifique --raiz manualmente.", file=sys.stderr)
+            sys.exit(1)
+        raiz = ruta_detectada
+
     if args.validar_huella:
         if not os.path.exists(args.salida_json):
             print(f"[!] Error: no existe el plan JSON para validar: {args.salida_json}", file=sys.stderr)
             sys.exit(1)
         with open(args.salida_json, "r", encoding="utf-8", newline="\n") as f:
             plan_data = json.load(f)
-        valido, errores = validar_huella_pre_ejecucion(args.raiz, plan_data)
+        valido, errores = validar_huella_pre_ejecucion(raiz, plan_data)
         if valido:
             print("[+] Validación de huella pre-ejecución EXITOSA: todos los archivos coinciden.")
             sys.exit(0)
@@ -860,7 +884,7 @@ def main():
 
     config = cargar_configuracion(args.config)
     generador = GeneradorPlanLimpieza(
-        ruta_raiz=args.raiz,
+        ruta_raiz=raiz,
         ruta_cache=args.cache,
         config=config
     )

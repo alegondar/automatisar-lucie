@@ -57,11 +57,11 @@ Script en Python multiplataforma (**Kali Linux** y **Windows**) para auditar, in
 
 ### En Kali / Debian / Ubuntu Linux:
 ```bash
-# Si el pendrive está en el punto por defecto (/run/media/<usuario>/<pendrive>):
-python3 inventario_pendrive.py
+# Especificando ruta de montaje:
+python3 inventario_pendrive.py --raiz /run/media/<usuario>/<punto-de-montaje>
 
-# Especificando otra ruta de montaje:
-python3 inventario_pendrive.py --raiz /run/media/usuario/DISCO
+# Sin --raiz: busca un pendrive vinculado y pide confirmación explícita:
+python3 inventario_pendrive.py
 
 # Incluyendo archivos y carpetas ocultos:
 python3 inventario_pendrive.py --incluir-ocultos
@@ -74,7 +74,6 @@ python3 inventario_pendrive.py --sin-cache
 ```
 
 ### En Windows:
-En Windows el parámetro `--raiz` es **obligatorio** (sin valor por defecto):
 ```cmd
 python inventario_pendrive.py --raiz E:\
 python inventario_pendrive.py --raiz F: --salida informe_windows.md
@@ -86,7 +85,7 @@ python inventario_pendrive.py --raiz F: --salida informe_windows.md
 
 | Parámetro | Requerido | Descripción |
 | :--- | :---: | :--- |
-| `--raiz` | Sí (en Win) | Punto de montaje o letra de unidad (ej: `/run/media/...` o `E:\`). |
+| `--raiz` | No* | Punto de montaje o letra de unidad (ej: `/run/media/<usuario>/<punto-de-montaje>` o `E:\`). Si no se pasa, busca un pendrive vinculado y pide confirmación explícita. |
 | `--incluir-ocultos` | No | Incluye archivos y carpetas ocultos (empiezan con `.` o atributos ocultos). |
 | `--salida` | No | Ruta del informe de salida (por defecto `informe_pendrive.md` en el repo). |
 | `--formato` | No | Formato del informe: `markdown` (defecto), `json` o `texto`. |

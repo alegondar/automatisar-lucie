@@ -1084,22 +1084,11 @@ def construir_parser() -> argparse.ArgumentParser:
         description="Auditoría e inventario exhaustivo de pendrives (Solo Lectura)."
     )
 
-    es_windows = (os.name == 'nt')
-    default_linux = "/run/media/<usuario>/<pendrive>"
-
-    if es_windows:
-        parser.add_argument(
-            "--raiz",
-            required=True,
-            help="Letra de unidad del pendrive en Windows (ej: E:\\ o F:). Parámetro obligatorio."
-        )
-    else:
-        parser.add_argument(
-            "--raiz",
-            default=default_linux if os.path.exists(default_linux) else None,
-            required=not os.path.exists(default_linux),
-            help=f"Punto de montaje del pendrive (por defecto '{default_linux}' si existe)."
-        )
+    parser.add_argument(
+        "--raiz",
+        default=None,
+        help="Punto de montaje o letra de unidad del pendrive. Si no se especifica, busca un pendrive vinculado pidiendo confirmación."
+    )
 
     parser.add_argument(
         "--incluir-ocultos",
@@ -1151,12 +1140,34 @@ def main():
     parser = construir_parser()
     args = parser.parse_args()
 
-    if not args.raiz:
-        print("[!] Error: Se debe especificar el punto de montaje con --raiz.", file=sys.stderr)
-        sys.exit(1)
+    raiz_arg = args.raiz
+    if not raiz_arg:
+        try:
+            from bandeja.pendrive import detectar_pendrive
+            from bandeja.config import ConfiguracionBandeja
+            cfg = ConfiguracionBandeja()
+            info_pen = detectar_pendrive(cfg)
+        except Exception:
+            info_pen = None
+
+        if not info_pen or not info_pen.get("punto_montaje"):
+            print("[!] Error: No se especificó --raiz y no se detectó ningún pendrive vinculado con marcador .lucie_pendrive.json.", file=sys.stderr)
+            sys.exit(1)
+
+        ruta_detectada = os.path.realpath(info_pen["punto_montaje"])
+        print(f"[*] Pendrive vinculado detectado en: '{ruta_detectada}' (ID: {info_pen.get('id')})")
+        try:
+            confirmacion = input(f"¿Desea usar la ruta resuelta '{ruta_detectada}'? [s/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            confirmacion = "n"
+
+        if confirmacion not in ("s", "si", "y", "yes"):
+            print("[!] Operación cancelada por el usuario. Especifique --raiz manualmente.", file=sys.stderr)
+            sys.exit(1)
+        raiz_arg = ruta_detectada
 
     try:
-        raiz_valida = normalizar_raiz(args.raiz)
+        raiz_valida = normalizar_raiz(raiz_arg)
     except Exception as e:
         print(f"[!] Error al acceder a la raíz: {e}", file=sys.stderr)
         sys.exit(1)

@@ -205,10 +205,10 @@ def activar_guardia():
 
         _orig_detectar_particiones = bandeja.plataforma.detectar_particiones_removibles_linux
 
-        def _detectar_particiones_hermetico(sys_dir="/sys", proc_dir="/proc", dev_dir="/dev", udev_dir="/run/udev/data"):
+        def _detectar_particiones_hermetico(sys_dir="/sys", proc_dir="/proc", dev_dir="/dev", udev_dir="/run/udev/data", *args, **kwargs):
             if sys_dir == "/sys":
                 return []
-            return _orig_detectar_particiones(sys_dir=sys_dir, proc_dir=proc_dir, dev_dir=dev_dir, udev_dir=udev_dir)
+            return _orig_detectar_particiones(sys_dir=sys_dir, proc_dir=proc_dir, dev_dir=dev_dir, udev_dir=udev_dir, *args, **kwargs)
 
         bandeja.plataforma.detectar_particiones_removibles_linux = _detectar_particiones_hermetico
         bandeja.pendrive.detectar_particiones_removibles_linux = _detectar_particiones_hermetico

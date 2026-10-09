@@ -607,7 +607,7 @@ def _leer_estado_pendrive_raw(config: Optional[ConfiguracionBandeja] = None,
     """Rutina interna de lectura del estado físico del pendrive."""
     cfg = config or ConfiguracionBandeja()
 
-    particiones_rem = detectar_particiones_removibles_linux()
+    particiones_rem = detectar_particiones_removibles_linux(etiqueta_pista=getattr(cfg, "etiqueta_pendrive_pista", None))
     todas_diag = diagnosticar_todas_particiones_linux()
 
     # Limpiar de _unidades_silenciadas aquellas que ya no existen físicamente

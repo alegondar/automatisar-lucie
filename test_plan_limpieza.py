@@ -455,7 +455,73 @@ class TestPlanLimpiezaSimulacion(unittest.TestCase):
                         plan_limpieza.main()
                     self.assertEqual(cm.exception.code, 1)
 
+    def test_plan_limpieza_cli_sin_raiz_y_sin_pendrive_vinculado_sale_con_error_claro(self):
+        """Verifica que sin --raiz y sin pendrive vinculado, plan_limpieza.main() sale con código 1 y mensaje claro."""
+        import plan_limpieza
+        stdout_capturado = io.StringIO()
+        stderr_capturado = io.StringIO()
+        with patch("sys.argv", ["plan_limpieza.py"]):
+            with patch("bandeja.pendrive.detectar_pendrive", return_value=None):
+                with patch("sys.stdout", stdout_capturado):
+                    with patch("sys.stderr", stderr_capturado):
+                        with self.assertRaises(SystemExit) as cm:
+                            plan_limpieza.main()
+                        self.assertEqual(cm.exception.code, 1)
+                        err_salida = stderr_capturado.getvalue()
+                        self.assertIn("No se especificó --raiz", err_salida)
+                        self.assertIn(".lucie_pendrive.json", err_salida)
+
+    def test_plan_limpieza_cli_con_pendrive_vinculado_pide_confirmacion_cancelada(self):
+        """Verifica que con pendrive vinculado pero confirmación rechazada, sale con código 1."""
+        import plan_limpieza
+        stdout_capturado = io.StringIO()
+        stderr_capturado = io.StringIO()
+        fake_info = {
+            "conectado": True,
+            "punto_montaje": self.tmp_pendrive,
+            "id": "uuid-test-1234"
+        }
+        with patch("sys.argv", ["plan_limpieza.py"]):
+            with patch("bandeja.pendrive.detectar_pendrive", return_value=fake_info):
+                with patch("builtins.input", return_value="n"):
+                    with patch("sys.stdout", stdout_capturado):
+                        with patch("sys.stderr", stderr_capturado):
+                            with self.assertRaises(SystemExit) as cm:
+                                plan_limpieza.main()
+                            self.assertEqual(cm.exception.code, 1)
+                            self.assertIn("cancelada", stderr_capturado.getvalue().lower())
+
+    def test_plan_limpieza_cli_con_pendrive_vinculado_pide_confirmacion_aceptada(self):
+        """Verifica que con pendrive vinculado y confirmación afirmativa, adopta la ruta resuelta."""
+        import plan_limpieza
+        config_path = os.path.join(self.tmp_repo, "config_test.json")
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump({}, f)
+
+        stdout_capturado = io.StringIO()
+        stderr_capturado = io.StringIO()
+        fake_info = {
+            "conectado": True,
+            "punto_montaje": self.tmp_pendrive,
+            "id": "uuid-test-1234"
+        }
+        # Con confirmación 's', avanza hasta intentar validar huella de plan inexistente -> SystemExit(1)
+        with patch("sys.argv", [
+            "plan_limpieza.py",
+            "--config", config_path,
+            "--validar-huella",
+            "--salida-json", "/no/existe/plan.json"
+        ]):
+            with patch("bandeja.pendrive.detectar_pendrive", return_value=fake_info):
+                with patch("builtins.input", return_value="s"):
+                    with patch("sys.stdout", stdout_capturado):
+                        with patch("sys.stderr", stderr_capturado):
+                            with self.assertRaises(SystemExit) as cm:
+                                plan_limpieza.main()
+                            self.assertEqual(cm.exception.code, 1)
+                            self.assertIn("no existe el plan JSON para validar", stderr_capturado.getvalue())
 
 
 if __name__ == "__main__":
     unittest.main()
+

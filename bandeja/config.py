@@ -110,6 +110,7 @@ class ConfiguracionBandeja:
         self.subcarpeta_videos = "videos"
         self.carpeta_raiz_pendrive = CARPETA_RAIZ_PENDRIVE_DEFECTO
         self.rutas_candidatas_pendrive: List[str] = []
+        self.etiqueta_pendrive_pista: Optional[str] = "MIUNIDAD"
         self.margen_libre_bytes = 1024 * 1024 * 1024  # 1 GiB por defecto
         self._inicializar_config_local_windows()
         self.cargar()
@@ -191,6 +192,9 @@ class ConfiguracionBandeja:
                 self.carpeta_raiz_pendrive = val
         if "rutas_candidatas_pendrive" in datos and isinstance(datos["rutas_candidatas_pendrive"], list):
             self.rutas_candidatas_pendrive = [os.path.abspath(os.path.expanduser(str(r))) for r in datos["rutas_candidatas_pendrive"] if str(r).strip()]
+        if "etiqueta_pendrive_pista" in datos:
+            val_etiq = str(datos["etiqueta_pendrive_pista"]).strip()
+            self.etiqueta_pendrive_pista = val_etiq if val_etiq else None
         if "margen_libre_bytes" in datos:
             try:
                 self.margen_libre_bytes = max(0, int(datos["margen_libre_bytes"]))

@@ -339,16 +339,6 @@ def buscar_puntos_montaje_candidatos(config: Any = None,
                 if os.path.isdir(p):
                     candidatos.append(os.path.realpath(p))
 
-        # Pista: /run/media/$USER/MIUNIDAD o /media/$USER/MIUNIDAD
-        usuario_actual = os.environ.get("USER", "")
-        if usuario_actual:
-            pista_run = f"/run/media/{usuario_actual}/MIUNIDAD"
-            if os.path.isdir(pista_run):
-                candidatos.append(os.path.realpath(pista_run))
-            pista_media = f"/media/{usuario_actual}/MIUNIDAD"
-            if os.path.isdir(pista_media):
-                candidatos.append(os.path.realpath(pista_media))
-
         # También revisar particiones removibles montadas detectadas por sysfs
         try:
             particiones_rem = detectar_particiones_removibles_linux()
@@ -389,6 +379,12 @@ def buscar_puntos_montaje_candidatos(config: Any = None,
         if c not in vistos:
             vistos.add(c)
             resultado.append(c)
+
+    # Ordenar priorizando la pista de etiqueta si fue provista en la configuración
+    etiqueta_pista = getattr(config, "etiqueta_pendrive_pista", None)
+    if etiqueta_pista:
+        pista_upper = str(etiqueta_pista).strip().upper()
+        resultado.sort(key=lambda c: 0 if os.path.basename(os.path.normpath(c)).upper() == pista_upper else 1)
 
     return resultado
 
@@ -525,7 +521,8 @@ def _leer_info_udev_bloque(maj_min: str, udev_dir: str = "/run/udev/data") -> Di
 def detectar_particiones_removibles_linux(sys_dir: str = "/sys",
                                          proc_dir: str = "/proc",
                                          dev_dir: str = "/dev",
-                                         udev_dir: str = "/run/udev/data") -> List[Dict[str, Any]]:
+                                         udev_dir: str = "/run/udev/data",
+                                         etiqueta_pista: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Detecta particiones pertenecientes a dispositivos de bloque removibles (/sys/block/*/removable == 1)
     en Linux, tanto montadas como sin montar, sin usar subprocess.
@@ -635,10 +632,11 @@ def detectar_particiones_removibles_linux(sys_dir: str = "/sys",
                 "modelo": udev_info.get("model", "")
             })
 
-    # Prioridad: etiqueta 'MIUNIDAD' al principio (case-insensitive)
+    # Prioridad: etiqueta de pista al principio si coincide
+    pista_upper = str(etiqueta_pista).strip().upper() if etiqueta_pista else None
     particiones_removibles.sort(
         key=lambda x: (
-            0 if (x.get("etiqueta") or "").upper() == "MIUNIDAD" else 1,
+            0 if (pista_upper and (x.get("etiqueta") or "").upper() == pista_upper) else 1,
             x["dispositivo"]
         )
     )

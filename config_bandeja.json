@@ -38,5 +38,7 @@
     ".tmp"
   ],
   "carpeta_raiz_pendrive": "LucieSinReglas",
-  "rutas_candidatas_pendrive": []
+  "rutas_candidatas_pendrive": [],
+  "etiqueta_pendrive_pista": "MIUNIDAD"
 }
+

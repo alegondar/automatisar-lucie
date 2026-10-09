@@ -182,5 +182,65 @@ class TestAislamientoArchivosProyecto(unittest.TestCase):
             self.assertEqual(os.path.getmtime(bitacora_repo), mtime_bitacora_antes, "bitacora_bandeja.jsonl fue modificada")
 
 
+class TestAuditoriaEstaticaHermeticidad(unittest.TestCase):
+    """Audita estáticamente que el código operativo y los tests cumplan los estándares de hermeticidad."""
+
+    def test_archivos_operativos_no_contienen_rutas_de_usuario(self):
+        """Verifica que ningún archivo .py operativo contenga identificadores de usuario ni rutas personales absolutas."""
+        from seguridad_anti_borrado import descubrir_archivos_operativos
+        import re
+
+        repo_dir = os.path.dirname(os.path.abspath(__file__))
+        archivos = descubrir_archivos_operativos(repo_dir)
+        patron_ruta_personal = re.compile(
+            r"(?:/home/|/run/media/)(?!<usuario>|<user>|<punto-de-montaje>|usuario|user|test|\.\.\.)[a-zA-Z0-9_-]+"
+        )
+        usuario_prohibido = "".join(["dark", "sun"])
+
+        infracciones = []
+        for arch in archivos:
+            with open(arch, "r", encoding="utf-8", errors="ignore") as f:
+                for num_linea, linea in enumerate(f, 1):
+                    if usuario_prohibido in linea.lower():
+                        infracciones.append(f"{os.path.basename(arch)}:{num_linea} contiene identificador de usuario prohibido")
+                    m = patron_ruta_personal.search(linea)
+                    if m:
+                        infracciones.append(f"{os.path.basename(arch)}:{num_linea} contiene ruta personal '{m.group(0)}'")
+
+        self.assertEqual(
+            infracciones, [],
+            f"Se encontraron rutas de usuario o datos personales en archivos operativos:\n" + "\n".join(infracciones)
+        )
+
+    def test_guardia_hermetica_usada_en_todos_los_archivos_de_test(self):
+        """Verifica que todo test_*.py defina setUpModule() y active guardia_hermetica."""
+        repo_dir = os.path.dirname(os.path.abspath(__file__))
+        archivos_test = [
+            f for f in os.listdir(repo_dir)
+            if f.startswith("test_") and f.endswith(".py")
+        ]
+        self.assertTrue(len(archivos_test) >= 6, "No se encontraron suficientes archivos de tests")
+
+        faltantes = []
+        for arch in sorted(archivos_test):
+            ruta_completa = os.path.join(repo_dir, arch)
+            with open(ruta_completa, "r", encoding="utf-8", errors="ignore") as f:
+                contenido = f.read()
+
+            tiene_import = "guardia_hermetica" in contenido
+            tiene_setup = "def setUpModule(" in contenido
+            tiene_activar = "guardia_hermetica.activar_guardia()" in contenido
+
+            if not (tiene_import and tiene_setup and tiene_activar):
+                faltantes.append(arch)
+
+        self.assertEqual(
+            faltantes, [],
+            f"Los siguientes archivos de test no utilizan la guardia de hermeticidad (setUpModule + activar_guardia):\n"
+            + "\n".join(faltantes)
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
+

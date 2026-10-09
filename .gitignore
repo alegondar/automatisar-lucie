@@ -3,6 +3,7 @@ __pycache__/
 *$py.class
 .cache/
 *.jsonl
+bitacora_bandeja.jsonl
 bitacoras/
 frontend/
 config_bandeja.local.json
@@ -12,4 +13,8 @@ config_bandeja.local.json
 *.db
 verificacion_windows.txt
 _verificacion_windows/
+informe_pendrive.*
+plan_limpieza.json
+plan_limpieza.md
+findings.md
 
