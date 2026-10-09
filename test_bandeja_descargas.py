@@ -51,6 +51,11 @@ from bandeja_descargas import (
 from seguridad_anti_borrado import analizar_ast_archivo, auditar_archivos_proyecto, descubrir_archivos_operativos
 
 
+def setUpModule():
+    import guardia_hermetica
+    guardia_hermetica.activar_guardia()
+
+
 class TestListaBlancaYBandeja(unittest.TestCase):
     """Pruebas del filtro de lista blanca y clasificación de archivos."""
 
@@ -562,7 +567,7 @@ class TestServidorHTTPYSeguridad(unittest.TestCase):
         cls.config = ConfiguracionBandeja()
         cls.config.ruta_descargas = cls.descargas
         cls.config.ruta_destino_base = cls.destino
-        cls.config.puerto_servidor = 8798
+        cls.config.puerto_servidor = 0
         cls.config.host_servidor = "127.0.0.1"
 
         cls.db = GestorBaseDatosBandeja(cls.db_path)
@@ -988,8 +993,11 @@ class TestCapituloActivoYReconocimientoNombres(unittest.TestCase):
         self.filtro = FiltroListaBlanca(self.config)
         self.detector = DetectorDescargasActivas(ventana_estabilidad_segundos=0.05)
         self.agrupador = AgrupadorLotes(ventana_minutos=10)
-        self.movimientos = GestorMovimientosBandeja(self.descargas, self.destino, self.db)
-        self.miniaturas = GeneradorMiniaturas(self.db)
+        self.movimientos = GestorMovimientosBandeja(
+            self.descargas, self.destino, self.db,
+            ruta_bitacora=os.path.join(self.tmp_dir, "bitacora.jsonl")
+        )
+        self.miniaturas = GeneradorMiniaturas(self.db, ruta_cache_miniaturas=os.path.join(self.tmp_dir, "thumbs"))
 
     def tearDown(self):
         for root, dirs, files in os.walk(self.tmp_dir, topdown=False):
@@ -1153,8 +1161,7 @@ class TestCapituloActivoYReconocimientoNombres(unittest.TestCase):
 
     def test_simulacion_y_movimiento_multilote_y_deshacer_por_lote(self):
         """Mover múltiples lotes con confirmación única y permitir reversión independiente por lote."""
-        puerto = 8792
-        self.config.puerto_servidor = puerto
+        self.config.puerto_servidor = 0
         token_csrf = "token_test_multilote_123"
 
         arch_a = os.path.join(self.descargas, "lucie_a.mp4")
@@ -1166,6 +1173,7 @@ class TestCapituloActivoYReconocimientoNombres(unittest.TestCase):
 
         vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
         servidor = crear_servidor(self.config, self.db, vigilante, self.movimientos, self.miniaturas, token_csrf=token_csrf)
+        puerto = servidor.server_address[1]
         hilo = threading.Thread(target=servidor.serve_forever, daemon=True)
         hilo.start()
 
@@ -1249,12 +1257,12 @@ class TestCapituloActivoYReconocimientoNombres(unittest.TestCase):
 
     def test_api_capitulo_activo_endpoint(self):
         """Verifica lectura y modificación del capítulo activo por API."""
-        puerto = 8793
-        self.config.puerto_servidor = puerto
+        self.config.puerto_servidor = 0
         token_csrf = "token_test_cap_api"
 
         vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
         servidor = crear_servidor(self.config, self.db, vigilante, self.movimientos, self.miniaturas, token_csrf=token_csrf)
+        puerto = servidor.server_address[1]
         hilo = threading.Thread(target=servidor.serve_forever, daemon=True)
         hilo.start()
 
@@ -2177,7 +2185,7 @@ class TestDescartarCapitulo(unittest.TestCase):
         self.config.ruta_descargas = self.descargas
         self.config.ruta_destino_base = self.destino
         self.config.archivo_alias_personajes = self.alias_file
-        self.config.puerto_servidor = 8805
+        self.config.puerto_servidor = 0
         self.config.host_servidor = "127.0.0.1"
 
         self.db = GestorBaseDatosBandeja(self.db_path)
@@ -2508,7 +2516,7 @@ class TestDescartarCapitulo(unittest.TestCase):
         # 1. Simulación sin CSRF -> 403 Forbidden
         status, _, _ = self._request(
             "POST", "/api/capitulos/descartar-simular",
-            headers={"Content-Type": "application/json", "Host": "127.0.0.1:8805"},
+            headers={"Content-Type": "application/json", "Host": f"127.0.0.1:{self.config.puerto_servidor}"},
             body=json.dumps({"id": cap_id})
         )
         self.assertEqual(status, 403)
@@ -2530,7 +2538,7 @@ class TestDescartarCapitulo(unittest.TestCase):
             "POST", "/api/capitulos/descartar-simular",
             headers={
                 "Content-Type": "application/json",
-                "Host": "127.0.0.1:8805",
+                "Host": f"127.0.0.1:{self.config.puerto_servidor}",
                 "X-CSRF-Token": self.token_csrf
             },
             body=json.dumps({"id": cap_id})
@@ -2543,7 +2551,7 @@ class TestDescartarCapitulo(unittest.TestCase):
             "POST", "/api/capitulos/descartar",
             headers={
                 "Content-Type": "application/json",
-                "Host": "127.0.0.1:8805",
+                "Host": f"127.0.0.1:{self.config.puerto_servidor}",
                 "X-CSRF-Token": self.token_csrf
             },
             body=json.dumps({
@@ -2558,7 +2566,7 @@ class TestDescartarCapitulo(unittest.TestCase):
             "POST", "/api/capitulos/descartar",
             headers={
                 "Content-Type": "application/json",
-                "Host": "127.0.0.1:8805",
+                "Host": f"127.0.0.1:{self.config.puerto_servidor}",
                 "X-CSRF-Token": self.token_csrf
             },
             body=json.dumps({
@@ -2658,7 +2666,7 @@ class TestAjustesEscenaCapituloYAnteriores(unittest.TestCase):
         self.config.ruta_descargas = self.descargas
         self.config.ruta_destino_base = self.destino
         self.config.archivo_alias_personajes = self.alias_file
-        self.config.puerto_servidor = 8806
+        self.config.puerto_servidor = 0
         self.config.host_servidor = "127.0.0.1"
 
         self.db = GestorBaseDatosBandeja(self.db_path, ruta_destino_base=self.destino, ruta_descargas=self.descargas)
@@ -2952,7 +2960,7 @@ class TestCapitulosAbiertosMultiples(unittest.TestCase):
         self.config.ruta_descargas = self.descargas
         self.config.ruta_destino_base = self.destino
         self.config.archivo_alias_personajes = self.alias_file
-        self.config.puerto_servidor = 8807
+        self.config.puerto_servidor = 0
         self.config.host_servidor = "127.0.0.1"
 
         self.db = GestorBaseDatosBandeja(self.db_path)
@@ -3655,7 +3663,10 @@ class TestRefrescoAutomaticoPanel(unittest.TestCase):
         self.filtro = FiltroListaBlanca(self.config)
         self.detector = DetectorDescargasActivas(ventana_estabilidad_segundos=1)
         self.agrupador = AgrupadorLotes(self.config.ventana_lote_minutos)
-        self.gestor = GestorMovimientosBandeja(self.descargas, self.destino, self.db)
+        self.gestor = GestorMovimientosBandeja(
+            self.descargas, self.destino, self.db,
+            ruta_bitacora=os.path.join(self.tmp_dir, "bitacora.jsonl")
+        )
         self.vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
         self.miniaturas = GeneradorMiniaturas(self.db, os.path.join(self.tmp_dir, "thumbs"))
 
@@ -4936,7 +4947,7 @@ class TestVistaPreviaMedia(unittest.TestCase):
         self.config = ConfiguracionBandeja()
         self.config.ruta_descargas = self.descargas
         self.config.ruta_destino_base = self.destino
-        self.config.puerto_servidor = 8815
+        self.config.puerto_servidor = 0
         self.config.host_servidor = "127.0.0.1"
 
         self.db = GestorBaseDatosBandeja(self.db_path)
@@ -5414,7 +5425,7 @@ class TestListaEnvioPendrivePorCarpetas(unittest.TestCase):
         self.config.ruta_descargas = self.descargas
         self.config.ruta_destino_base = self.destino
         self.config.archivo_alias_personajes = self.alias_file
-        self.config.puerto_servidor = 8809
+        self.config.puerto_servidor = 0
         self.config.host_servidor = "127.0.0.1"
 
         self.db = GestorBaseDatosBandeja(self.db_path)

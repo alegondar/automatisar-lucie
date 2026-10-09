@@ -72,6 +72,11 @@ from bandeja.servidor import (
 from bandeja.db import GestorBaseDatosBandeja
 
 
+def setUpModule():
+    import guardia_hermetica
+    guardia_hermetica.activar_guardia()
+
+
 class TestConfiguracionLocalWindows(unittest.TestCase):
     """Pruebas de configuración por equipo y autodetección de descargas."""
 
@@ -299,7 +304,7 @@ class TestFechasYArchivosBloqueados(unittest.TestCase):
                 f.write(b"video_bytes")
 
             db = GestorBaseDatosBandeja(os.path.join(tmp, "db.sqlite"))
-            gestor = GestorMovimientosBandeja(desc, dest, db)
+            gestor = GestorMovimientosBandeja(desc, dest, db, ruta_bitacora=os.path.join(tmp, "bitacora.jsonl"))
 
             sim = gestor.simular_movimiento_lote(
                 [{"ruta": f_orig, "tamanio": 11, "mtime": 1000.0, "fecha": "2026-10-08", "tipo": "video"}],

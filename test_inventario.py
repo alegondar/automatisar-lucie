@@ -39,6 +39,11 @@ from inventario_pendrive import (
 )
 
 
+def setUpModule():
+    import guardia_hermetica
+    guardia_hermetica.activar_guardia()
+
+
 class TestSeguridadYConfinamiento(unittest.TestCase):
 
     def setUp(self):

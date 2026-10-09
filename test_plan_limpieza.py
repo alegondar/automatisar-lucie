@@ -88,6 +88,11 @@ class TestSeguridadAntiBorradoAST(unittest.TestCase):
             self.fail(f"Se encontraron violaciones de la Regla de Oro anti-borrado en el código operativo:\n{mensaje}")
 
 
+def setUpModule():
+    import guardia_hermetica
+    guardia_hermetica.activar_guardia()
+
+
 class TestPlanLimpiezaSimulacion(unittest.TestCase):
     """Pruebas del Generador de Plan de Limpieza sobre un pendrive simulado en /tmp."""
 
@@ -430,9 +435,20 @@ class TestPlanLimpiezaSimulacion(unittest.TestCase):
     def test_plan_limpieza_cli_validar_huella_inexistente_sale_con_system_exit(self):
         """Verifica que invocar plan_limpieza.main() con plan inexistente capture SystemExit(1)."""
         import plan_limpieza
+        config_path = os.path.join(self.tmp_repo, "config_test.json")
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump({}, f)
+
         stdout_capturado = io.StringIO()
         stderr_capturado = io.StringIO()
-        with patch("sys.argv", ["plan_limpieza.py", "--validar-huella", "--salida-json", "/no/existe/plan.json"]):
+        with patch("sys.argv", [
+            "plan_limpieza.py",
+            "--raiz", self.tmp_pendrive,
+            "--cache", self.cache_sqlite,
+            "--config", config_path,
+            "--validar-huella",
+            "--salida-json", "/no/existe/plan.json"
+        ]):
             with patch("sys.stdout", stdout_capturado):
                 with patch("sys.stderr", stderr_capturado):
                     with self.assertRaises(SystemExit) as cm:

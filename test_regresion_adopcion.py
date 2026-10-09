@@ -28,6 +28,11 @@ from bandeja.servidor import crear_servidor, GeneradorMiniaturas
 from bandeja.vigilante import VigilanteBandeja
 
 
+def setUpModule():
+    import guardia_hermetica
+    guardia_hermetica.activar_guardia()
+
+
 class TestRegresionAdopcionDelProyecto(unittest.TestCase):
     """Verifica que 'Del Proyecto' incorpore el archivo en la sección principal de Lotes Detectados."""
 

@@ -62,6 +62,11 @@ from bandeja_descargas import (
 )
 
 
+def setUpModule():
+    import guardia_hermetica
+    guardia_hermetica.activar_guardia()
+
+
 class TestDeteccionYMarcadorPendrive(unittest.TestCase):
     """Pruebas del Grupo 1: Configuración, validación y detección de pendrive."""
 
@@ -298,7 +303,7 @@ class TestEndpointsVinculacion(unittest.TestCase):
         cls.config = ConfiguracionBandeja()
         cls.config.ruta_descargas = cls.descargas
         cls.config.ruta_destino_base = cls.destino
-        cls.config.puerto_servidor = 8991
+        cls.config.puerto_servidor = 0
         cls.config.host_servidor = "127.0.0.1"
         cls.config.rutas_candidatas_pendrive = [cls.pendrive_dir]
 
@@ -1536,7 +1541,10 @@ class TestControlMontajePendrive(unittest.TestCase):
         filtro = FiltroListaBlanca(self.config)
         detector = DetectorDescargasActivas()
         agrupador = AgrupadorLotes(self.config.ventana_lote_minutos)
-        movimientos = GestorMovimientosBandeja(self.descargas_dir, self.destino_base, self.db)
+        movimientos = GestorMovimientosBandeja(
+            self.descargas_dir, self.destino_base, self.db,
+            ruta_bitacora=os.path.join(self.descargas_dir, "bitacora.jsonl")
+        )
         miniaturas = GeneradorMiniaturas(self.db)
         vigilante = VigilanteBandeja(self.config, self.db, filtro, detector, agrupador)
 
