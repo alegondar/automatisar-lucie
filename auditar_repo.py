@@ -96,6 +96,21 @@ PATRON_RUTA_PERSONAL = re.compile(
     r"(?:/home/|/run/media/)(?!<usuario>|<user>|<punto-de-montaje>|usuario|user|test|\.\.\.)[a-zA-Z0-9_-]+"
 )
 
+# Patrones para detección de rutas de usuario en Windows y Linux
+PATRON_RUTA_WINDOWS_USERS = re.compile(
+    r"[A-Za-z]:(?:\\\\|/|\\)Users(?:\\\\|/|\\)([a-zA-Z0-9_<>-]+)",
+    re.IGNORECASE
+)
+PATRON_RUTA_LINUX_HOME = re.compile(
+    r"/home/([a-zA-Z0-9_<>-]+)",
+    re.IGNORECASE
+)
+
+# Excepciones genéricas permitidas en rutas de usuario (Windows / Linux)
+EXCEPCIONES_USUARIO_GENERICAS = {
+    "public", "default", "<usuario>", "<user>", "usuario", "user", "test", "...", "<punto-de-montaje>", "<nombre>", "nombre"
+}
+
 IDENTIFICADOR_PERSONAL_PROHIBIDO = "".join(["dark", "sun"])
 
 
@@ -164,6 +179,26 @@ def auditar_archivo_versionado(ruta_rel: str) -> List[Tuple[str, str, str]]:
                             "RUTA_PERSONAL",
                             f"Línea {num_linea}: Contiene ruta personal '{m_ruta.group(0)}'"
                         ))
+
+                    # Rutas de usuario en Windows ([A-Za-z]:\Users\<nombre>)
+                    for m_win in PATRON_RUTA_WINDOWS_USERS.finditer(linea):
+                        nombre_usr = m_win.group(1).lower()
+                        if nombre_usr not in EXCEPCIONES_USUARIO_GENERICAS:
+                            infracciones.append((
+                                ruta_rel,
+                                "RUTA_USUARIO_WINDOWS",
+                                f"Línea {num_linea}: Contiene ruta de usuario Windows '{m_win.group(0)}'"
+                            ))
+
+                    # Rutas de usuario en Linux (/home/<nombre>)
+                    for m_lin in PATRON_RUTA_LINUX_HOME.finditer(linea):
+                        nombre_usr = m_lin.group(1).lower()
+                        if nombre_usr not in EXCEPCIONES_USUARIO_GENERICAS:
+                            infracciones.append((
+                                ruta_rel,
+                                "RUTA_USUARIO_LINUX",
+                                f"Línea {num_linea}: Contiene ruta de usuario Linux '{m_lin.group(0)}'"
+                            ))
 
                     # Claves privadas
                     if PATRON_CLAVE_PRIVADA.search(linea):

@@ -27,7 +27,10 @@ from bandeja.pendrive import (
     detectar_unidad_candidata_sin_vincular,
     obtener_estado_pendrive,
 )
-from bandeja.plataforma import obtener_ruta_descargas_defecto
+from bandeja.plataforma import (
+    obtener_ruta_descargas_defecto,
+    obtener_ruta_descargas_windows,
+)
 
 
 def setUpModule():
@@ -75,22 +78,28 @@ class TestGuardiaHermetica(unittest.TestCase):
         self.assertTrue(home_actual.startswith("/tmp") or "temp" in home_actual.lower() or "lucie_hermetico" in home_actual.lower(), f"HOME no es temporal: {home_actual}")
         self.assertFalse(home_actual.startswith("/home/"), f"HOME apunta al usuario real: {home_actual}")
         if os.name == "nt":
-            self.assertFalse(home_actual == "C:\\Users\\alego", f"HOME apunta a C:\\Users\\alego: {home_actual}")
+            dl_real_win = obtener_ruta_descargas_windows()
+            perfil_win = os.path.dirname(dl_real_win) if dl_real_win else os.path.expanduser("~")
+            self.assertFalse(home_actual.lower() == perfil_win.lower(), f"HOME apunta al perfil real de Windows: {home_actual}")
 
         ruta_descargas = obtener_ruta_descargas_defecto()
         self.assertTrue(ruta_descargas.startswith(home_actual) or "temp" in ruta_descargas.lower() or "lucie_hermetico" in ruta_descargas.lower(), f"Descargas por defecto fuera de HOME temporal: {ruta_descargas}")
         self.assertFalse(ruta_descargas.startswith("/home/"), f"Descargas por defecto apunta a Descargas real: {ruta_descargas}")
         if os.name == "nt":
-            self.assertFalse(ruta_descargas.lower() == "c:\\users\\alego\\downloads", f"Descargas apunta a Descargas real de Windows: {ruta_descargas}")
+            dl_real_win = obtener_ruta_descargas_windows()
+            self.assertFalse(ruta_descargas.lower() == dl_real_win.lower(), f"Descargas apunta a Descargas real de Windows: {ruta_descargas}")
 
     def test_variables_entorno_windows_redirigidas_a_temporal(self):
         """USERPROFILE, HOMEDRIVE, HOMEPATH, APPDATA, LOCALAPPDATA y TEMP deben apuntar a directorio temporal."""
         if os.name != "nt":
             return
 
+        dl_real_win = obtener_ruta_descargas_windows()
+        perfil_win = os.path.dirname(dl_real_win) if dl_real_win else os.path.expanduser("~")
+
         userprofile = os.environ.get("USERPROFILE", "")
         self.assertTrue(userprofile, "USERPROFILE no está configurado")
-        self.assertFalse(userprofile.lower() == "c:\\users\\alego", f"USERPROFILE apunta al usuario real: {userprofile}")
+        self.assertFalse(userprofile.lower() == perfil_win.lower(), f"USERPROFILE apunta al usuario real: {userprofile}")
         self.assertTrue("temp" in userprofile.lower() or "lucie_hermetico" in userprofile.lower(), f"USERPROFILE no es temporal: {userprofile}")
 
         appdata = os.environ.get("APPDATA", "")
@@ -107,7 +116,7 @@ class TestGuardiaHermetica(unittest.TestCase):
         if os.name != "nt":
             return
 
-        dl_real = "C:\\Users\\alego\\Downloads"
+        dl_real = obtener_ruta_descargas_windows()
         if guardia_hermetica.es_ruta_prohibida(dl_real)[0]:
             with self.assertRaises(AssertionError) as cm:
                 open(os.path.join(dl_real, "archivo_prohibido.txt"), "r")
@@ -271,6 +280,38 @@ class TestAuditoriaEstaticaHermeticidad(unittest.TestCase):
         self.assertEqual(
             infracciones, [],
             f"Se encontraron rutas de usuario o datos personales en archivos operativos:\n" + "\n".join(infracciones)
+        )
+
+    def test_archivos_test_no_contienen_rutas_de_usuario(self):
+        """Verifica que ningún archivo test_*.py contenga rutas de usuario en Windows o Linux no exceptuadas."""
+        import re
+
+        repo_dir = os.path.dirname(os.path.abspath(__file__))
+        archivos_test = [
+            os.path.join(repo_dir, f) for f in os.listdir(repo_dir)
+            if f.startswith("test_") and f.endswith(".py")
+        ]
+        patron_win = re.compile(r"[A-Za-z]:(?:\\\\|/|\\)Users(?:\\\\|/|\\)([a-zA-Z0-9_<>-]+)", re.IGNORECASE)
+        patron_posix = re.compile(r"/home/([a-zA-Z0-9_<>-]+)", re.IGNORECASE)
+        excepciones = {"public", "default", "<usuario>", "<user>", "usuario", "user", "test", "...", "<punto-de-montaje>", "<nombre>", "nombre"}
+        usuario_prohibido = "".join(["dark", "sun"])
+
+        infracciones = []
+        for arch in archivos_test:
+            with open(arch, "r", encoding="utf-8", errors="ignore") as f:
+                for num_linea, linea in enumerate(f, 1):
+                    if usuario_prohibido in linea.lower():
+                        infracciones.append(f"{os.path.basename(arch)}:{num_linea} contiene identificador de usuario prohibido")
+                    for m in patron_win.finditer(linea):
+                        if m.group(1).lower() not in excepciones:
+                            infracciones.append(f"{os.path.basename(arch)}:{num_linea} contiene ruta de usuario Windows '{m.group(0)}'")
+                    for m in patron_posix.finditer(linea):
+                        if m.group(1).lower() not in excepciones:
+                            infracciones.append(f"{os.path.basename(arch)}:{num_linea} contiene ruta de usuario Linux '{m.group(0)}'")
+
+        self.assertEqual(
+            infracciones, [],
+            f"Se encontraron rutas de usuario en archivos de test:\n" + "\n".join(infracciones)
         )
 
     def test_guardia_hermetica_usada_en_todos_los_archivos_de_test(self):
