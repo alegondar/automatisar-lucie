@@ -5836,6 +5836,198 @@ class TestListaEnvioPendrivePorCarpetas(unittest.TestCase):
         self.assertIn("TEST_NODE_PENDRIVE_CARPETAS_OK", proc.stdout)
 
 
+class TestNombresEspecialesServidorYClasificacion(unittest.TestCase):
+    """
+    Verifica que la clasificación, detector, vigilante, base de datos y servidor web (panel)
+    procesen robustamente nombres complejos con emojis, acentos, espacios y numerales (#):
+    - 'JAJAJAJA🎤#humor #viralvideos.mp4'
+    - 'Mujeres_arrojando_naranjas_a_ladrón_20261009110452.mp4'
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp(prefix="test_nombres_esp_")
+        self.descargas = os.path.join(self.tmp_dir, "Descargas")
+        self.destino = os.path.join(self.descargas, "_lucie")
+        self.db_path = os.path.join(self.tmp_dir, "db.sqlite")
+        self.bitacora = os.path.join(self.tmp_dir, "bitacora.jsonl")
+
+        os.makedirs(self.descargas, exist_ok=True)
+        os.makedirs(self.destino, exist_ok=True)
+
+        self.config = ConfiguracionBandeja()
+        self.config.ruta_descargas = self.descargas
+        self.config.ruta_destino_base = self.destino
+        self.config.puerto_servidor = 0
+        self.config.host_servidor = "127.0.0.1"
+
+        self.db = GestorBaseDatosBandeja(self.db_path)
+        self.filtro = FiltroListaBlanca(self.config)
+        self.detector = DetectorDescargasActivas(0.05)
+        self.agrupador = AgrupadorLotes(10)
+        self.movimientos = GestorMovimientosBandeja(self.descargas, self.destino, self.db, self.bitacora)
+        self.miniaturas = GeneradorMiniaturas(self.db, os.path.join(self.tmp_dir, "thumbs"))
+        self.vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+
+        self.token_csrf = "token_csrf_nombres_esp"
+        self.servidor = crear_servidor(
+            self.config, self.db, self.vigilante, self.movimientos, self.miniaturas, token_csrf=self.token_csrf
+        )
+
+        self.hilo = threading.Thread(target=self.servidor.serve_forever, daemon=True)
+        self.hilo.start()
+        time.sleep(0.1)
+
+    def tearDown(self):
+        self.servidor.shutdown()
+        self.servidor.server_close()
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _post(self, path: str, body: dict) -> Tuple[int, dict]:
+        conn = http.client.HTTPConnection("127.0.0.1", self.config.puerto_servidor, timeout=5)
+        headers = {
+            "Host": f"127.0.0.1:{self.config.puerto_servidor}",
+            "Content-Type": "application/json",
+            "X-CSRF-Token": self.token_csrf
+        }
+        conn.request("POST", path, body=json.dumps(body, ensure_ascii=False).encode("utf-8"), headers=headers)
+        res = conn.getresponse()
+        raw = res.read()
+        conn.close()
+        try:
+            parsed = json.loads(raw.decode("utf-8"))
+        except Exception:
+            parsed = {}
+        return res.status, parsed
+
+    def _get(self, path: str) -> Tuple[int, dict, bytes]:
+        conn = http.client.HTTPConnection("127.0.0.1", self.config.puerto_servidor, timeout=5)
+        headers = {"Host": f"127.0.0.1:{self.config.puerto_servidor}"}
+        conn.request("GET", path, headers=headers)
+        res = conn.getresponse()
+        raw = res.read()
+        conn.close()
+        try:
+            parsed = json.loads(raw.decode("utf-8"))
+        except Exception:
+            parsed = {}
+        return res.status, parsed, raw
+
+    def test_clasificacion_nombres_complejos(self):
+        nom_emoji = "JAJAJAJA🎤#humor #viralvideos.mp4"
+        nom_acento = "Mujeres_arrojando_naranjas_a_ladrón_20261009110452.mp4"
+
+        # 1. Ambos son extensiones de media válidas pero sin patrón prefijado: sin_identificar
+        self.assertEqual(self.filtro.clasificar_archivo(nom_emoji), "sin_identificar")
+        self.assertEqual(self.filtro.clasificar_archivo(nom_acento), "sin_identificar")
+
+        # 2. Con prefijo de personaje son candidatos directos
+        self.assertEqual(self.filtro.clasificar_archivo("lucie_" + nom_emoji), "candidato")
+        self.assertEqual(self.filtro.clasificar_archivo("roli_" + nom_acento), "candidato")
+
+        # 3. Extracción de escena sugerida preserva emojis y caracteres acentuados quitando timestamps finales
+        sug_acento = self.filtro.extraer_escena_sugerida(nom_acento)
+        self.assertEqual(sug_acento, "Mujeres_arrojando_naranjas_a_ladrón")
+
+        sug_emoji = self.filtro.extraer_escena_sugerida(nom_emoji)
+        self.assertEqual(sug_emoji, "JAJAJAJA🎤#humor #viralvideos")
+
+        # 4. Validador de escenas acepta caracteres unicode válidos (emojis, acentos, #)
+        valido_acento, motivo_acento = ValidadorEscenas.validar_nombre_escena(sug_acento, self.destino, self.descargas)
+        self.assertTrue(valido_acento, f"Fallo al validar escena con acentos: {motivo_acento}")
+
+        valido_emoji, motivo_emoji = ValidadorEscenas.validar_nombre_escena("JAJAJAJA🎤#humor", self.destino, self.descargas)
+        self.assertTrue(valido_emoji, f"Fallo al validar escena con emojis y #: {motivo_emoji}")
+
+    def test_servidor_flujo_completo_con_emojis_acentos_y_numerales(self):
+        nom_emoji = "JAJAJAJA🎤#humor #viralvideos.mp4"
+        nom_acento = "Mujeres_arrojando_naranjas_a_ladrón_20261009110452.mp4"
+
+        ruta_emoji = os.path.join(self.descargas, nom_emoji)
+        ruta_acento = os.path.join(self.descargas, nom_acento)
+
+        contenido_emoji = b"video_emoji_12345"
+        contenido_acento = b"video_acento_67890"
+
+        with open(ruta_emoji, "wb") as f:
+            f.write(contenido_emoji)
+        with open(ruta_acento, "wb") as f:
+            f.write(contenido_acento)
+
+        # Doble escaneo para cumplir ventana de estabilidad
+        self.vigilante.escanear()
+        time.sleep(0.1)
+        self.vigilante.escanear()
+
+        # 1. GET /api/sin-identificar devuelve ambos archivos con unicode intacto
+        status, data_sin_id, _ = self._get("/api/sin-identificar")
+        self.assertEqual(status, 200)
+        archivos_sin_id = data_sin_id.get("sin_identificar", [])
+        nombres = [a["nombre"] for a in archivos_sin_id]
+        self.assertIn(nom_emoji, nombres)
+        self.assertIn(nom_acento, nombres)
+
+        item_emoji = next(a for a in archivos_sin_id if a["nombre"] == nom_emoji)
+        item_acento = next(a for a in archivos_sin_id if a["nombre"] == nom_acento)
+
+        # 2. GET /api/media con id_media sirve bytes correctos de archivos con emojis y acentos
+        status, _, raw_media = self._get(f"/api/media?id={item_emoji['id_media']}")
+        self.assertEqual(status, 200)
+        self.assertEqual(raw_media, contenido_emoji)
+
+        status, _, raw_media_acento = self._get(f"/api/media?id={item_acento['id_media']}")
+        self.assertEqual(status, 200)
+        self.assertEqual(raw_media_acento, contenido_acento)
+
+        # 3. POST /api/clasificar-sin-identificar clasifica el video con emojis como proyecto
+        status, res_clasif = self._post("/api/clasificar-sin-identificar", {
+            "hash": item_emoji["hash"],
+            "ruta": item_emoji["ruta"],
+            "es_proyecto": True
+        })
+        self.assertEqual(status, 200)
+        self.assertTrue(res_clasif.get("exito"))
+
+        # 4. GET /api/lotes incluye el archivo clasificado
+        status, lotes_data, _ = self._get("/api/lotes")
+        self.assertEqual(status, 200)
+        lotes_str = json.dumps(lotes_data, ensure_ascii=False)
+        self.assertIn(nom_emoji, lotes_str)
+
+        # 5. POST /api/simular-mover simula traslado hacia escena con emojis y numeral
+        escena_destino = "JAJAJAJA🎤#humor"
+        status, sim_data = self._post("/api/simular-mover", {
+            "archivos": [{"ruta": item_emoji["ruta"], "tamanio": item_emoji["tamanio"], "hash": item_emoji["hash"]}],
+            "personaje": "lucie",
+            "escena": escena_destino,
+            "es_existente_descargas": False
+        })
+        self.assertEqual(status, 200)
+        self.assertTrue(sim_data.get("valido"))
+        self.assertIn("html", sim_data)
+        self.assertIn(escena_destino, sim_data["html"])
+
+        # 6. POST /api/mover-lote ejecuta el movimiento físico
+        status, mov_res = self._post("/api/mover-lote", {
+            "simulacion": sim_data,
+            "lote_id": "lote_emoji_test"
+        })
+        self.assertEqual(status, 200)
+        self.assertTrue(mov_res.get("exito"))
+        self.assertFalse(os.path.exists(ruta_emoji))
+
+        # Verificar archivo en destino con ruta unicode
+        ruta_dest = sim_data["movimientos"][0]["destino"]
+        self.assertTrue(os.path.exists(ruta_dest))
+
+        # 7. POST /api/deshacer revierte el archivo a su ubicación original intacta
+        status, desh_res = self._post("/api/deshacer", {
+            "id_operacion": mov_res["id_operacion"]
+        })
+        self.assertEqual(status, 200)
+        self.assertTrue(desh_res.get("exito"))
+        self.assertTrue(os.path.exists(ruta_emoji))
+
+
 if __name__ == "__main__":
     unittest.main()
 
