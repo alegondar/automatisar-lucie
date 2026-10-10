@@ -39,7 +39,7 @@ def _resolver_rutas_reales() -> Set[str]:
     # Descargas / Downloads del HOME real actual o del usuario del sistema
     candidatos_home = []
     env_home = os.environ.get("HOME")
-    if env_home and not env_home.startswith("/tmp"):
+    if env_home and not env_home.startswith("/tmp") and "temp" not in env_home.lower():
         candidatos_home.append(env_home)
 
     try:
@@ -54,11 +54,49 @@ def _resolver_rutas_reales() -> Set[str]:
     if usuario and not usuario.startswith("tmp"):
         candidatos_home.append(f"/home/{usuario}")
 
+    # En Windows: detectar USERPROFILE real y carpeta de Descargas
+    env_userprofile = os.environ.get("USERPROFILE")
+    if env_userprofile and "temp" not in env_userprofile.lower():
+        candidatos_home.append(env_userprofile)
+
+    env_homedrive = os.environ.get("HOMEDRIVE", "")
+    env_homepath = os.environ.get("HOMEPATH", "")
+    if env_homedrive and env_homepath:
+        home_completo = env_homedrive + env_homepath
+        if "temp" not in home_completo.lower():
+            candidatos_home.append(home_completo)
+
+    try:
+        import bandeja.plataforma
+        dl_real_win = bandeja.plataforma.obtener_ruta_descargas_windows()
+        if dl_real_win and "temp" not in dl_real_win.lower():
+            rutas.add(dl_real_win)
+    except Exception:
+        pass
+
     for h in set(candidatos_home):
         if h:
             h_abs = os.path.abspath(h)
             rutas.add(os.path.join(h_abs, "Descargas"))
             rutas.add(os.path.join(h_abs, "Downloads"))
+
+    # En Windows: detectar raíces de unidades removibles o fijas externas
+    if os.name == "nt":
+        try:
+            import bandeja.plataforma
+            system_drive = os.environ.get("SystemDrive", "C:").upper()
+            repo_drive = os.path.splitdrive(os.path.abspath(__file__))[0].upper()
+            for u in bandeja.plataforma.obtener_unidades_windows():
+                letra = str(u.get("letra", "")).upper()
+                raiz = u.get("unidad", "")
+                tipo = u.get("tipo", "")
+                tipo_cod = u.get("tipo_codigo", 0)
+                # Removible (tipo_codigo == 2) o fija externa que no sea la del sistema ni la del repo
+                if tipo == "removible" or tipo_cod == 2 or (tipo == "fija" and f"{letra}:" != system_drive and f"{letra}:" != repo_drive):
+                    if raiz:
+                        rutas.add(raiz)
+        except Exception:
+            pass
 
     normalizadas = set()
     for r in rutas:
@@ -87,8 +125,14 @@ def es_ruta_prohibida(ruta: Any) -> Tuple[bool, str]:
         norm_p = os.path.normcase(abs_p)
 
         for prohibida in _RUTAS_PROHIBIDAS:
-            if norm_p == prohibida or norm_p.startswith(prohibida + os.sep) or norm_p.startswith(prohibida + "/"):
+            if norm_p == prohibida:
                 return True, s
+            if prohibida.endswith(os.sep) or prohibida.endswith("/"):
+                if norm_p.startswith(prohibida):
+                    return True, s
+            else:
+                if norm_p.startswith(prohibida + os.sep) or norm_p.startswith(prohibida + "/"):
+                    return True, s
     except Exception:
         pass
     return False, ""
@@ -151,16 +195,30 @@ def activar_guardia():
     # 1. Resolver rutas prohibidas antes de alterar el HOME
     _RUTAS_PROHIBIDAS = _resolver_rutas_reales()
 
-    # 2. Configurar HOME temporal y variables XDG
+    # 2. Configurar HOME temporal y variables XDG / Windows
     _TMP_HOME_DIR = tempfile.mkdtemp(prefix="lucie_hermetico_home_")
     tmp_descargas = os.path.join(_TMP_HOME_DIR, "Descargas")
     os.makedirs(tmp_descargas, exist_ok=True)
     os.makedirs(os.path.join(tmp_descargas, "_lucie"), exist_ok=True)
 
+    drive, path = os.path.splitdrive(_TMP_HOME_DIR)
+    appdata_dir = os.path.join(_TMP_HOME_DIR, "AppData", "Roaming")
+    localappdata_dir = os.path.join(_TMP_HOME_DIR, "AppData", "Local")
+    temp_dir = os.path.join(_TMP_HOME_DIR, "Temp")
+    os.makedirs(appdata_dir, exist_ok=True)
+    os.makedirs(localappdata_dir, exist_ok=True)
+    os.makedirs(temp_dir, exist_ok=True)
+
     os.environ["HOME"] = _TMP_HOME_DIR
     os.environ["USERPROFILE"] = _TMP_HOME_DIR
-    os.environ["HOMEDRIVE"] = ""
-    os.environ["HOMEPATH"] = _TMP_HOME_DIR
+    os.environ["HOMEDRIVE"] = drive
+    os.environ["HOMEPATH"] = path
+    os.environ["APPDATA"] = appdata_dir
+    os.environ["LOCALAPPDATA"] = localappdata_dir
+    os.environ["TEMP"] = temp_dir
+    os.environ["TMP"] = temp_dir
+    tempfile.tempdir = temp_dir
+
     os.environ["XDG_DATA_HOME"] = os.path.join(_TMP_HOME_DIR, ".local", "share")
     os.environ["XDG_CONFIG_HOME"] = os.path.join(_TMP_HOME_DIR, ".config")
     os.environ["XDG_CACHE_HOME"] = os.path.join(_TMP_HOME_DIR, ".cache")
@@ -187,21 +245,22 @@ def activar_guardia():
                     if r and os.path.isdir(r):
                         candidatos.append(os.path.realpath(r))
                 return list(dict.fromkeys(candidatos))
-            if os.name == "nt":
-                candidatos = []
-                try:
-                    for u_info in bandeja.plataforma.obtener_unidades_windows():
-                        raiz_u = u_info.get("unidad", "")
-                        if raiz_u and os.path.isdir(raiz_u):
-                            candidatos.append(os.path.realpath(raiz_u))
-                except Exception:
-                    pass
-                return list(dict.fromkeys(candidatos))
             return []
 
         bandeja.plataforma.buscar_puntos_montaje_candidatos = _buscar_candidatos_hermetico
         bandeja.pendrive.buscar_puntos_montaje_candidatos = _buscar_candidatos_hermetico
         bandeja.buscar_puntos_montaje_candidatos = _buscar_candidatos_hermetico
+
+        bandeja.plataforma.obtener_ruta_descargas_defecto = lambda: tmp_descargas
+        bandeja.plataforma.obtener_ruta_destino_defecto = lambda: os.path.join(tmp_descargas, "_lucie")
+
+        def _hermetic_descargas_win():
+            up = os.environ.get("USERPROFILE")
+            if up:
+                return os.path.join(up, "Downloads")
+            return tmp_descargas
+
+        bandeja.plataforma.obtener_ruta_descargas_windows = _hermetic_descargas_win
 
         _orig_detectar_particiones = bandeja.plataforma.detectar_particiones_removibles_linux
 

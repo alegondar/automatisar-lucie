@@ -82,9 +82,11 @@ class ConfiguracionBandeja:
         self.ruta_config = ruta_config
         if ruta_config_local is not None:
             self.ruta_config_local = ruta_config_local
-        else:
+        elif os.path.basename(ruta_config) == "config_bandeja.json":
             dir_base = os.path.dirname(os.path.abspath(ruta_config))
             self.ruta_config_local = os.path.join(dir_base, "config_bandeja.local.json")
+        else:
+            self.ruta_config_local = ""
         self.ruta_descargas = obtener_ruta_descargas_defecto()
         self.ruta_destino_base = obtener_ruta_destino_defecto()
         self.puerto_servidor = 8766
@@ -117,7 +119,7 @@ class ConfiguracionBandeja:
 
     def _inicializar_config_local_windows(self):
         """Crea config_bandeja.local.json en Windows en modo 'xb' si no existe."""
-        if os.name == "nt" and not os.path.exists(self.ruta_config_local):
+        if os.name == "nt" and self.ruta_config_local and not os.path.exists(self.ruta_config_local):
             datos_locales = {
                 "ruta_descargas": "auto"
             }
@@ -136,7 +138,7 @@ class ConfiguracionBandeja:
             with open(self.ruta_config, "r", encoding="utf-8", newline="\n") as f:
                 datos = json.load(f)
 
-        if os.path.exists(self.ruta_config_local):
+        if self.ruta_config_local and os.path.exists(self.ruta_config_local):
             try:
                 with open(self.ruta_config_local, "r", encoding="utf-8", newline="\n") as f_local:
                     datos_local = json.load(f_local)

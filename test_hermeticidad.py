@@ -72,12 +72,73 @@ class TestGuardiaHermetica(unittest.TestCase):
     def test_home_y_xdg_apuntan_a_directorio_temporal(self):
         """HOME y XDG deben apuntar a directorios temporales y Descargas por defecto debe ser hermético."""
         home_actual = os.environ.get("HOME", "")
-        self.assertTrue(home_actual.startswith("/tmp"), f"HOME no es temporal: {home_actual}")
+        self.assertTrue(home_actual.startswith("/tmp") or "temp" in home_actual.lower() or "lucie_hermetico" in home_actual.lower(), f"HOME no es temporal: {home_actual}")
         self.assertFalse(home_actual.startswith("/home/"), f"HOME apunta al usuario real: {home_actual}")
+        if os.name == "nt":
+            self.assertFalse(home_actual == "C:\\Users\\alego", f"HOME apunta a C:\\Users\\alego: {home_actual}")
 
         ruta_descargas = obtener_ruta_descargas_defecto()
-        self.assertTrue(ruta_descargas.startswith(home_actual), f"Descargas por defecto fuera de HOME temporal: {ruta_descargas}")
+        self.assertTrue(ruta_descargas.startswith(home_actual) or "temp" in ruta_descargas.lower() or "lucie_hermetico" in ruta_descargas.lower(), f"Descargas por defecto fuera de HOME temporal: {ruta_descargas}")
         self.assertFalse(ruta_descargas.startswith("/home/"), f"Descargas por defecto apunta a Descargas real: {ruta_descargas}")
+        if os.name == "nt":
+            self.assertFalse(ruta_descargas.lower() == "c:\\users\\alego\\downloads", f"Descargas apunta a Descargas real de Windows: {ruta_descargas}")
+
+    def test_variables_entorno_windows_redirigidas_a_temporal(self):
+        """USERPROFILE, HOMEDRIVE, HOMEPATH, APPDATA, LOCALAPPDATA y TEMP deben apuntar a directorio temporal."""
+        if os.name != "nt":
+            return
+
+        userprofile = os.environ.get("USERPROFILE", "")
+        self.assertTrue(userprofile, "USERPROFILE no está configurado")
+        self.assertFalse(userprofile.lower() == "c:\\users\\alego", f"USERPROFILE apunta al usuario real: {userprofile}")
+        self.assertTrue("temp" in userprofile.lower() or "lucie_hermetico" in userprofile.lower(), f"USERPROFILE no es temporal: {userprofile}")
+
+        appdata = os.environ.get("APPDATA", "")
+        self.assertTrue("AppData" in appdata and ("temp" in appdata.lower() or "lucie_hermetico" in appdata.lower()), f"APPDATA no es temporal: {appdata}")
+
+        localappdata = os.environ.get("LOCALAPPDATA", "")
+        self.assertTrue("AppData" in localappdata and ("temp" in localappdata.lower() or "lucie_hermetico" in localappdata.lower()), f"LOCALAPPDATA no es temporal: {localappdata}")
+
+        temp_env = os.environ.get("TEMP", "")
+        self.assertTrue("Temp" in temp_env and ("temp" in temp_env.lower() or "lucie_hermetico" in temp_env.lower()), f"TEMP no es temporal: {temp_env}")
+
+    def test_acceso_bloqueado_a_descargas_real_y_unidades_externas_windows(self):
+        """Verifica que abrir, listar o recorrer Downloads real o unidades externas lance AssertionError en Windows."""
+        if os.name != "nt":
+            return
+
+        dl_real = "C:\\Users\\alego\\Downloads"
+        if guardia_hermetica.es_ruta_prohibida(dl_real)[0]:
+            with self.assertRaises(AssertionError) as cm:
+                open(os.path.join(dl_real, "archivo_prohibido.txt"), "r")
+            self.assertIn("Violación de hermeticidad", str(cm.exception))
+
+            with self.assertRaises(AssertionError) as cm:
+                os.listdir(dl_real)
+            self.assertIn("os.listdir() sobre ruta prohibida", str(cm.exception))
+
+            with self.assertRaises(AssertionError) as cm:
+                next(os.walk(dl_real))
+            self.assertIn("os.walk() sobre ruta prohibida", str(cm.exception))
+
+        # Verificar unidades removibles o externas registradas en la guardia
+        unidades_externas = [
+            r for r in guardia_hermetica._RUTAS_PROHIBIDAS
+            if len(r) <= 3 and ":" in r
+        ]
+        for u in unidades_externas:
+            with self.subTest(unidad=u):
+                with self.assertRaises(AssertionError) as cm:
+                    open(os.path.join(u, "test.txt"), "r")
+                self.assertIn("Violación de hermeticidad", str(cm.exception))
+
+                with self.assertRaises(AssertionError) as cm:
+                    os.listdir(u)
+                self.assertIn("os.listdir() sobre ruta prohibida", str(cm.exception))
+
+                with self.assertRaises(AssertionError) as cm:
+                    next(os.walk(u))
+                self.assertIn("os.walk() sobre ruta prohibida", str(cm.exception))
 
 
 class TestAislamientoPendriveFalso(unittest.TestCase):
@@ -171,12 +232,12 @@ class TestAislamientoArchivosProyecto(unittest.TestCase):
             os.makedirs(dest, exist_ok=True)
 
             db = GestorBaseDatosBandeja()
-            # La ruta de db debe estar en /tmp
-            self.assertTrue(db.ruta_db.startswith("/tmp"), f"DB por defecto no es temporal: {db.ruta_db}")
+            # La ruta de db debe estar en un directorio temporal
+            self.assertTrue(db.ruta_db.startswith("/tmp") or "temp" in db.ruta_db.lower() or "lucie_hermetico" in db.ruta_db.lower(), f"DB por defecto no es temporal: {db.ruta_db}")
 
             mov = GestorMovimientosBandeja(desc, dest, db)
-            # La ruta de bitácora debe estar en /tmp
-            self.assertTrue(mov.ruta_bitacora.startswith("/tmp"), f"Bitácora por defecto no es temporal: {mov.ruta_bitacora}")
+            # La ruta de bitácora debe estar en un directorio temporal
+            self.assertTrue(mov.ruta_bitacora.startswith("/tmp") or "temp" in mov.ruta_bitacora.lower() or "lucie_hermetico" in mov.ruta_bitacora.lower(), f"Bitácora por defecto no es temporal: {mov.ruta_bitacora}")
 
         if mtime_bitacora_antes is not None and os.path.exists(bitacora_repo):
             self.assertEqual(os.path.getmtime(bitacora_repo), mtime_bitacora_antes, "bitacora_bandeja.jsonl fue modificada")
