@@ -462,11 +462,11 @@ class TestSimulacionEnvio(unittest.TestCase):
         # Verificar destino relativo
         self.assertEqual(
             nombres_a_copiar["foto1.jpg"]["ruta_relativa_pendrive"],
-            os.path.join("imagenes", "lucie", "capitulo_01", "foto1.jpg")
+            "imagenes/lucie/capitulo_01/foto1.jpg"
         )
         self.assertEqual(
             nombres_a_copiar["lucievideo1.mp4"]["ruta_relativa_pendrive"],
-            os.path.join("videos sin editar", "lucie", "capitulo_01", "lucievideo1.mp4")
+            "videos sin editar/lucie/capitulo_01/lucievideo1.mp4"
         )
 
         # Verificar que el archivo no multimedia suelto se omitió con advertencia
