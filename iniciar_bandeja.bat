@@ -3,6 +3,7 @@ rem ============================================================================
 rem iniciar_bandeja.bat - Lanzador de Bandeja de Descargas (Lucie) para Windows
 rem ============================================================================
 chcp 65001 >nul
+set PYTHONUTF8=1
 title Bandeja de Descargas - Lucie
 
 cd /d "%~dp0"
