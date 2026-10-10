@@ -126,9 +126,10 @@ class TestConfiguracionLocalWindows(unittest.TestCase):
 
     def test_obtener_ruta_descargas_windows_fallback(self):
         with mock.patch.dict(os.environ, {"USERPROFILE": self.temp_dir.name}):
-            res = obtener_ruta_descargas_windows()
-            esperada = os.path.join(self.temp_dir.name, "Downloads")
-            self.assertEqual(res, esperada)
+            with mock.patch("ctypes.windll", create=True, new=None):
+                res = obtener_ruta_descargas_windows()
+                esperada = os.path.join(self.temp_dir.name, "Downloads")
+                self.assertEqual(res, esperada)
 
 
 class TestConfinamientoYValidacionRutas(unittest.TestCase):
@@ -338,19 +339,20 @@ class TestPlataformaYDeteccionPendriveWindows(unittest.TestCase):
             self.assertTrue(res["no_soportado"])
 
     def test_desmontar_unidad_sin_os_sync_no_lanza_attribute_error(self):
-        with patch("bandeja.pendrive.detectar_particiones_removibles_linux", return_value=[{"dispositivo": "/dev/sdb1", "nodo": "sdb1", "punto_montaje": "/media/usb"}]):
-            with patch("subprocess.run") as mock_subp:
-                mock_subp.return_value = MagicMock(returncode=0, stdout="Unmounted")
-                # Simular entorno sin os.sync
-                with patch.object(os, "sync", create=False) if hasattr(os, "sync") else mock.MagicMock():
-                    if hasattr(os, "sync"):
-                        delattr(os, "sync")
-                    try:
-                        res = desmontar_unidad_pendrive("/dev/sdb1")
-                        self.assertTrue(res["exito"])
-                    finally:
-                        # Restaurar si existía
-                        pass
+        with patch("os.name", "posix"):
+            with patch("bandeja.pendrive.detectar_particiones_removibles_linux", return_value=[{"dispositivo": "/dev/sdb1", "nodo": "sdb1", "punto_montaje": "/media/usb"}]):
+                with patch("subprocess.run") as mock_subp:
+                    mock_subp.return_value = MagicMock(returncode=0, stdout="Unmounted")
+                    # Simular entorno sin os.sync
+                    with patch.object(os, "sync", create=False) if hasattr(os, "sync") else mock.MagicMock():
+                        if hasattr(os, "sync"):
+                            delattr(os, "sync")
+                        try:
+                            res = desmontar_unidad_pendrive("/dev/sdb1")
+                            self.assertTrue(res["exito"])
+                        finally:
+                            # Restaurar si existía
+                            pass
 
     def test_detectar_pendrive_en_windows_con_unidades_mock(self):
         with tempfile.TemporaryDirectory() as tmp:
