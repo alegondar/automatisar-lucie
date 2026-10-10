@@ -1439,6 +1439,7 @@ class TestControlMontajePendrive(unittest.TestCase):
         self.assertEqual(len(estado["diagnostico_particiones"]), 2)
         self.assertEqual(estado["diagnostico_particiones"][1]["motivo"], "Removible sin montar")
 
+    @unittest.skipUnless(os.name == "posix", "Montaje por udisksctl y particiones /dev exclusivos de Linux")
     @patch("bandeja.pendrive.detectar_particiones_removibles_linux")
     def test_montar_unidad_whitelist_rechazo(self, mock_rem):
         """montar_unidad_pendrive rechaza dispositivos no autorizados por la whitelist."""
