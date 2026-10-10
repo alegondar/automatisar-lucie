@@ -245,7 +245,7 @@ class TestAuditoriaCompleta(unittest.TestCase):
 
         # 5. Verificar detección de carpetas vacías
         self.assertIn("carpeta_vacia", datos['carpetas_vacias'])
-        self.assertIn(os.path.join("carpeta_subvacia", "vacia_nivel2"), datos['carpetas_vacias'])
+        self.assertIn("carpeta_subvacia/vacia_nivel2", datos['carpetas_vacias'])
 
         # 6. Renderizado de Markdown sin errores
         md = generador.renderizar_markdown(datos)

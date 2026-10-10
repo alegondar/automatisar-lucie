@@ -468,7 +468,7 @@ class AuditorPendrive:
                 dirnames.clear()
                 continue
 
-            rel_dir = os.path.relpath(dirpath, self.raiz_real)
+            rel_dir = os.path.relpath(dirpath, self.raiz_real).replace("\\", "/")
             if rel_dir == '.':
                 rel_dir = ""
 
@@ -484,7 +484,7 @@ class AuditorPendrive:
 
                 # Carpetas de sistema
                 if es_carpeta_sistema(d):
-                    self.carpetas_sistema_ignoradas.append(os.path.join(rel_dir, d))
+                    self.carpetas_sistema_ignoradas.append(f"{rel_dir}/{d}" if rel_dir else d)
                     continue
 
                 # Carpetas ocultas
@@ -492,7 +492,7 @@ class AuditorPendrive:
                     continue
 
                 directorios_filtrados.append(d)
-                sub_rel = os.path.join(rel_dir, d) if rel_dir else d
+                sub_rel = f"{rel_dir}/{d}" if rel_dir else d
                 todas_carpetas_rel.add(sub_rel)
 
             dirnames[:] = directorios_filtrados
@@ -517,7 +517,7 @@ class AuditorPendrive:
                     continue
 
                 # Identificar carpeta de primer nivel y sueltos
-                partes = Path(rel_dir).parts if rel_dir else ()
+                partes = tuple(p for p in rel_dir.split("/") if p) if rel_dir else ()
                 if len(partes) == 0:
                     carpeta_p1 = ""
                     es_suelto_raiz = True
@@ -527,7 +527,7 @@ class AuditorPendrive:
                     es_suelto_raiz = False
                     es_suelto_p1 = (len(partes) == 1)
 
-                rel_file = os.path.join(rel_dir, f) if rel_dir else f
+                rel_file = f"{rel_dir}/{f}" if rel_dir else f
                 cat = clasificar_archivo(f)
                 _, ext = os.path.splitext(f)
 
@@ -549,7 +549,7 @@ class AuditorPendrive:
                 curr = rel_dir
                 while curr:
                     carpetas_con_archivos.add(curr)
-                    padre = os.path.dirname(curr)
+                    padre = "/".join(curr.split("/")[:-1]) if "/" in curr else ""
                     if padre == curr:
                         break
                     curr = padre

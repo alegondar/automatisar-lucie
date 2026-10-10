@@ -377,7 +377,7 @@ class GeneradorPlanLimpieza:
             carpetas_map[c] = {'archivos': [], 'hashes': set()}
 
         for a in archivos_filtrados:
-            dir_padre = os.path.dirname(a.ruta_relativa)
+            dir_padre = "/".join(a.ruta_relativa.split("/")[:-1]) if "/" in a.ruta_relativa else ""
             if dir_padre in carpetas_map:
                 carpetas_map[dir_padre]['archivos'].append(a)
                 if a.sha256:
