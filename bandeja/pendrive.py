@@ -1007,23 +1007,20 @@ def desmontar_unidad_pendrive(dispositivo: str,
         raise ValueError("El nodo de dispositivo no puede estar vacío.")
 
     disp_limpio = dispositivo.strip()
-    if os.name == "nt":
-        return {
-            "exito": False,
-            "error": "El desmontaje de unidades con udisksctl no está disponible en Windows.",
-            "no_soportado": True,
-            "dispositivo": disp_limpio
-        }
-
-    if not re.match(r"^/dev/[a-zA-Z0-9_\-]+$", disp_limpio):
-        raise ValueError(f"Formato de dispositivo inválido o inseguro: '{disp_limpio}'")
-
     if _operacion_pendrive_activa:
         return {
             "exito": False,
             "error": "No se puede desmontar: hay un envío o reversión de transferencia en curso en este momento.",
             "dispositivo": disp_limpio,
             "bloqueado": True
+        }
+
+    if os.name == "nt":
+        return {
+            "exito": False,
+            "error": "El desmontaje de unidades con udisksctl no está disponible en Windows.",
+            "no_soportado": True,
+            "dispositivo": disp_limpio
         }
 
     removibles = detectar_particiones_removibles_linux()
