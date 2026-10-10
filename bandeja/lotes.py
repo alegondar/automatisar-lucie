@@ -82,7 +82,7 @@ class DetectorDescargasActivas:
 
         if ruta_completa not in self._historial_tamanio:
             self._historial_tamanio[ruta_completa] = (tamanio_actual, ahora)
-            ts_creacion = getattr(st, "st_birthtime", getattr(st, "st_ctime", 0.0))
+            ts_creacion = getattr(st, "st_birthtime", None) or getattr(st, "st_ctime", None) or 0.0
             logger.info(
                 f"[BANDEJA][DETECTADO] Archivo: '{os.path.basename(ruta_completa)}' | "
                 f"Tamaño: {tamanio_actual} B | mtime: {st.st_mtime:.2f} | ctime: {ts_creacion:.2f} | "

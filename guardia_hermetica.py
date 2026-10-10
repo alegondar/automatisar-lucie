@@ -245,6 +245,18 @@ def activar_guardia():
                     if r and os.path.isdir(r):
                         candidatos.append(os.path.realpath(r))
                 return list(dict.fromkeys(candidatos))
+            if os.name == "nt":
+                candidatos = []
+                try:
+                    for u_info in bandeja.plataforma.obtener_unidades_windows():
+                        raiz_u = u_info.get("unidad", "")
+                        if raiz_u and os.path.isdir(raiz_u):
+                            prohibida, _ = es_ruta_prohibida(raiz_u)
+                            if not prohibida and not (len(raiz_u) <= 3 and ":" in raiz_u):
+                                candidatos.append(os.path.realpath(raiz_u))
+                except Exception:
+                    pass
+                return list(dict.fromkeys(candidatos))
             return []
 
         bandeja.plataforma.buscar_puntos_montaje_candidatos = _buscar_candidatos_hermetico
