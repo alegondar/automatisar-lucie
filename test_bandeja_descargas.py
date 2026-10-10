@@ -27,6 +27,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.parse
 from typing import Dict, List, Optional, Set, Tuple, Any
 from unittest.mock import patch
 
@@ -6026,6 +6027,167 @@ class TestNombresEspecialesServidorYClasificacion(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(desh_res.get("exito"))
         self.assertTrue(os.path.exists(ruta_emoji))
+
+
+class TestModoEdicionCapCutServidor(unittest.TestCase):
+    """Pruebas de integración para endpoints de edición, streaming de pendrive y CapCut."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp(prefix="test_edicion_srv_")
+        self.descargas = os.path.join(self.tmp_dir, "Descargas")
+        self.destino = os.path.join(self.descargas, "_lucie")
+        self.db_path = os.path.join(self.tmp_dir, "db.sqlite")
+        self.bitacora = os.path.join(self.tmp_dir, "bitacora.jsonl")
+
+        os.makedirs(self.descargas, exist_ok=True)
+        os.makedirs(self.destino, exist_ok=True)
+
+        # Pendrive simulado
+        self.pendrive_dir = os.path.join(self.tmp_dir, "pendrive")
+        self.raiz_pen = os.path.join(self.pendrive_dir, "LucieSinReglas")
+        os.makedirs(self.raiz_pen, exist_ok=True)
+
+        # Marcador del pendrive
+        marcador = {"id": "12345678-1234-4234-8234-123456789abc", "creado": "2026-10-10T10:00:00", "version": 1}
+        with open(os.path.join(self.pendrive_dir, ".lucie_pendrive.json"), "w", encoding="utf-8") as f:
+            json.dump(marcador, f)
+
+        # Crear clips en videos sin editar
+        self.dir_sin_editar = os.path.join(self.raiz_pen, "videos sin editar", "lucie", "capitulo_01")
+        os.makedirs(self.dir_sin_editar, exist_ok=True)
+        self.clip_path = os.path.join(self.dir_sin_editar, "toma_01.mp4")
+        self.clip_contenido = b"video_crudo_de_lucie_0123456789"
+        with open(self.clip_path, "wb") as f:
+            f.write(self.clip_contenido)
+
+        self.config = ConfiguracionBandeja()
+        self.config.ruta_descargas = self.descargas
+        self.config.ruta_destino_base = self.destino
+        self.config.puerto_servidor = 0
+        self.config.host_servidor = "127.0.0.1"
+
+        self.db = GestorBaseDatosBandeja(self.db_path)
+        self.filtro = FiltroListaBlanca(self.config)
+        self.detector = DetectorDescargasActivas(0.05)
+        self.agrupador = AgrupadorLotes(10)
+        self.movimientos = GestorMovimientosBandeja(self.descargas, self.destino, self.db, self.bitacora)
+        self.miniaturas = GeneradorMiniaturas(self.db, os.path.join(self.tmp_dir, "thumbs"))
+        self.vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+
+        self.token_csrf = "token_csrf_edicion"
+        self.servidor = crear_servidor(
+            self.config, self.db, self.vigilante, self.movimientos, self.miniaturas, token_csrf=self.token_csrf
+        )
+
+        self.hilo = threading.Thread(target=self.servidor.serve_forever, daemon=True)
+        self.hilo.start()
+        time.sleep(0.1)
+
+    def tearDown(self):
+        self.servidor.shutdown()
+        self.servidor.server_close()
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _post(self, path: str, body: dict, csrf: Optional[str] = None) -> Tuple[int, dict]:
+        conn = http.client.HTTPConnection("127.0.0.1", self.config.puerto_servidor, timeout=5)
+        headers = {
+            "Host": f"127.0.0.1:{self.config.puerto_servidor}",
+            "Content-Type": "application/json",
+            "X-CSRF-Token": self.token_csrf if csrf is None else csrf
+        }
+        conn.request("POST", path, body=json.dumps(body, ensure_ascii=False).encode("utf-8"), headers=headers)
+        res = conn.getresponse()
+        raw = res.read()
+        conn.close()
+        try:
+            parsed = json.loads(raw.decode("utf-8"))
+        except Exception:
+            parsed = {}
+        return res.status, parsed
+
+    def _get(self, path: str, headers_extra: Optional[dict] = None) -> Tuple[int, dict, bytes]:
+        conn = http.client.HTTPConnection("127.0.0.1", self.config.puerto_servidor, timeout=5)
+        headers = {"Host": f"127.0.0.1:{self.config.puerto_servidor}"}
+        if headers_extra:
+            headers.update(headers_extra)
+        conn.request("GET", path, headers=headers)
+        res = conn.getresponse()
+        raw = res.read()
+        conn.close()
+        try:
+            parsed = json.loads(raw.decode("utf-8"))
+        except Exception:
+            parsed = {}
+        return res.status, parsed, raw
+
+    def test_seguridad_post_requiere_csrf_en_edicion(self):
+        """Verifica que los endpoints /api/edicion/* rechacen peticiones sin token CSRF válido (403 Forbidden)."""
+        status, _ = self._post("/api/edicion/crear-sesion", {"clips": ["c1.mp4"], "personaje": "lucie", "capitulo": "c1"}, csrf="invalido")
+        self.assertEqual(status, 403)
+
+    def test_secciones_y_ciclo_de_vida_sesion(self):
+        """Verifica flujo completo: consulta de secciones, creación de sesión, terminación y deshacer."""
+        mock_pen = {
+            "conectado": True,
+            "punto_montaje": self.pendrive_dir,
+            "id": "12345678-1234-4234-8234-123456789abc"
+        }
+        with patch("bandeja.servidor.detectar_pendrive", return_value=mock_pen):
+            # 1. GET /api/edicion/secciones
+            status, data, _ = self._get("/api/edicion/secciones")
+            self.assertEqual(status, 200)
+            self.assertTrue(data.get("conectado"))
+            clips_para_editar = data.get("para_editar", [])
+            self.assertEqual(len(clips_para_editar), 1)
+            self.assertEqual(clips_para_editar[0]["nombre"], "toma_01.mp4")
+
+            # 2. POST /api/edicion/crear-sesion
+            status_post, res_sesion = self._post("/api/edicion/crear-sesion", {
+                "clips": ["lucie/capitulo_01/toma_01.mp4"],
+                "personaje": "lucie",
+                "capitulo": "capitulo_01",
+                "nombre_sesion": "capitulo_01videocompleto"
+            })
+            self.assertEqual(status_post, 200)
+            self.assertTrue(res_sesion.get("exito"))
+            sesion_id = res_sesion["sesion"]["id"]
+
+            # 3. GET /api/edicion/secciones muestra la sesión en edición y el clip ya no en para_editar
+            status, data2, _ = self._get("/api/edicion/secciones")
+            self.assertEqual(len(data2.get("para_editar", [])), 0)
+            self.assertEqual(len(data2.get("en_edicion", [])), 1)
+
+            # 4. POST /api/edicion/terminar
+            status_term, res_term = self._post("/api/edicion/terminar", {"sesion_id": sesion_id})
+            self.assertEqual(status_term, 200)
+            self.assertTrue(res_term.get("exito"))
+            dest_esperado = os.path.join(self.raiz_pen, "videos ya editados", "lucie", "capitulo_01", "toma_01.mp4")
+            self.assertTrue(os.path.isfile(dest_esperado))
+            self.assertFalse(os.path.isfile(self.clip_path))
+
+            # 5. POST /api/edicion/deshacer-terminar
+            status_desh, res_desh = self._post("/api/edicion/deshacer-terminar", {"sesion_id": sesion_id})
+            self.assertEqual(status_desh, 200)
+            self.assertTrue(res_desh.get("exito"))
+            self.assertTrue(os.path.isfile(self.clip_path))
+            self.assertFalse(os.path.isfile(dest_esperado))
+
+    def test_streaming_media_pendrive_con_range(self):
+        """Verifica que /api/media permita streaming seguro con HTTP Range desde el pendrive vinculado."""
+        mock_pen = {
+            "conectado": True,
+            "punto_montaje": self.pendrive_dir,
+            "id": "12345678-1234-4234-8234-123456789abc"
+        }
+        with patch("bandeja.servidor.detectar_pendrive", return_value=mock_pen):
+            rel_clip = "videos sin editar/lucie/capitulo_01/toma_01.mp4"
+            id_quoted = urllib.parse.quote(rel_clip)
+            status, _, raw = self._get(f"/api/media?id={id_quoted}", headers_extra={"Range": "bytes=0-9"})
+            self.assertEqual(status, 206)
+            self.assertEqual(raw, self.clip_contenido[:10])
+
+            status_fuera, _, _ = self._get("/api/media?id=../../../../etc/passwd")
+            self.assertIn(status_fuera, (403, 404))
 
 
 if __name__ == "__main__":

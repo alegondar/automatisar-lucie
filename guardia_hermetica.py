@@ -71,14 +71,23 @@ def _resolver_rutas_reales() -> Set[str]:
         dl_real_win = bandeja.plataforma.obtener_ruta_descargas_windows()
         if dl_real_win and "temp" not in dl_real_win.lower():
             rutas.add(dl_real_win)
+        capcut_real = bandeja.plataforma.obtener_ruta_exportacion_capcut()
+        if capcut_real and "temp" not in capcut_real.lower():
+            rutas.add(capcut_real)
     except Exception:
         pass
+
+    env_localapp = os.environ.get("LOCALAPPDATA")
+    if env_localapp and "temp" not in env_localapp.lower():
+        rutas.add(os.path.join(env_localapp, "CapCut", "Videos"))
 
     for h in set(candidatos_home):
         if h:
             h_abs = os.path.abspath(h)
             rutas.add(os.path.join(h_abs, "Descargas"))
             rutas.add(os.path.join(h_abs, "Downloads"))
+            rutas.add(os.path.join(h_abs, "AppData", "Local", "CapCut", "Videos"))
+            rutas.add(os.path.join(h_abs, ".local", "share", "CapCut", "Videos"))
 
     # En Windows: detectar raíces de unidades removibles o fijas externas
     if os.name == "nt":

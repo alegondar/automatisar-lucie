@@ -94,6 +94,54 @@ def obtener_ruta_descargas_defecto() -> str:
     return ruta_usuario
 
 
+def obtener_ruta_exportacion_capcut() -> str:
+    """
+    Retorna la ruta por defecto a la carpeta de exportaciones de CapCut según plataforma.
+    En Windows: %LOCALAPPDATA%\\CapCut\\Videos (o %USERPROFILE%\\AppData\\Local\\CapCut\\Videos).
+    En otros entornos: ruta bajo XDG_DATA_HOME o ~/.local/share/CapCut/Videos.
+    """
+    if os.name == "nt":
+        local_app = os.environ.get("LOCALAPPDATA")
+        if not local_app:
+            user_prof = os.environ.get("USERPROFILE", os.path.expanduser("~"))
+            local_app = os.path.join(user_prof, "AppData", "Local")
+        return os.path.join(local_app, "CapCut", "Videos")
+
+    base = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+    return os.path.join(base, "CapCut", "Videos")
+
+
+def verificar_archivo_exclusivo(ruta: str) -> bool:
+    """
+    Verifica si un archivo se puede abrir de forma exclusiva o sin bloqueos de escritura activos.
+    Retorna True si el archivo está libre y completo, False si está en uso, bloqueado o inaccesible.
+    """
+    if not ruta or not os.path.isfile(ruta):
+        return False
+    try:
+        modo = "r+b" if os.access(ruta, os.W_OK) else "rb"
+        if os.name == "nt":
+            import msvcrt
+            with open(ruta, modo) as f:
+                try:
+                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                    return True
+                except (OSError, IOError, PermissionError):
+                    return False
+        else:
+            import fcntl
+            with open(ruta, modo) as f:
+                try:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    return True
+                except (OSError, IOError, PermissionError):
+                    return False
+    except (PermissionError, OSError, IOError):
+        return False
+
+
 
 def obtener_ruta_destino_defecto() -> str:
     """Retorna la ruta de destino base por defecto (~/Descargas/_lucie)."""

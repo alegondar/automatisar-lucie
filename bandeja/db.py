@@ -11,6 +11,7 @@ Gestor de base de datos SQLite para la bandeja de descargas:
 
 import contextlib
 import datetime
+import json
 import logging
 import os
 import re
@@ -126,6 +127,41 @@ class GestorBaseDatosBandeja:
                 row_act = cur.fetchone()
                 if row_act:
                     cur.execute("UPDATE bandeja_capitulos SET en_foco = 1 WHERE id = ?", (row_act["id"],))
+
+            # Tablas para Modo Edición con CapCut (Tramo 3)
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS sesiones_edicion (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                identificador TEXT UNIQUE NOT NULL,
+                nombre TEXT NOT NULL,
+                nombre_final_defecto TEXT NOT NULL,
+                personaje TEXT NOT NULL,
+                capitulo TEXT NOT NULL,
+                estado TEXT NOT NULL CHECK(estado IN ('en_edicion', 'editado', 'cancelado', 'completado')),
+                clips_json TEXT NOT NULL,
+                export_asociado TEXT,
+                video_completo_ruta TEXT,
+                fecha_creacion TEXT NOT NULL,
+                fecha_cierre TEXT
+            );
+            """)
+
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS exports_pendientes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ruta_origen TEXT UNIQUE NOT NULL,
+                nombre TEXT NOT NULL,
+                tamano INTEGER NOT NULL,
+                mtime REAL NOT NULL,
+                sha256 TEXT,
+                sesion_id INTEGER,
+                estado TEXT NOT NULL CHECK(estado IN ('sin_asignar', 'pendiente_copia', 'copiado', 'descartado')),
+                fecha_deteccion TEXT NOT NULL,
+                fecha_copia TEXT,
+                error TEXT,
+                FOREIGN KEY(sesion_id) REFERENCES sesiones_edicion(id)
+            );
+            """)
 
             con.commit()
 
@@ -654,4 +690,149 @@ class GestorBaseDatosBandeja:
                 "max_arch_id": max_arch_id,
                 "tot_arch": tot_arch
             }
+
+    # =========================================================================
+    # Métodos para Modo Edición con CapCut (Tramo 3)
+    # =========================================================================
+
+    def crear_sesion_edicion(
+        self,
+        identificador: str,
+        nombre: str,
+        nombre_final_defecto: str,
+        personaje: str,
+        capitulo: str,
+        clips: List[str],
+    ) -> int:
+        """Crea una nueva sesión de edición en estado 'en_edicion'."""
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            fecha_ahora = datetime.datetime.now().isoformat()
+            clips_str = json.dumps(clips, ensure_ascii=False)
+            cur.execute("""
+            INSERT INTO sesiones_edicion (
+                identificador, nombre, nombre_final_defecto, personaje, capitulo,
+                estado, clips_json, fecha_creacion
+            ) VALUES (?, ?, ?, ?, ?, 'en_edicion', ?, ?)
+            """, (identificador, nombre, nombre_final_defecto, personaje, capitulo, clips_str, fecha_ahora))
+            con.commit()
+            return cur.lastrowid
+
+    def obtener_sesiones_edicion(self, estado: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Obtiene las sesiones de edición ordenadas por fecha de creación desc."""
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            if estado:
+                cur.execute("""
+                SELECT * FROM sesiones_edicion WHERE estado = ? ORDER BY id DESC
+                """, (estado,))
+            else:
+                cur.execute("SELECT * FROM sesiones_edicion ORDER BY id DESC")
+            filas = [dict(r) for r in cur.fetchall()]
+            for f in filas:
+                try:
+                    f["clips"] = json.loads(f["clips_json"])
+                except Exception:
+                    f["clips"] = []
+            return filas
+
+    def obtener_sesion_por_id(self, sesion_id: int) -> Optional[Dict[str, Any]]:
+        """Obtiene una sesión de edición por su ID primario."""
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            cur.execute("SELECT * FROM sesiones_edicion WHERE id = ?", (sesion_id,))
+            fila = cur.fetchone()
+            if not fila:
+                return None
+            res = dict(fila)
+            try:
+                res["clips"] = json.loads(res["clips_json"])
+            except Exception:
+                res["clips"] = []
+            return res
+
+    def obtener_sesion_por_identificador(self, identificador: str) -> Optional[Dict[str, Any]]:
+        """Obtiene una sesión de edición por su identificador único."""
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            cur.execute("SELECT * FROM sesiones_edicion WHERE identificador = ?", (identificador,))
+            fila = cur.fetchone()
+            if not fila:
+                return None
+            res = dict(fila)
+            try:
+                res["clips"] = json.loads(res["clips_json"])
+            except Exception:
+                res["clips"] = []
+            return res
+
+    def actualizar_sesion_edicion(self, sesion_id: int, **campos) -> bool:
+        """Actualiza campos dinámicos de una sesión de edición."""
+        if not campos:
+            return False
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            set_clauses = []
+            valores = []
+            for k, v in campos.items():
+                if k == "clips":
+                    set_clauses.append("clips_json = ?")
+                    valores.append(json.dumps(v, ensure_ascii=False))
+                else:
+                    set_clauses.append(f"{k} = ?")
+                    valores.append(v)
+            valores.append(sesion_id)
+            sql = f"UPDATE sesiones_edicion SET {', '.join(set_clauses)} WHERE id = ?"
+            cur.execute(sql, tuple(valores))
+            con.commit()
+            return cur.rowcount > 0
+
+    def registrar_export_pendiente(
+        self,
+        ruta_origen: str,
+        nombre: str,
+        tamano: int,
+        mtime: float,
+        sesion_id: Optional[int] = None,
+        estado: str = "sin_asignar",
+        sha256: Optional[str] = None,
+    ) -> int:
+        """Registra un nuevo archivo exportado de CapCut."""
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            fecha_ahora = datetime.datetime.now().isoformat()
+            cur.execute("""
+            INSERT OR REPLACE INTO exports_pendientes (
+                ruta_origen, nombre, tamano, mtime, sha256, sesion_id, estado, fecha_deteccion
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (ruta_origen, nombre, tamano, mtime, sha256, sesion_id, estado, fecha_ahora))
+            con.commit()
+            return cur.lastrowid
+
+    def obtener_exports_pendientes(self, estado: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Obtiene la lista de exports pendientes o sin asignar."""
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            if estado:
+                cur.execute("""
+                SELECT * FROM exports_pendientes WHERE estado = ? ORDER BY id DESC
+                """, (estado,))
+            else:
+                cur.execute("SELECT * FROM exports_pendientes ORDER BY id DESC")
+            return [dict(r) for r in cur.fetchall()]
+
+    def actualizar_export_pendiente(self, export_id: int, **campos) -> bool:
+        """Actualiza campos de un export pendiente."""
+        if not campos:
+            return False
+        with self._lock, self._conectar() as con:
+            cur = con.cursor()
+            set_clauses = [f"{k} = ?" for k in campos.keys()]
+            valores = list(campos.values())
+            valores.append(export_id)
+            sql = f"UPDATE exports_pendientes SET {', '.join(set_clauses)} WHERE id = ?"
+            cur.execute(sql, tuple(valores))
+            con.commit()
+            return cur.rowcount > 0
+
 

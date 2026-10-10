@@ -39,6 +39,14 @@
   ],
   "carpeta_raiz_pendrive": "LucieSinReglas",
   "rutas_candidatas_pendrive": [],
-  "etiqueta_pendrive_pista": "MIUNIDAD"
+  "etiqueta_pendrive_pista": "MIUNIDAD",
+  "carpeta_exportacion_capcut": "auto",
+  "al_exportar": "preguntar",
+  "extensiones_temporales_capcut": [
+    ".tmp",
+    ".part",
+    ".crdownload",
+    ".tmp.mp4"
+  ]
 }
 

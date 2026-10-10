@@ -114,6 +114,9 @@ class ConfiguracionBandeja:
         self.rutas_candidatas_pendrive: List[str] = []
         self.etiqueta_pendrive_pista: Optional[str] = "MIUNIDAD"
         self.margen_libre_bytes = 1024 * 1024 * 1024  # 1 GiB por defecto
+        self.carpeta_exportacion_capcut: str = "auto"
+        self.al_exportar: str = "preguntar"  # "preguntar" | "automatico" | "manual"
+        self.extensiones_temporales_capcut: List[str] = [".tmp", ".part", ".crdownload", ".tmp.mp4"]
         self._inicializar_config_local_windows()
         self.cargar()
 
@@ -121,7 +124,8 @@ class ConfiguracionBandeja:
         """Crea config_bandeja.local.json en Windows en modo 'xb' si no existe."""
         if os.name == "nt" and self.ruta_config_local and not os.path.exists(self.ruta_config_local):
             datos_locales = {
-                "ruta_descargas": "auto"
+                "ruta_descargas": "auto",
+                "carpeta_exportacion_capcut": "auto"
             }
             try:
                 with open(self.ruta_config_local, "xb") as f:
@@ -218,3 +222,22 @@ class ConfiguracionBandeja:
                     self.patrones_candidatos[f"patron_{idx}"] = pat
         if "patrones_ignorar" in datos:
             self.patrones_ignorar = [str(p) for p in datos["patrones_ignorar"]]
+        if "carpeta_exportacion_capcut" in datos:
+            val_cap = str(datos["carpeta_exportacion_capcut"]).strip()
+            if val_cap.lower() == "auto":
+                self.carpeta_exportacion_capcut = "auto"
+            else:
+                self.carpeta_exportacion_capcut = os.path.abspath(os.path.expanduser(val_cap))
+        if "al_exportar" in datos:
+            val_al = str(datos["al_exportar"]).strip().lower()
+            if val_al in ("preguntar", "automatico", "manual"):
+                self.al_exportar = val_al
+        if "extensiones_temporales_capcut" in datos and isinstance(datos["extensiones_temporales_capcut"], list):
+            self.extensiones_temporales_capcut = [str(ext).lower().strip() for ext in datos["extensiones_temporales_capcut"] if str(ext).strip()]
+
+    def obtener_carpeta_exportacion_capcut(self) -> str:
+        """Retorna la ruta resuelta a la carpeta de exportaciones de CapCut según plataforma."""
+        if self.carpeta_exportacion_capcut == "auto":
+            from bandeja.plataforma import obtener_ruta_exportacion_capcut
+            return obtener_ruta_exportacion_capcut()
+        return self.carpeta_exportacion_capcut

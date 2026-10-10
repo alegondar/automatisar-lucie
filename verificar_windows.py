@@ -51,6 +51,7 @@ from bandeja.plataforma import (
     obtener_unidades_windows,
     esta_confinado_en_raiz,
     validar_longitud_ruta,
+    obtener_ruta_exportacion_capcut,
 )
 from bandeja.config import (
     ConfiguracionBandeja,
@@ -332,7 +333,33 @@ def main():
 
     registrar_resultado(resultados, "Servicio Multimedia /api/media (HTTP Range)", range_ok, detalle_range)
 
-    # 13. Guardar Informe en verificacion_windows.txt
+    # 13. Carpeta de Exportación CapCut (Solo Lectura)
+    ruta_capcut = obtener_ruta_exportacion_capcut()
+    existe_capcut = os.path.exists(ruta_capcut) and os.path.isdir(ruta_capcut)
+    if existe_capcut:
+        lectura_ok = os.access(ruta_capcut, os.R_OK)
+        conteo_exports = 0
+        try:
+            for raiz_c, _dirs_c, archivos_c in os.walk(ruta_capcut):
+                rel = os.path.relpath(raiz_c, ruta_capcut)
+                prof = 0 if rel == "." else len(rel.split(os.sep))
+                if prof > 3:
+                    continue
+                conteo_exports += len(archivos_c)
+        except Exception:
+            conteo_exports = -1
+        det_capcut = (
+            f"Carpeta: '{ruta_capcut}' | Existe: Sí | Lectura: {'OK' if lectura_ok else 'DENEGADO'} "
+            f"| Exports preexistentes: {conteo_exports}"
+        )
+        registrar_resultado(resultados, "Carpeta de Exportación CapCut", lectura_ok, det_capcut)
+    else:
+        det_capcut = (
+            f"Carpeta: '{ruta_capcut}' no existe actualmente en este entorno (diagnóstico informativo)"
+        )
+        registrar_resultado(resultados, "Carpeta de Exportación CapCut", True, det_capcut)
+
+    # 14. Guardar Informe en verificacion_windows.txt
     ruta_informe = os.path.abspath("verificacion_windows.txt")
     lineas_informe = [
         "INFORME DE VERIFICACIÓN DE ENTORNO WINDOWS - LUCIE BANDEJA",

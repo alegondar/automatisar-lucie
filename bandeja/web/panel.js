@@ -317,12 +317,15 @@
       document.getElementById('sec-capitulos-cerrados').style.display = (pestana === 'capitulos-cerrados') ? 'block' : 'none';
       document.getElementById('sec-descartados').style.display = (pestana === 'descartados') ? 'block' : 'none';
       document.getElementById('sec-pendrive').style.display = (pestana === 'pendrive') ? 'block' : 'none';
+      document.getElementById('sec-edicion').style.display = (pestana === 'edicion') ? 'block' : 'none';
       document.getElementById('sec-historial').style.display = (pestana === 'historial') ? 'block' : 'none';
 
       if (pestana === 'historial') {
         cargarHistorial();
       } else if (pestana === 'pendrive') {
         cargarVistaPendrive();
+      } else if (pestana === 'edicion') {
+        cargarVistaEdicion();
       } else if (pestana === 'capitulos-abiertos') {
         cargarCapitulosAbiertos();
       } else if (pestana === 'capitulos-cerrados') {
@@ -337,6 +340,8 @@
         await cargarHistorial();
       } else if (pestanaActual === 'pendrive') {
         await cargarVistaPendrive();
+      } else if (pestanaActual === 'edicion') {
+        await cargarVistaEdicion();
       } else if (pestanaActual === 'capitulos-abiertos') {
         await cargarCapitulosAbiertos();
       } else if (pestanaActual === 'capitulos-cerrados') {
@@ -3440,6 +3445,539 @@
     function seleccionarUnidadRemovible(disp) {
       unidadRemovibleSeleccionada = disp;
       cargarVistaPendrive();
+    }
+
+    // =========================================================================
+    // Modo Edición con CapCut (Tramo 3)
+    // =========================================================================
+
+    let clipsParaEditar = [];
+    let clipsSeleccionadosParaEditar = new Set();
+    let sesionModalClips = [];
+
+    function mostrarAvisoEdicion(mensajeHtml, accionesHtml = '') {
+      const aviso = document.getElementById('aviso-edicion');
+      const texto = document.getElementById('aviso-edicion-texto');
+      const acciones = document.getElementById('aviso-edicion-acciones');
+      if (!aviso || !texto) return;
+      texto.innerHTML = mensajeHtml;
+      if (acciones) acciones.innerHTML = accionesHtml;
+      aviso.style.display = 'flex';
+    }
+
+    function ocultarAvisoEdicion() {
+      const aviso = document.getElementById('aviso-edicion');
+      if (aviso) aviso.style.display = 'none';
+    }
+
+    async function cargarVistaEdicion() {
+      const contParaEditar = document.getElementById('contenedor-para-editar');
+      const contEnEdicion = document.getElementById('contenedor-en-edicion');
+      const contEditados = document.getElementById('contenedor-editados-completos');
+      const contExports = document.getElementById('contenedor-exports-capcut');
+
+      try {
+        const res = await fetch('/api/edicion/secciones');
+        const data = await res.json();
+
+        if (!data.conectado) {
+          if (contParaEditar) {
+            contParaEditar.innerHTML = `
+              <div style="padding:16px; background:var(--card-alt); border-radius:6px; color:var(--text-muted); text-align:center;">
+                <p style="font-size:1.05rem; font-weight:600; color:var(--text);">Pendrive no conectado o no vinculado</p>
+                <p style="margin-top:6px;">Conectá y vinculá tu pendrive para explorar los clips crudos y gestionar sesiones de edición.</p>
+                <button class="btn-sm" onclick="mostrarPestana('pendrive')" style="margin-top:12px; background:var(--accent); color:#000; font-weight:600;">Ir a pestaña Pendrive</button>
+              </div>
+            `;
+          }
+          if (contEnEdicion) contEnEdicion.innerHTML = '<p style="color:var(--text-muted);">Sin sesiones disponibles.</p>';
+          if (contEditados) contEditados.innerHTML = '<p style="color:var(--text-muted);">Sin datos de capítulos.</p>';
+          if (contExports) renderizarExportsCapCut(data.exports_sin_asignar || [], []);
+          return;
+        }
+
+        // 1. Para editar
+        clipsParaEditar = data.para_editar || [];
+        renderizarClipsParaEditar(clipsParaEditar);
+
+        // 2. En edición
+        renderizarSesionesEnEdicion(data.en_edicion || []);
+
+        // 3. Editados y completos
+        renderizarEditadosYCompletos(data.conteos_capitulo || {});
+
+        // 4. Exports de CapCut
+        renderizarExportsCapCut(data.exports_sin_asignar || [], data.en_edicion || []);
+
+      } catch (err) {
+        console.error("Error al cargar vista de edición:", err);
+        if (contParaEditar) contParaEditar.innerHTML = `<div class="error-box">Error al cargar datos de edición: ${escapeHTML(String(err))}</div>`;
+      }
+    }
+
+    function renderizarClipsParaEditar(clips) {
+      const cont = document.getElementById('contenedor-para-editar');
+      if (!cont) return;
+
+      if (!clips || clips.length === 0) {
+        cont.innerHTML = '<p style="color:var(--text-muted); padding:10px;">No hay clips crudos pendientes de editar en el pendrive.</p>';
+        actualizarBotonCrearSesion();
+        return;
+      }
+
+      let html = `
+        <table class="tabla-archivos" style="width:100%; border-collapse:collapse; margin-top:8px;">
+          <thead>
+            <tr style="border-bottom:1px solid var(--border); text-align:left;">
+              <th style="width:36px; padding:8px;"></th>
+              <th style="padding:8px;">Clip</th>
+              <th style="padding:8px;">Personaje</th>
+              <th style="padding:8px;">Capítulo</th>
+              <th style="padding:8px;">Tamaño</th>
+              <th style="padding:8px; text-align:right;">Acción</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+
+      clips.forEach(c => {
+        const sel = clipsSeleccionadosParaEditar.has(c.identificador) ? 'checked' : '';
+        const tamStr = c.tamano ? (c.tamano / (1024 * 1024)).toFixed(1) + ' MB' : '-';
+        html += `
+          <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+            <td style="padding:8px;">
+              <input type="checkbox" onchange="toggleSeleccionClipParaEditar('${escapeHTML(c.identificador)}')" ${sel}>
+            </td>
+            <td style="padding:8px; font-weight:500;">
+              <span title="${escapeHTML(c.ruta_relativa)}">${escapeHTML(c.nombre)}</span>
+            </td>
+            <td style="padding:8px; color:var(--text-muted);">${escapeHTML(c.personaje)}</td>
+            <td style="padding:8px; color:var(--text-muted);"><span class="badge" style="background:#1e1b4b; color:#a5b4fc;">${escapeHTML(c.capitulo)}</span></td>
+            <td style="padding:8px; color:var(--text-muted); font-size:0.85rem;">${tamStr}</td>
+            <td style="padding:8px; text-align:right;">
+              <button class="btn-sm" onclick="previsualizarClipPendrive('${escapeHTML(c.ruta_relativa)}', '${escapeHTML(c.nombre)}')" style="padding:3px 8px; font-size:0.8rem; background:var(--card-alt); border:1px solid var(--border); color:var(--text);">▶ Ver</button>
+            </td>
+          </tr>
+        `;
+      });
+
+      html += '</tbody></table>';
+      cont.innerHTML = html;
+      actualizarBotonCrearSesion();
+    }
+
+    function toggleSeleccionClipParaEditar(identificador) {
+      if (clipsSeleccionadosParaEditar.has(identificador)) {
+        clipsSeleccionadosParaEditar.delete(identificador);
+      } else {
+        clipsSeleccionadosParaEditar.add(identificador);
+      }
+      actualizarBotonCrearSesion();
+    }
+
+    function seleccionarTodosParaEditar() {
+      clipsParaEditar.forEach(c => clipsSeleccionadosParaEditar.add(c.identificador));
+      renderizarClipsParaEditar(clipsParaEditar);
+    }
+
+    function deseleccionarTodosParaEditar() {
+      clipsSeleccionadosParaEditar.clear();
+      renderizarClipsParaEditar(clipsParaEditar);
+    }
+
+    function actualizarBotonCrearSesion() {
+      const btn = document.getElementById('btn-crear-sesion');
+      if (!btn) return;
+      const count = clipsSeleccionadosParaEditar.size;
+      btn.innerText = `Voy a editar estos (${count})`;
+      btn.disabled = (count === 0);
+    }
+
+    function filtrarClipsParaEditar() {
+      const input = document.getElementById('filtro-para-editar');
+      const q = input ? input.value.trim().toLowerCase() : '';
+      if (!q) {
+        renderizarClipsParaEditar(clipsParaEditar);
+        return;
+      }
+      const filtrados = clipsParaEditar.filter(c =>
+        c.nombre.toLowerCase().includes(q) ||
+        c.capitulo.toLowerCase().includes(q) ||
+        c.personaje.toLowerCase().includes(q)
+      );
+      renderizarClipsParaEditar(filtrados);
+    }
+
+    function abrirModalCrearSesion() {
+      if (clipsSeleccionadosParaEditar.size === 0) return;
+
+      sesionModalClips = clipsParaEditar.filter(c => clipsSeleccionadosParaEditar.has(c.identificador));
+      if (sesionModalClips.length === 0) return;
+
+      const primerClip = sesionModalClips[0];
+      const capitulo = primerClip.capitulo;
+
+      // Calcular sugerencia de nombre
+      let sugerencia = '';
+      if (sesionModalClips.length === 1) {
+        const nombreSinExt = primerClip.nombre.replace(/\.[^/.]+$/, "");
+        sugerencia = nombreSinExt.toLowerCase().replace(/[^a-z0-9_]/g, "") + 'videocompleto';
+      } else {
+        sugerencia = capitulo.toLowerCase().replace(/[^a-z0-9_]/g, "") + 'videocompleto';
+      }
+
+      document.getElementById('input-nombre-sesion').value = sugerencia;
+      document.getElementById('conteo-clips-modal').innerText = String(sesionModalClips.length);
+
+      const listaDiv = document.getElementById('lista-clips-modal');
+      listaDiv.innerHTML = sesionModalClips.map(c => `<div>🎬 <strong>${escapeHTML(c.nombre)}</strong> (${escapeHTML(c.capitulo)})</div>`).join('');
+
+      document.getElementById('modal-crear-sesion').style.display = 'flex';
+    }
+
+    function cerrarModalCrearSesion() {
+      document.getElementById('modal-crear-sesion').style.display = 'none';
+    }
+
+    async function confirmarCrearSesion() {
+      const nombreInput = document.getElementById('input-nombre-sesion').value.trim();
+      if (!nombreInput) {
+        alert("Por favor ingresá un nombre para la sesión.");
+        return;
+      }
+
+      const primerClip = sesionModalClips[0];
+      const payload = {
+        clips: sesionModalClips.map(c => c.ruta_relativa),
+        personaje: primerClip.personaje,
+        capitulo: primerClip.capitulo,
+        nombre_sesion: nombreInput
+      };
+
+      try {
+        const res = await fetch('/api/edicion/crear-sesion', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': CSRF_TOKEN
+          },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.exito) {
+          cerrarModalCrearSesion();
+          clipsSeleccionadosParaEditar.clear();
+          mostrarAvisoEdicion(`✅ Sesión iniciada: <strong>${escapeHTML(nombreInput)}</strong> con ${sesionModalClips.length} clip(s).`);
+          await cargarVistaEdicion();
+        } else {
+          alert("Error al crear sesión: " + (data.error || "Desconocido"));
+        }
+      } catch (err) {
+        alert("Error de comunicación: " + String(err));
+      }
+    }
+
+    function renderizarSesionesEnEdicion(sesiones) {
+      const cont = document.getElementById('contenedor-en-edicion');
+      if (!cont) return;
+
+      if (!sesiones || sesiones.length === 0) {
+        cont.innerHTML = '<p style="color:var(--text-muted); padding:10px;">No hay sesiones activas en este momento.</p>';
+        return;
+      }
+
+      let html = '<div style="display:flex; flex-direction:column; gap:12px; margin-top:8px;">';
+      sesiones.forEach(s => {
+        const clips = s.clips || [];
+        html += `
+          <div style="background:var(--card-alt); border:1px solid var(--border); border-radius:6px; padding:14px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+              <div>
+                <span class="badge" style="background:#0284c7; color:#fff; font-weight:600; margin-right:8px;">EN EDICIÓN</span>
+                <strong style="font-size:1.05rem;">${escapeHTML(s.nombre)}</strong>
+                <span style="color:var(--text-muted); font-size:0.85rem; margin-left:8px;">(${escapeHTML(s.personaje)} / ${escapeHTML(s.capitulo)})</span>
+              </div>
+              <div style="display:flex; gap:8px;">
+                <button class="btn-sm" onclick="terminarEdicionSesion(${s.id})" style="background:#10b981; color:#000; font-weight:600; padding:6px 14px;">Terminé de editar</button>
+                <button class="btn-sm btn-secundario" onclick="cancelarSesionEdicion(${s.id})" style="color:var(--danger);">Cancelar</button>
+              </div>
+            </div>
+            <div style="margin-top:10px; font-size:0.85rem; color:var(--text-muted);">
+              <strong>Clips agrupados (${clips.length}):</strong>
+              <div style="margin-top:4px; display:flex; flex-wrap:wrap; gap:6px;">
+                ${clips.map(c => `<span style="background:rgba(255,255,255,0.06); padding:2px 8px; border-radius:4px;">🎬 ${escapeHTML(c.split('/').pop())}</span>`).join('')}
+              </div>
+            </div>
+          </div>
+        `;
+      });
+      html += '</div>';
+      cont.innerHTML = html;
+    }
+
+    async function terminarEdicionSesion(sesionId) {
+      if (!confirm("¿Confirmás que terminaste de editar? Los clips crudos se trasladarán a 'videos ya editados'.")) return;
+
+      try {
+        const res = await fetch('/api/edicion/terminar', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': CSRF_TOKEN
+          },
+          body: JSON.stringify({ sesion_id: sesionId })
+        });
+        const data = await res.json();
+        if (data.exito) {
+          const movidosCount = (data.movidos || []).length;
+          mostrarAvisoEdicion(
+            `✅ ${movidosCount} clip(s) crudos trasladados a 'videos ya editados'.`,
+            `<button class="btn-sm" onclick="deshacerTerminarEdicion(${sesionId})" style="background:#f59e0b; color:#000; font-weight:600;">Deshacer</button>`
+          );
+          await cargarVistaEdicion();
+        } else {
+          alert("Conflicto o error al trasladar crudos: " + JSON.stringify(data.conflictos || data.error));
+        }
+      } catch (err) {
+        alert("Error de comunicación: " + String(err));
+      }
+    }
+
+    async function deshacerTerminarEdicion(sesionId) {
+      try {
+        const res = await fetch('/api/edicion/deshacer-terminar', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': CSRF_TOKEN
+          },
+          body: JSON.stringify({ sesion_id: sesionId })
+        });
+        const data = await res.json();
+        if (data.exito) {
+          mostrarAvisoEdicion("⏪ Deshacer completado: clips devueltos a 'videos sin editar'.");
+          await cargarVistaEdicion();
+        } else {
+          alert("Error al deshacer: " + (data.error || "Ruta de retorno ocupada"));
+        }
+      } catch (err) {
+        alert("Error de comunicación: " + String(err));
+      }
+    }
+
+    async function cancelarSesionEdicion(sesionId) {
+      if (!confirm("¿Deseas cancelar esta sesión? Ningún archivo físico será modificado.")) return;
+      try {
+        const res = await fetch('/api/edicion/cancelar-sesion', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': CSRF_TOKEN
+          },
+          body: JSON.stringify({ sesion_id: sesionId })
+        });
+        const data = await res.json();
+        if (data.exito) {
+          mostrarAvisoEdicion("Sesión cancelada. Los clips volvieron a 'Para editar'.");
+          await cargarVistaEdicion();
+        }
+      } catch (err) {
+        alert("Error: " + String(err));
+      }
+    }
+
+    function renderizarEditadosYCompletos(conteos) {
+      const cont = document.getElementById('contenedor-editados-completos');
+      if (!cont) return;
+
+      const capitulos = Object.keys(conteos);
+      if (capitulos.length === 0) {
+        cont.innerHTML = '<p style="color:var(--text-muted); padding:10px;">No se registraron capítulos en el pendrive.</p>';
+        return;
+      }
+
+      let html = `
+        <table class="tabla-archivos" style="width:100%; border-collapse:collapse; margin-top:8px;">
+          <thead>
+            <tr style="border-bottom:1px solid var(--border); text-align:left;">
+              <th style="padding:8px;">Capítulo</th>
+              <th style="padding:8px; text-align:center;">Sin editar</th>
+              <th style="padding:8px; text-align:center;">En edición</th>
+              <th style="padding:8px; text-align:center;">Ya editados</th>
+              <th style="padding:8px; text-align:center;">Completos</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+
+      capitulos.forEach(cap => {
+        const c = conteos[cap];
+        html += `
+          <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+            <td style="padding:8px; font-weight:600;">${escapeHTML(cap)}</td>
+            <td style="padding:8px; text-align:center; color:var(--text-muted);">${c.sin_editar}</td>
+            <td style="padding:8px; text-align:center; color:#38bdf8; font-weight:600;">${c.en_edicion}</td>
+            <td style="padding:8px; text-align:center; color:#10b981; font-weight:600;">${c.ya_editados}</td>
+            <td style="padding:8px; text-align:center; color:#a855f7; font-weight:700;">${c.completos}</td>
+          </tr>
+        `;
+      });
+
+      html += '</tbody></table>';
+      cont.innerHTML = html;
+    }
+
+    function renderizarExportsCapCut(exports, sesionesActivas) {
+      const cont = document.getElementById('contenedor-exports-capcut');
+      if (!cont) return;
+
+      if (!exports || exports.length === 0) {
+        cont.innerHTML = '<p style="color:var(--text-muted); padding:10px;">No hay exportaciones pendientes o sin asignar de CapCut.</p>';
+        return;
+      }
+
+      let html = '<div style="display:flex; flex-direction:column; gap:10px; margin-top:8px;">';
+      exports.forEach(exp => {
+        const tamStr = (exp.tamano / (1024 * 1024)).toFixed(1) + ' MB';
+        const selectId = `sel-sesion-export-${exp.id}`;
+        html += `
+          <div style="background:var(--card-alt); border:1px solid var(--border); border-radius:6px; padding:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+            <div>
+              <span class="badge" style="background:#f59e0b; color:#000; font-weight:600; margin-right:6px;">EXPORT SIN ASIGNAR</span>
+              <strong>${escapeHTML(exp.nombre)}</strong>
+              <span style="color:var(--text-muted); font-size:0.85rem; margin-left:6px;">(${tamStr})</span>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <select id="${selectId}" style="padding:4px 8px; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text); font-size:0.85rem;">
+                <option value="">Seleccionar sesión...</option>
+                ${sesionesActivas.map(s => `<option value="${s.id}">${escapeHTML(s.nombre)} (${escapeHTML(s.capitulo)})</option>`).join('')}
+              </select>
+              <button class="btn-sm" onclick="asignarExportASesion(${exp.id}, '${selectId}')" style="background:var(--accent); color:#000; font-weight:600;">Asignar</button>
+              <button class="btn-sm btn-secundario" onclick="descartarExportCapCut(${exp.id})">Descartar</button>
+            </div>
+          </div>
+        `;
+      });
+      html += '</div>';
+      cont.innerHTML = html;
+    }
+
+    async function asignarExportASesion(exportId, selectElemId) {
+      const select = document.getElementById(selectElemId);
+      const sesionId = select ? select.value : '';
+      if (!sesionId) {
+        alert("Por favor seleccioná una sesión a la cual asociar este export.");
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/capcut/asignar-export', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': CSRF_TOKEN
+          },
+          body: JSON.stringify({ export_id: exportId, sesion_id: parseInt(sesionId) })
+        });
+        const data = await res.json();
+        if (data.exito) {
+          if (data.resultado_copia && data.resultado_copia.destino) {
+            const dest = data.resultado_copia.destino;
+            mostrarAvisoEdicion(
+              `🎬 Video copiado a 'videos completos'.`,
+              `<button class="btn-sm" onclick="deshacerCopiaCompleto('${escapeHTML(dest)}')" style="background:#f59e0b; color:#000; font-weight:600;">Deshacer</button>`
+            );
+          } else {
+            mostrarAvisoEdicion("Export asociado. Se copiará en cuanto el pendrive esté conectado.");
+          }
+          await cargarVistaEdicion();
+        } else {
+          alert("Error al asignar export: " + (data.error || "Desconocido"));
+        }
+      } catch (err) {
+        alert("Error de comunicación: " + String(err));
+      }
+    }
+
+    async function descartarExportCapCut(exportId) {
+      if (!confirm("¿Deseas descartar este export de la bandeja? (No se borrará ningún archivo del disco).")) return;
+      try {
+        const res = await fetch('/api/capcut/descartar-export', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': CSRF_TOKEN
+          },
+          body: JSON.stringify({ export_id: exportId })
+        });
+        const data = await res.json();
+        if (data.exito) {
+          await cargarVistaEdicion();
+        }
+      } catch (err) {
+        alert("Error: " + String(err));
+      }
+    }
+
+    async function deshacerCopiaCompleto(videoCompletoRuta) {
+      try {
+        const res = await fetch('/api/capcut/deshacer-completo', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': CSRF_TOKEN
+          },
+          body: JSON.stringify({ video_completo_ruta: videoCompletoRuta })
+        });
+        const data = await res.json();
+        if (data.exito) {
+          mostrarAvisoEdicion("⏪ Deshacer completado: el video fue trasladado a '_revertidos' sin borrarlo.");
+          await cargarVistaEdicion();
+        } else {
+          alert("Error al deshacer: " + (data.error || "Desconocido"));
+        }
+      } catch (err) {
+        alert("Error de comunicación: " + String(err));
+      }
+    }
+
+    async function escanearCapCutManual() {
+      try {
+        const res = await fetch('/api/capcut/escanear', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': CSRF_TOKEN
+          },
+          body: JSON.stringify({})
+        });
+        const data = await res.json();
+        if (data.exito) {
+          const nuevosCount = (data.nuevos || []).length;
+          mostrarAvisoEdicion(`🔍 Escaneo de CapCut finalizado. ${nuevosCount} nuevo(s) export(s) estabilizado(s).`);
+          await cargarVistaEdicion();
+        }
+      } catch (err) {
+        alert("Error: " + String(err));
+      }
+    }
+
+    function previsualizarClipPendrive(rutaRelativa, nombre) {
+      const visor = document.getElementById('modal-visor-media');
+      const video = document.getElementById('visor-video');
+      const img = document.getElementById('visor-img');
+      const nombreEl = document.getElementById('visor-nombre');
+      const metaEl = document.getElementById('visor-meta');
+      if (!visor || !video) return;
+
+      if (img) img.style.display = 'none';
+      if (nombreEl) nombreEl.innerText = nombre;
+      if (metaEl) metaEl.innerText = rutaRelativa;
+
+      video.src = `/api/media?id=${encodeURIComponent(rutaRelativa)}`;
+      video.style.display = 'block';
+      visor.style.display = 'flex';
+      video.play().catch(() => {});
     }
 
     cargarDatos().then(() => {

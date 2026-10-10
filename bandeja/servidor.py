@@ -52,6 +52,17 @@ from bandeja.pendrive import (
     desmontar_unidad_pendrive,
 )
 from bandeja.vigilante import VigilanteBandeja
+from bandeja.edicion import (
+    obtener_secciones_edicion,
+    crear_sesion,
+    cancelar_sesion,
+    finalizar_edicion_crudos,
+    deshacer_finalizar_edicion,
+    copiar_export_a_videos_completos,
+    deshacer_copia_completo,
+    vincular_nuevo_export,
+    procesar_exports_pendientes_copia,
+)
 
 RUTA_WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 
@@ -135,6 +146,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     config: ConfiguracionBandeja = None
     db: GestorBaseDatosBandeja = None
     vigilante: VigilanteBandeja = None
+    vigilante_capcut: Optional[Any] = None
     movimientos: GestorMovimientosBandeja = None
     miniaturas: GeneradorMiniaturas = None
     token_csrf: str = ""
@@ -305,6 +317,10 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._handle_pendrive_estado()
         elif ruta == "/api/pendrive/carpetas":
             self._handle_pendrive_carpetas()
+        elif ruta == "/api/edicion/secciones":
+            self._handle_edicion_secciones()
+        elif ruta == "/api/capcut/exports":
+            self._handle_capcut_exports()
         else:
             self._enviar_error(HTTPStatus.NOT_FOUND, "Ruta no encontrada.")
 
@@ -419,11 +435,26 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._enviar_error(HTTPStatus.NOT_FOUND, "Identificador multimedia no especificado.", solo_cabeceras=solo_cabeceras)
             return
 
-        if not self.vigilante:
-            self._enviar_error(HTTPStatus.NOT_FOUND, "Servicio de vigilancia no disponible.", solo_cabeceras=solo_cabeceras)
-            return
+        ruta = None
+        if self.vigilante:
+            ruta = self.vigilante.resolver_ruta_media(str(media_id))
 
-        ruta = self.vigilante.resolver_ruta_media(str(media_id))
+        # Si no se encuentra en vigilante, intentar resolver en el pendrive vinculado
+        raiz_pen_detectada = None
+        try:
+            info_pen = detectar_pendrive(self.config)
+            if info_pen and info_pen.get("conectado"):
+                punto_pen = info_pen.get("punto_montaje") or info_pen.get("ruta_montaje")
+                if punto_pen:
+                    carpeta_raiz = getattr(self.config, "carpeta_raiz_pendrive", "LucieSinReglas")
+                    raiz_pen_detectada = os.path.join(punto_pen, carpeta_raiz)
+                    if not ruta:
+                        cand = os.path.join(raiz_pen_detectada, str(media_id).replace("/", os.sep))
+                        if esta_confinado_en_raiz(cand, raiz_pen_detectada) and os.path.isfile(cand):
+                            ruta = cand
+        except Exception:
+            pass
+
         if not ruta:
             self._enviar_error(HTTPStatus.NOT_FOUND, "Archivo multimedia no encontrado.", solo_cabeceras=solo_cabeceras)
             return
@@ -436,6 +467,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self.config.ruta_descargas,
             self.config.ruta_destino_base
         ]
+        if raiz_pen_detectada:
+            raices_permitidas.append(raiz_pen_detectada)
 
         dentro_de_raices = any(esta_confinado_en_raiz(real_ruta, raiz) for raiz in raices_permitidas)
 
@@ -610,6 +643,22 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._handle_pendrive_desmontar(body, expulsar=False)
         elif ruta == "/api/pendrive/expulsar":
             self._handle_pendrive_desmontar(body, expulsar=True)
+        elif ruta == "/api/edicion/crear-sesion":
+            self._handle_edicion_crear_sesion(body)
+        elif ruta == "/api/edicion/cancelar-sesion":
+            self._handle_edicion_cancelar_sesion(body)
+        elif ruta == "/api/edicion/terminar":
+            self._handle_edicion_terminar(body)
+        elif ruta == "/api/edicion/deshacer-terminar":
+            self._handle_edicion_deshacer_terminar(body)
+        elif ruta == "/api/capcut/asignar-export":
+            self._handle_capcut_asignar_export(body)
+        elif ruta == "/api/capcut/descartar-export":
+            self._handle_capcut_descartar_export(body)
+        elif ruta == "/api/capcut/deshacer-completo":
+            self._handle_capcut_deshacer_completo(body)
+        elif ruta == "/api/capcut/escanear":
+            self._handle_capcut_escanear(body)
         else:
             self._enviar_error(HTTPStatus.NOT_FOUND, "Endpoint POST no encontrado.")
 
@@ -1161,6 +1210,191 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         except Exception as e:
             self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al deshacer: {str(e)}")
 
+    # =========================================================================
+    # Handlers para Modo Edición con CapCut (Tramo 3)
+    # =========================================================================
+
+    def _handle_edicion_secciones(self, solo_cabeceras: bool = False):
+        try:
+            info_pen = detectar_pendrive(self.config)
+            if not info_pen or not info_pen.get("conectado"):
+                self._enviar_json({
+                    "conectado": False,
+                    "mensaje": "No hay pendrive vinculado conectado.",
+                    "para_editar": [],
+                    "en_edicion": self.db.obtener_sesiones_edicion(estado="en_edicion") if self.db else [],
+                    "conteos_capitulo": {},
+                    "exports_sin_asignar": self.db.obtener_exports_pendientes(estado="sin_asignar") if self.db else [],
+                }, solo_cabeceras=solo_cabeceras)
+                return
+
+            punto_pen = info_pen.get("punto_montaje") or info_pen.get("ruta_montaje")
+            carpeta_raiz = getattr(self.config, "carpeta_raiz_pendrive", "LucieSinReglas")
+            datos = obtener_secciones_edicion(punto_pen, self.db, carpeta_raiz=carpeta_raiz)
+            datos["conectado"] = True
+            datos["pendrive_info"] = info_pen
+            self._enviar_json(datos, solo_cabeceras=solo_cabeceras)
+        except Exception as e:
+            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al obtener secciones de edición: {e}", solo_cabeceras=solo_cabeceras)
+
+    def _handle_capcut_exports(self, solo_cabeceras: bool = False):
+        try:
+            exports = self.db.obtener_exports_pendientes() if self.db else []
+            self._enviar_json({"exports": exports}, solo_cabeceras=solo_cabeceras)
+        except Exception as e:
+            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al obtener exports de CapCut: {e}", solo_cabeceras=solo_cabeceras)
+
+    def _handle_edicion_crear_sesion(self, body: Dict[str, Any]):
+        clips = body.get("clips")
+        personaje = body.get("personaje")
+        capitulo = body.get("capitulo")
+        nombre_sesion = body.get("nombre_sesion")
+
+        if not clips or not personaje or not capitulo:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "Campos 'clips', 'personaje' y 'capitulo' requeridos.")
+            return
+
+        try:
+            sesion = crear_sesion(self.db, clips, personaje, capitulo, nombre_sesion)
+            self._enviar_json({"exito": True, "sesion": sesion})
+        except Exception as e:
+            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al crear sesión: {e}")
+
+    def _handle_edicion_cancelar_sesion(self, body: Dict[str, Any]):
+        sesion_id = body.get("sesion_id")
+        if not sesion_id:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "Campo 'sesion_id' requerido.")
+            return
+        try:
+            ok = cancelar_sesion(self.db, int(sesion_id))
+            self._enviar_json({"exito": ok})
+        except Exception as e:
+            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al cancelar sesión: {e}")
+
+    def _handle_edicion_terminar(self, body: Dict[str, Any]):
+        sesion_id = body.get("sesion_id")
+        if not sesion_id:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "Campo 'sesion_id' requerido.")
+            return
+
+        info_pen = detectar_pendrive(self.config)
+        if not info_pen or not info_pen.get("conectado"):
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "El pendrive debe estar conectado para finalizar la edición.")
+            return
+
+        punto_pen = info_pen.get("punto_montaje") or info_pen.get("ruta_montaje")
+        carpeta_raiz = getattr(self.config, "carpeta_raiz_pendrive", "LucieSinReglas")
+        ruta_bit = getattr(self.movimientos, "ruta_bitacora", "bitacora_bandeja.jsonl") if self.movimientos else "bitacora_bandeja.jsonl"
+
+        try:
+            res = finalizar_edicion_crudos(self.db, int(sesion_id), punto_pen, carpeta_raiz, ruta_bit)
+            self._enviar_json(res)
+        except Exception as e:
+            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al finalizar edición: {e}")
+
+    def _handle_edicion_deshacer_terminar(self, body: Dict[str, Any]):
+        sesion_id = body.get("sesion_id")
+        if not sesion_id:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "Campo 'sesion_id' requerido.")
+            return
+
+        info_pen = detectar_pendrive(self.config)
+        if not info_pen or not info_pen.get("conectado"):
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "El pendrive debe estar conectado para deshacer.")
+            return
+
+        punto_pen = info_pen.get("punto_montaje") or info_pen.get("ruta_montaje")
+        carpeta_raiz = getattr(self.config, "carpeta_raiz_pendrive", "LucieSinReglas")
+        ruta_bit = getattr(self.movimientos, "ruta_bitacora", "bitacora_bandeja.jsonl") if self.movimientos else "bitacora_bandeja.jsonl"
+
+        try:
+            res = deshacer_finalizar_edicion(self.db, int(sesion_id), punto_pen, carpeta_raiz, ruta_bit)
+            self._enviar_json(res)
+        except Exception as e:
+            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al deshacer finalización: {e}")
+
+    def _handle_capcut_asignar_export(self, body: Dict[str, Any]):
+        export_id = body.get("export_id")
+        sesion_id = body.get("sesion_id")
+        if not export_id or not sesion_id:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "Campos 'export_id' y 'sesion_id' requeridos.")
+            return
+
+        exp_list = self.db.obtener_exports_pendientes() if self.db else []
+        target_exp = next((e for e in exp_list if e["id"] == int(export_id)), None)
+        if not target_exp:
+            self._enviar_error(HTTPStatus.NOT_FOUND, "Export no encontrado.")
+            return
+
+        sesion = self.db.obtener_sesion_por_id(int(sesion_id))
+        if not sesion:
+            self._enviar_error(HTTPStatus.NOT_FOUND, "Sesión no encontrada.")
+            return
+
+        self.db.actualizar_export_pendiente(int(export_id), sesion_id=int(sesion_id))
+
+        info_pen = detectar_pendrive(self.config)
+        if info_pen and info_pen.get("conectado"):
+            punto_pen = info_pen.get("punto_montaje") or info_pen.get("ruta_montaje")
+            carpeta_raiz = getattr(self.config, "carpeta_raiz_pendrive", "LucieSinReglas")
+            ruta_bit = getattr(self.movimientos, "ruta_bitacora", "bitacora_bandeja.jsonl") if self.movimientos else "bitacora_bandeja.jsonl"
+            try:
+                res_copia = copiar_export_a_videos_completos(
+                    target_exp["ruta_origen"], sesion, punto_pen, self.db, carpeta_raiz, ruta_bit
+                )
+                self.db.actualizar_export_pendiente(
+                    int(export_id),
+                    estado="copiado",
+                    fecha_copia=datetime.datetime.now().isoformat(),
+                    sha256=res_copia.get("sha256")
+                )
+                self._enviar_json({"exito": True, "resultado_copia": res_copia})
+            except Exception as e:
+                self.db.actualizar_export_pendiente(int(export_id), error=str(e))
+                self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al copiar export: {e}")
+        else:
+            self.db.actualizar_export_pendiente(int(export_id), estado="pendiente_copia")
+            self._enviar_json({"exito": True, "modo": "encolado_offline"})
+
+    def _handle_capcut_descartar_export(self, body: Dict[str, Any]):
+        export_id = body.get("export_id")
+        if not export_id:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "Campo 'export_id' requerido.")
+            return
+        self.db.actualizar_export_pendiente(int(export_id), estado="descartado")
+        self._enviar_json({"exito": True})
+
+    def _handle_capcut_deshacer_completo(self, body: Dict[str, Any]):
+        video_completo_ruta = body.get("video_completo_ruta")
+        if not video_completo_ruta:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "Campo 'video_completo_ruta' requerido.")
+            return
+
+        info_pen = detectar_pendrive(self.config)
+        if not info_pen or not info_pen.get("conectado"):
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "El pendrive debe estar conectado para deshacer.")
+            return
+
+        punto_pen = info_pen.get("punto_montaje") or info_pen.get("ruta_montaje")
+        carpeta_raiz = getattr(self.config, "carpeta_raiz_pendrive", "LucieSinReglas")
+        ruta_bit = getattr(self.movimientos, "ruta_bitacora", "bitacora_bandeja.jsonl") if self.movimientos else "bitacora_bandeja.jsonl"
+
+        try:
+            res = deshacer_copia_completo(video_completo_ruta, punto_pen, self.db, carpeta_raiz, ruta_bit)
+            self._enviar_json(res)
+        except Exception as e:
+            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al deshacer copia de completo: {e}")
+
+    def _handle_capcut_escanear(self, body: Dict[str, Any]):
+        if self.vigilante_capcut:
+            try:
+                nuevos = self.vigilante_capcut.escanear()
+                self._enviar_json({"exito": True, "nuevos": nuevos})
+            except Exception as e:
+                self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al escanear CapCut: {e}")
+        else:
+            self._enviar_json({"exito": True, "nuevos": []})
+
     def do_PUT(self):
         self._enviar_error(HTTPStatus.METHOD_NOT_ALLOWED, "Método PUT no permitido.")
 
@@ -1246,7 +1480,8 @@ class ServidorBandejaHTTPServer(ThreadingHTTPServer):
 
 def crear_servidor(config: ConfiguracionBandeja, db: GestorBaseDatosBandeja,
                    vigilante: VigilanteBandeja, movimientos: GestorMovimientosBandeja,
-                   miniaturas: GeneradorMiniaturas, token_csrf: Optional[str] = None) -> ServidorBandejaHTTPServer:
+                   miniaturas: GeneradorMiniaturas, token_csrf: Optional[str] = None,
+                   vigilante_capcut: Optional[Any] = None) -> ServidorBandejaHTTPServer:
     """Crea y configura la instancia de ThreadingHTTPServer con política de socket por plataforma."""
     token = token_csrf or secrets.token_urlsafe(32)
 
@@ -1256,6 +1491,7 @@ def crear_servidor(config: ConfiguracionBandeja, db: GestorBaseDatosBandeja,
     CustomHandler.config = config
     CustomHandler.db = db
     CustomHandler.vigilante = vigilante
+    CustomHandler.vigilante_capcut = vigilante_capcut
     CustomHandler.movimientos = movimientos
     CustomHandler.miniaturas = miniaturas
     CustomHandler.token_csrf = token
