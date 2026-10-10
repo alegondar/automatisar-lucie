@@ -4461,7 +4461,10 @@ class TestAuditoriaASTAntiBorrado(unittest.TestCase):
 
         with self.assertRaises(AssertionError) as ctx:
             validar_cobertura_completa(archivos_auditados, archivos_totales)
-        self.assertIn(archivo_omitido, str(ctx.exception))
+        self.assertTrue(
+            archivo_omitido in str(ctx.exception) or repr(archivo_omitido) in str(ctx.exception),
+            f"No se encontró {archivo_omitido} ni su repr en {ctx.exception}"
+        )
 
 
 class TestPreseleccionRecienteYSeleccionGlobal(unittest.TestCase):
