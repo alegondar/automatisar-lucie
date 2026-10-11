@@ -1355,6 +1355,26 @@
       }
     }
 
+    async function mostrarErrorMedia(elemento, errBox) {
+      const fuente = elemento.src;
+      const mensaje = document.getElementById('visor-error-mensaje');
+      let texto = 'No se pudo cargar el video. Volvé a intentarlo.';
+      try {
+        const respuesta = await fetch(fuente, { method: 'HEAD' });
+        if (respuesta.status === 404) texto = 'El video ya no está disponible. Actualizá el listado y verificá que el pendrive siga conectado.';
+        else if (respuesta.status === 403) texto = 'No se puede acceder al video. Verificá que el pendrive esté conectado y vinculado.';
+        else if (!respuesta.ok) texto = `No se pudo cargar el video (HTTP ${respuesta.status}). Volvé a intentarlo.`;
+        else if (elemento.error && elemento.error.code === 2) texto = 'Se interrumpió la carga del video. Verificá la conexión del pendrive y volvé a intentarlo.';
+        else texto = 'El archivo está disponible, pero el navegador no pudo decodificarlo. Podés copiar la ruta y abrirlo en otro reproductor.';
+      } catch (err) {
+        texto = 'No se pudo conectar con la bandeja. Verificá que siga abierta y volvé a intentarlo.';
+      }
+      if (elemento.src !== fuente) return;
+      elemento.style.display = 'none';
+      if (mensaje) mensaje.innerText = texto;
+      if (errBox) errBox.style.display = 'block';
+    }
+
     function mostrarArchivoEnVisor() {
       if (visorIndiceActual < 0 || visorIndiceActual >= visorListaActual.length) return;
       const archivo = visorListaActual[visorIndiceActual];
@@ -1426,10 +1446,7 @@
 
       if (esArchivoVideo(archivo.nombre)) {
         if (vid) {
-          vid.onerror = () => {
-            vid.style.display = 'none';
-            if (errBox) errBox.style.display = 'block';
-          };
+          vid.onerror = () => mostrarErrorMedia(vid, errBox);
           vid.src = srcUrl;
           vid.style.display = 'block';
           vid.play().catch(() => {});
@@ -1438,6 +1455,8 @@
         if (img) {
           img.onerror = () => {
             img.style.display = 'none';
+            const mensaje = document.getElementById('visor-error-mensaje');
+            if (mensaje) mensaje.innerText = 'No se pudo cargar la imagen. Verificá que el archivo siga disponible.';
             if (errBox) errBox.style.display = 'block';
           };
           img.src = srcUrl;
@@ -4044,10 +4063,7 @@
       video.removeAttribute('src');
       video.load();
 
-      video.onerror = () => {
-        video.style.display = 'none';
-        if (errBox) errBox.style.display = 'block';
-      };
+      video.onerror = () => mostrarErrorMedia(video, errBox);
 
       video.src = `/api/media?id=${encodeURIComponent(rutaRelativaOId)}`;
       video.style.display = 'block';

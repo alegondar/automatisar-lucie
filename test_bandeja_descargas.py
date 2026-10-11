@@ -6248,6 +6248,26 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertFalse(os.path.exists(os.path.join(self.raiz_pen, "videos completos")))
 
+    def test_ver_edicion_sigue_funcionando_despues_del_sondeo(self):
+        mock_pen = {"conectado": True, "punto_montaje": self.pendrive_dir}
+        with patch("bandeja.servidor.detectar_pendrive", return_value=mock_pen):
+            status, datos, _ = self._get("/api/edicion/secciones")
+            self.assertEqual(status, 200)
+            clip = datos["para_editar"][0]
+            media_id = clip["id_media"]
+            # El vigilante real de Descargas sondea entre el listado y el clic en Ver.
+            self.vigilante.escanear()
+            status, _, raw = self._get(f"/api/media?id={media_id}", {"Range": "bytes=0-9"})
+            self.assertEqual(status, 206)
+            self.assertEqual(raw, self.clip_contenido[:10])
+            self.vigilante.escanear()
+            status, _, raw = self._get(f"/api/media?id={media_id}", {"Range": "bytes=10-"})
+            self.assertEqual(status, 206)
+            self.assertEqual(raw, self.clip_contenido[10:])
+        with patch("bandeja.servidor.detectar_pendrive", return_value=None):
+            status, _, _ = self._get(f"/api/media?id={media_id}")
+            self.assertEqual(status, 403)
+
     def test_streaming_media_pendrive_con_range(self):
         """Verifica que /api/media permita streaming seguro con HTTP Range desde el pendrive vinculado."""
         mock_pen = {

@@ -55,6 +55,7 @@ class VigilanteBandeja:
         self._ultimo_conteo_lotes = 0
         self._estado_pendrive: Dict[str, Any] = {"conectado": False, "sin_respuesta": False}
         self._mapa_media: Dict[str, str] = {}
+        self._media_registrada: Dict[str, str] = {}
         self._version_forzada: int = 0
         self._lock = threading.Lock()
 
@@ -501,13 +502,15 @@ class VigilanteBandeja:
         if not id_media:
             return None
         with self._lock:
-            return self._mapa_media.get(id_media)
+            return self._mapa_media.get(id_media) or self._media_registrada.get(id_media)
 
     def registrar_ruta_media(self, ruta_completa: str) -> str:
         """Registra una ruta multimedia y retorna su id_media opaco."""
         id_media = hashlib.sha256(f"media:{ruta_completa}".encode("utf-8")).hexdigest()[:32]
         with self._lock:
-            self._mapa_media[id_media] = ruta_completa
+            # Las rutas de Edicion no pertenecen al sondeo de Descargas: su
+            # registro debe sobrevivir a la reconstruccion de _mapa_media.
+            self._media_registrada[id_media] = ruta_completa
         return id_media
 
     def obtener_token_version(self) -> str:
