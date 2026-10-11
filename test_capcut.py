@@ -196,6 +196,39 @@ class TestVigilanteCapCut(unittest.TestCase):
         self.assertEqual(vigilante.tomar_fotografia_inicial(), 0)
         self.assertEqual(vigilante.escanear(), [])
 
+    def test_vigilante_capcut_nombres_con_parentesis_y_subcarpetas(self):
+        """Ejercita el vigilante con nombres de export estilo CapCut '0818(15).mp4' y subcarpetas anidadas."""
+        vigilante = VigilanteCapCut(
+            ruta_capcut=self.tmp_dir,
+            sondeos_estabilidad=1,
+        )
+        vigilante.tomar_fotografia_inicial()
+
+        # Archivo con paréntesis en la raíz
+        self._crear_archivo("0818(15).mp4", b"video raiz 15")
+        # Archivo con paréntesis en subcarpeta
+        self._crear_archivo(os.path.join("Proyecto (01)", "0818(16).mp4"), b"video subcarpeta 16")
+        # Archivo con paréntesis en subcarpeta de profundidad 2
+        self._crear_archivo(os.path.join("Proyecto (01)", "Exportados", "0818(17).mov"), b"video subcarpeta 17")
+
+        nuevos = vigilante.escanear()
+        self.assertEqual(len(nuevos), 3)
+
+        nombres = {n["nombre"] for n in nuevos}
+        self.assertEqual(nombres, {"0818(15).mp4", "0818(16).mp4", "0818(17).mov"})
+
+        por_nombre = {n["nombre"]: n for n in nuevos}
+        self.assertEqual(por_nombre["0818(15).mp4"]["carpeta_relativa"], "")
+        self.assertEqual(por_nombre["0818(16).mp4"]["carpeta_relativa"], "Proyecto (01)")
+        self.assertEqual(
+            por_nombre["0818(17).mov"]["carpeta_relativa"],
+            os.path.join("Proyecto (01)", "Exportados"),
+        )
+
+        # En segundo escaneo no debe volver a detectarlos
+        nuevos_reintento = vigilante.escanear()
+        self.assertEqual(len(nuevos_reintento), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
