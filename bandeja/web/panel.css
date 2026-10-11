@@ -1,14 +1,17 @@
     :root {
-      --bg: #121212;
-      --card-bg: #1e1e1e;
-      --card-alt: #252525;
-      --text: #e0e0e0;
-      --text-muted: #9e9e9e;
-      --accent: #bb86fc;
-      --accent-hover: #9955e8;
-      --teal: #03dac6;
-      --danger: #cf6679;
-      --border: #333333;
+      color-scheme: dark;
+      --bg: #050811;
+      --card-bg: #0c1423;
+      --card-alt: #111e30;
+      --text: #eef4fc;
+      --text-muted: #a3b3c9;
+      --accent: #00f0ff;
+      --accent-hover: #72f7ff;
+      --teal: #00f0ff;
+      --danger: #ff7898;
+      --border: #28394f;
+      --pink: #ff007f;
+      --header-height: 90px;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -904,3 +907,100 @@
 #dialog-eliminacion-imagen::backdrop { background: rgb(0 0 0 / .8); }
 #dialog-eliminacion-imagen h2 { font-size: 1rem; overflow-wrap: anywhere; margin-bottom: .75rem; }
 #eliminacion-imagen-grande { display: block; max-width: 100%; max-height: 70vh; object-fit: contain; margin: 0 auto .75rem; }
+
+
+/* Identidad Lucie Sin Reglas: cian, rosa y superficies azul noche.
+   Todos los recursos son locales; las tipografías tienen alternativas del sistema. */
+body {
+  font-family: "Space Grotesk", "Trebuchet MS", "Segoe UI", sans-serif;
+  background-image: radial-gradient(ellipse at 45% 0%, #00f0ff0b, transparent 55%),
+                    radial-gradient(ellipse at 100% 65%, #ff007f08, transparent 55%);
+}
+body > header {
+  min-height: var(--header-height);
+  padding: 18px max(24px, calc((100vw - 1360px) / 2));
+  background: #080e1b;
+  border-bottom: 1px solid #00f0ff35;
+  gap: 16px;
+}
+.marca-lucie { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.marca-simbolo {
+  width: 48px; height: 48px; flex-shrink: 0; position: relative;
+  display: grid; place-items: center; border: 1px solid #00f0ff65;
+  border-radius: 12px 3px 12px 3px; background: #00f0ff0b;
+  color: var(--accent); font: 800 32px/1 "Arial Black", sans-serif;
+}
+.marca-simbolo span { position: absolute; right: 2px; top: 1px; font-size: 18px; color: #ff59ac; }
+.marca-nombre { font-family: "Orbitron", "Arial Black", sans-serif; font-size: clamp(1.15rem, 2.2vw, 1.65rem); letter-spacing: -.05em; color: var(--accent); }
+.marca-nombre > span { color: #ff59ac; }
+.marca-descripcion { color: var(--text-muted); font-size: .8rem; margin-top: 4px; }
+.marca-descripcion > span { color: #516882; margin: 0 5px; }
+.estado-local { text-align: right; flex-shrink: 0; }
+.estado-local-etiqueta { display: block; color: var(--text-muted); font-size: .7rem; margin-bottom: 5px; }
+.estado-local .badge {
+  display: inline-flex; align-items: center; gap: 8px;
+  color: #9afaff; background: #00f0ff0a; border: 1px solid #00f0ff35;
+  border-radius: 5px; font-family: ui-monospace, monospace; font-weight: 500;
+}
+.estado-local .badge::before { content: ""; width: 6px; height: 6px; background: var(--accent); border-radius: 50%; }
+.navegacion-principal {
+  gap: 6px; padding: 12px max(24px, calc((100vw - 1360px) / 2));
+  background: #0a111f; overflow-x: auto; scrollbar-width: thin;
+  scrollbar-color: #37516c #0a111f;
+}
+.nav-btn {
+  white-space: nowrap; padding: 10px 13px; border-color: transparent;
+  border-radius: 6px; font-size: .82rem; min-height: 42px;
+  color: var(--text-muted); transition: background .15s, color .15s, border-color .15s;
+}
+.nav-btn:hover { color: var(--text); background: #152237; border-color: var(--border); }
+.nav-btn.active { color: var(--accent); background: #00f0ff10; border-color: #00f0ff55; box-shadow: inset 0 -2px var(--accent); }
+main { max-width: 1360px; margin: 32px auto; padding: 0 24px; }
+h2 { letter-spacing: -.025em; }
+.card { border-radius: 12px; padding: 24px; box-shadow: 0 8px 24px #00000018; }
+.card-header { border-bottom-color: #23354a; padding-bottom: 16px; }
+.card-header h2, .eliminacion-cabecera h2 { font-weight: 700; }
+.form-row, .lote-toolbar { border: 1px solid var(--border); border-radius: 8px; }
+.archivo-item { border-radius: 8px; }
+select, input[type="text"], #eliminacion-confirmacion { background: #070f1c; border-color: var(--border); }
+button, input, select, textarea { font-family: inherit; }
+.btn-sm { padding: 8px 13px; min-height: 36px; border-radius: 6px; }
+button.btn-accion { border-radius: 6px; min-height: 38px; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 4px;
+}
+::selection { background: #ff007f; color: white; }
+#banner-pendrive-detectado { background: #10263a !important; border-bottom: 1px solid #00f0ff35 !important; }
+#banner-pendrive-detectado .btn-deshacer-aviso { background: #00f0ff !important; color: #031017 !important; }
+.banner-aviso, .banner-capitulo-activo, .banner-capitulo-olvidado { font-size: .875rem; }
+.modal-content, dialog { background: #0c1423; border: 1px solid #38506c; border-radius: 12px; box-shadow: 0 24px 80px #0009; }
+dialog::backdrop { background: #020712c9; }
+.eliminacion-barra { top: calc(var(--header-height) + 12px); border-color: #00f0ff35; border-radius: 10px; }
+.eliminacion-ubicacion { border-left-color: var(--accent); background: #00f0ff04; border-radius: 0 6px 6px 0; }
+.eliminacion-ruta button { color: var(--text-muted); }
+.eliminacion-ruta button:last-child { color: var(--accent); }
+#eliminacion-lista { border-radius: 10px; padding: 20px; }
+.eliminacion-carpeta { border-radius: 8px; transition: border-color .15s, background .15s; }
+.eliminacion-carpeta:hover { border-color: #53718e; }
+.eliminacion-carpeta:has(input:checked) { border-color: var(--accent); background: #103044; }
+#eliminacion-simular:not(:disabled), #eliminacion-ejecutar:not(:disabled) { background: #a91543; color: #fff; border-color: #e94678; }
+.eliminacion-media, .eliminacion-miniatura, .eliminacion-media video, .eliminacion-miniatura img { background: #060d19; }
+.eliminacion-audio-icono { color: #ff59ac; }
+@media (max-width: 600px) {
+  :root { --header-height: 86px; }
+  body > header { padding: 14px 16px; gap: 10px; }
+  .marca-lucie { gap: 10px; }
+  .marca-simbolo { width: 36px; height: 40px; font-size: 26px; }
+  .marca-descripcion { font-size: .65rem; max-width: 190px; }
+  .estado-local .badge { font-size: .6rem; padding: 4px 6px; gap: 4px; }
+  .estado-local-etiqueta { font-size: .65rem; }
+  .navegacion-principal { padding: 10px 16px; }
+  main { padding: 0 16px; margin: 24px auto; }
+  .card { padding: 16px; }
+  .eliminacion-barra { top: calc(var(--header-height) + 8px); }
+  .eliminacion-cabecera h2 { font-size: 1.35rem; }
+  #eliminacion-lista { padding: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+}

@@ -3,16 +3,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Bandeja de Descargas - Proyecto Lucie</title>
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#050811">
+  <title>Lucie Sin Reglas · Bandeja de descargas</title>
   <link rel="stylesheet" href="/panel.css">
 </head>
 <body>
   <header>
-    <div>
-      <h1>Bandeja de Descargas &bull; Proyecto Lucie</h1>
-      <small style="color:var(--text-muted)">Confinado estrictamente a ~/Descargas</small>
+    <div class="marca-lucie">
+      <span class="marca-simbolo" aria-hidden="true">L<span>↗</span></span>
+      <div>
+        <h1 class="marca-nombre">lucie<span>Sinreglas</span></h1>
+        <p class="marca-descripcion">Bandeja de Descargas <span aria-hidden="true">/</span> Proyecto Lucie</p>
+      </div>
     </div>
-    <span class="badge">127.0.0.1:__PUERTO__</span>
+    <div class="estado-local"><span class="estado-local-etiqueta">Panel local</span><span class="badge">127.0.0.1:__PUERTO__</span></div>
   </header>
 
   <div id="banner-desconexion" class="banner-desconexion" style="display:none;">
@@ -41,7 +46,7 @@
     </div>
   </div>
 
-  <nav>
+  <nav class="navegacion-principal" aria-label="Secciones del dashboard">
     <button class="nav-btn active" id="nav-btn-lotes" onclick="mostrarPestana('lotes', event)">Lotes Detectados</button>
     <button class="nav-btn" id="nav-btn-sin-identificar" onclick="mostrarPestana('sin-identificar', event)">Sin Identificar</button>
     <button class="nav-btn" id="nav-btn-capitulos-abiertos" onclick="mostrarPestana('capitulos-abiertos', event)">Capítulos Abiertos (<span id="conteo-nav-abiertos">0</span>)</button>

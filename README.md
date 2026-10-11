@@ -2,6 +2,11 @@
 
 Plataforma integral desarrollada en Python para la automatización, clasificación, resguardo y auditoría continua del flujo de producción multimedia de personajes digitales (**Lucie**, **Magui la Roli** y **Mailen**).
 
+Para entender qué hace cada módulo y cómo se conectan, abrí el
+[manual HTML del funcionamiento interno](docs/manual-interno.html) en el navegador.
+Incluye un recorrido paso a paso, mapa de componentes, glosario y explicación
+de los controles de seguridad. Funciona sin conexión y permite imprimirlo.
+
 El sistema coordina la captura no invasiva de descargas de inteligencia artificial (Grok, Gemini, Nano Banana, Google Flow), su estructuración por escenas y capítulos, el traslado atómico a la sala de espera y la transferencia segura hacia unidades externas (pendrives compartidos formateados en exFAT) para su posterior montaje y edición en Windows con CapCut.
 
 > [!IMPORTANT]
