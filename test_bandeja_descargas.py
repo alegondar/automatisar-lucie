@@ -6175,8 +6175,8 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
             status_term, res_term = self._post("/api/edicion/terminar", {"sesion_id": sesion_id})
             self.assertEqual(status_term, 200)
             self.assertTrue(res_term.get("exito"))
-            dest_esperado = os.path.join(self.raiz_pen, "videos ya editados", "lucie", "capitulo_01",
-                                         "toma_01 - octubre - semana 2 - 2026", "toma_01.mp4")
+            dest_esperado = os.path.join(self.raiz_pen, "videos ya editados", "lucie",
+                                         "capitulo_01videocompleto - octubre - 2026", "toma_01.mp4")
             self.assertTrue(os.path.isfile(dest_esperado))
             self.assertFalse(os.path.isfile(self.clip_path))
 
@@ -6218,8 +6218,8 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
             status, datos = self._post("/api/capcut/enviar-export", {"export_id": export_id})
             self.assertEqual(status, 200, datos)
             destino = datos["resultado_copia"]["destino"]
-            self.assertEqual(destino, os.path.join(self.raiz_pen, "videos completos", "lucie", "capitulo_01",
-                                                 "Mi video - octubre - semana 2 - 2026", "Mi video.mp4"))
+            self.assertEqual(destino, os.path.join(self.raiz_pen, "videos completos", "lucie",
+                                                 "Mi video - octubre - 2026", "Mi video.mp4"))
             with open(destino, "rb") as archivo:
                 self.assertEqual(archivo.read(), contenido)
             status, datos, _ = self._get("/api/capcut/exports")

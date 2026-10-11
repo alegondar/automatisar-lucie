@@ -32,15 +32,14 @@ logger = logging.getLogger("bandeja_edicion")
 
 
 def nombre_carpeta_video(nombre: str, fecha: Optional[datetime.datetime] = None) -> str:
-    """Nombre del video y fecha local del traslado; semanas del mes de siete dias."""
+    """Nombre del video, mes en espanol y anio del traslado."""
     fecha = fecha or datetime.datetime.now()
     meses = (
         "enero", "febrero", "marzo", "abril", "mayo", "junio",
         "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
     )
     base = os.path.splitext(os.path.basename(nombre))[0]
-    semana = (fecha.day - 1) // 7 + 1
-    return f"{base} - {meses[fecha.month - 1]} - semana {semana} - {fecha.year}"
+    return f"{base} - {meses[fecha.month - 1]} - {fecha.year}"
 
 
 def _destinos_editados_sesion(pendrive_raiz: str, identificador: str) -> Dict[str, str]:
@@ -135,6 +134,13 @@ def obtener_secciones_edicion(
     dir_sin_editar = os.path.join(pendrive_raiz, "videos sin editar")
     dir_ya_editados = os.path.join(pendrive_raiz, "videos ya editados")
     dir_completos = os.path.join(pendrive_raiz, "videos completos")
+    capitulos_por_ruta = {}
+    for sesion in db.obtener_sesiones_edicion():
+        rutas = list(_destinos_editados_sesion(pendrive_raiz, sesion["identificador"]).values())
+        if sesion.get("video_completo_ruta"):
+            rutas.append(sesion["video_completo_ruta"])
+        for ruta in rutas:
+            capitulos_por_ruta[os.path.normcase(os.path.abspath(ruta))] = sesion["capitulo"]
 
     sesiones_activas = db.obtener_sesiones_edicion(estado="en_edicion")
     clips_en_sesion: Set[str] = set()
@@ -207,7 +213,7 @@ def obtener_secciones_edicion(
                     ruta_abs = os.path.join(raiz, arch)
                     rel = os.path.relpath(ruta_abs, dir_ya_editados)
                     partes = rel.split(os.sep)
-                    capitulo = partes[1] if len(partes) > 2 else "sin_capitulo"
+                    capitulo = capitulos_por_ruta.get(os.path.normcase(os.path.abspath(ruta_abs))) or (partes[1] if len(partes) > 2 else "sin_capitulo")
                     _asegurar_conteo(capitulo)
                     conteos_capitulo[capitulo]["ya_editados"] += 1
 
@@ -219,7 +225,7 @@ def obtener_secciones_edicion(
                     ruta_abs = os.path.join(raiz, arch)
                     rel = os.path.relpath(ruta_abs, dir_completos)
                     partes = rel.split(os.sep)
-                    capitulo = partes[1] if len(partes) > 2 else "sin_capitulo"
+                    capitulo = capitulos_por_ruta.get(os.path.normcase(os.path.abspath(ruta_abs))) or (partes[1] if len(partes) > 2 else "sin_capitulo")
                     _asegurar_conteo(capitulo)
                     conteos_capitulo[capitulo]["completos"] += 1
 
@@ -335,8 +341,8 @@ def finalizar_edicion_crudos(
         ruta_dest = destinos_registrados.get(rel_clip)
         if not ruta_dest:
             ruta_dest = ruta_anterior if os.path.exists(ruta_anterior) else os.path.join(
-                os.path.dirname(ruta_anterior),
-                nombre_carpeta_video(os.path.basename(ruta_anterior), fecha_traslado),
+                dir_ya_editados, sesion["personaje"],
+                nombre_carpeta_video(sesion.get("nombre") or sesion["nombre_final_defecto"], fecha_traslado),
                 os.path.basename(ruta_anterior),
             )
 
@@ -515,7 +521,7 @@ def copiar_export_a_videos_completos(
 ) -> Dict[str, Any]:
     """
     Copia de forma segura el video final exportado por CapCut a:
-    <pendrive>/<carpeta_raiz>/videos completos/<personaje>/<capítulo>/<video - mes - semana - año>/<nombre_final>
+    <pendrive>/<carpeta_raiz>/videos completos/<personaje>/<video - mes - año>/<nombre_final>
     Protocolo de seguridad:
     1. Comprueba espacio suficiente en pendrive.
     2. Comprueba que destino no exista (evita pisado ciego).
@@ -544,7 +550,7 @@ def copiar_export_a_videos_completos(
         raise FileExistsError(f"La sesion ya tiene un video completo en '{ruta_registrada}'. No se sobreescribe.")
     if esta_confinado_en_raiz(ruta_anterior, pendrive_raiz) and os.path.exists(ruta_anterior):
         raise FileExistsError(f"El destino anterior '{ruta_anterior}' ya existe. No se sobreescribe.")
-    dir_completos = os.path.join(dir_completos, nombre_carpeta_video(nombre_final))
+    dir_completos = os.path.join(pendrive_raiz, "videos completos", personaje, nombre_carpeta_video(nombre_final))
     ruta_destino = os.path.join(dir_completos, nombre_final)
 
     if not esta_confinado_en_raiz(ruta_destino, pendrive_raiz):

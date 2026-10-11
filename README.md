@@ -152,17 +152,18 @@ python3 instalar_hooks.py
 ## Organización de videos editados y completos
 
 Al pasar un clip a `videos ya editados` o copiar un export a `videos completos`,
-se crea una carpeta individual dentro de su personaje y capítulo:
+se crea una única carpeta con el nombre de la edición dentro de su personaje.
+Los videos quedan directamente dentro de ella, sin subcarpetas:
 
 ```text
-videos ya editados/lucie/cap01/Toma 1 - octubre - semana 2 - 2026/Toma 1.mp4
-videos completos/lucie/cap01/Mi video - octubre - semana 2 - 2026/Mi video.mp4
+videos ya editados/lucie/Mi video - octubre - 2026/Toma 1.mp4
+videos ya editados/lucie/Mi video - octubre - 2026/Toma 2.mp4
+videos completos/lucie/Mi video - octubre - 2026/Mi video.mp4
 ```
 
 La fecha corresponde al momento del traslado o copia, según el reloj local del
-equipo. Los meses se escriben en español y las semanas se cuentan dentro del mes:
-1–7 es semana 1, 8–14 semana 2, 15–21 semana 3, 22–28 semana 4 y 29–31 semana 5.
-El nombre del archivo se conserva; la carpeta usa ese nombre sin la extensión.
+equipo. La carpeta usa el nombre de la edición sin extensión, el mes en español
+y el año; no incluye semana. Los clips de una misma edición se agrupan en ella.
 
 ### Exports de CapCut y videos completados
 
