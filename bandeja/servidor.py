@@ -53,6 +53,7 @@ from bandeja.pendrive import (
     desmontar_unidad_pendrive,
 )
 from bandeja.vigilante import VigilanteBandeja
+from bandeja.eliminacion import GestorEliminacionPendrive
 from bandeja.edicion import (
     obtener_secciones_edicion,
     crear_sesion,
@@ -318,6 +319,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._enviar_json({"capitulo_activo": cap_activo})
         elif ruta == "/api/pendrive/estado":
             self._handle_pendrive_estado()
+        elif ruta == "/api/pendrive/eliminacion":
+            self._handle_eliminacion()
         elif ruta == "/api/pendrive/carpetas":
             self._handle_pendrive_carpetas()
         elif ruta == "/api/edicion/secciones":
@@ -647,7 +650,11 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._enviar_error(HTTPStatus.BAD_REQUEST, "Cuerpo JSON inválido o malformado.")
             return
 
-        if ruta == "/api/clasificar-sin-identificar":
+        if ruta == "/api/pendrive/eliminacion-simular":
+            self._handle_eliminacion(body, simular=True)
+        elif ruta == "/api/pendrive/eliminar":
+            self._handle_eliminacion(body)
+        elif ruta == "/api/clasificar-sin-identificar":
             self._handle_clasificar_sin_identificar(body)
         elif ruta == "/api/deshacer-clasificar-sin-identificar":
             self._handle_deshacer_clasificar_sin_identificar(body)
@@ -707,6 +714,25 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._handle_capcut_escanear(body)
         else:
             self._enviar_error(HTTPStatus.NOT_FOUND, "Endpoint POST no encontrado.")
+
+    def _handle_eliminacion(self, body=None, simular=False):
+        try:
+            if body is not None and not isinstance(body, dict):
+                raise ValueError('El cuerpo debe ser un objeto JSON.')
+            if body is None:
+                resultado = self.eliminacion.listar()
+                for entrada in resultado['entradas']:
+                    if entrada['tipo'] == 'archivo':
+                        ruta = os.path.join(resultado['ruta_proyecto'], *entrada['ruta'].split('/'))
+                        entrada['id_media'] = self.vigilante.registrar_ruta_media(ruta)
+            elif simular:
+                resultado = self.eliminacion.simular(body.get('seleccion'))
+            else:
+                resultado = self.eliminacion.ejecutar(body.get('token'), body.get('confirmacion'))
+                self.vigilante.forzar_actualizacion_version()
+            self._enviar_json(resultado)
+        except (ValueError, OSError) as e:
+            self._enviar_error(HTTPStatus.CONFLICT, str(e))
 
     def _handle_pendrive_envio_simular(self, body: Dict[str, Any]):
         capitulos = body.get("capitulos")
@@ -1556,6 +1582,7 @@ def crear_servidor(config: ConfiguracionBandeja, db: GestorBaseDatosBandeja,
     CustomHandler.movimientos = movimientos
     CustomHandler.miniaturas = miniaturas
     CustomHandler.token_csrf = token
+    CustomHandler.eliminacion = GestorEliminacionPendrive(config)
 
     servidor = ServidorBandejaHTTPServer((config.host_servidor, config.puerto_servidor), CustomHandler)
     servidor.daemon_threads = True

@@ -5,7 +5,11 @@ y, en Windows, [README_WINDOWS.md](README_WINDOWS.md).
 La constitución del sistema son las siete Reglas de Oro de
 [openspec/config.yaml](openspec/config.yaml); siguen obligatorias.
 
-- No borrar ni sobrescribir material. Toda copia debe respetar colisiones,
+- No borrar automáticamente ni sobrescribir material. La eliminación manual
+  desde «Eliminar capítulos» del dashboard está autorizada exclusivamente con
+  selección del usuario, simulación previa y confirmación explícita; es permanente
+  y no permite deshacer. Fuera de ese flujo, el borrado sigue prohibido.
+  Toda copia debe respetar colisiones,
   comprobar integridad y permitir deshacer sin eliminar archivos.
 - Pruebas exclusivamente en directorios temporales. No tocar Descargas reales,
   la carpeta real de CapCut ni el pendrive. Para la suite, la única lectura

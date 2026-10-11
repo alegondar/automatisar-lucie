@@ -247,6 +247,8 @@ class GestorMovimientosBandeja:
             return "foto"
         if ext in cls.EXTENSIONES_VIDEO:
             return "video"
+        if ext == ".mp3":
+            return "audio"
         return "otro"
 
     def obtener_contadores_carpeta_destino(self, carpeta_destino: str, base: str) -> Dict[str, int]:
@@ -363,6 +365,8 @@ class GestorMovimientosBandeja:
                     subcarpeta = self.subcarpeta_fotos
                 elif familia == "video":
                     subcarpeta = self.subcarpeta_videos
+                elif familia == "audio":
+                    subcarpeta = "audios"
                 else:
                     subcarpeta = ""
             else:
@@ -380,8 +384,9 @@ class GestorMovimientosBandeja:
             es_otro = (familia == "otro")
             advertencia = ""
 
-            if es_otro:
-                advertencia = "Extensión no multimedia: se moverá a la raíz de la escena con su nombre original."
+            if es_otro or familia == "audio":
+                if es_otro:
+                    advertencia = "Extensión no multimedia: se moverá a la raíz de la escena con su nombre original."
                 nombre_base_orig, ext_orig = os.path.splitext(nombre_archivo_original)
                 candidato_nombre = nombre_archivo_original
                 candidato_ruta = os.path.join(carpeta_target, candidato_nombre)

@@ -4,6 +4,26 @@ Esta guía describe el comportamiento implementado y complementa las siete
 Reglas de Oro de `openspec/config.yaml`. Para edición y CapCut, prevalece sobre
 las rutas y decisiones anteriores de los documentos históricos de OpenSpec.
 
+## Actualización completa del dashboard (2026-10-11)
+
+Se integró la actualización de GitHub `931febd` conservando las mejoras de
+edición, CapCut y reproducción de esta rama. «Eliminar capítulos» permite
+seleccionar archivos o carpetas del pendrive, revisar la simulación y escribir
+`ELIMINAR` para confirmar un borrado permanente sin deshacer. Esta excepción
+manual fue autorizada expresamente por el usuario; el borrado automático sigue
+prohibido. Se conservan confinamiento, protección de metadatos, verificación
+de identidad y contenido y bitácora append-only separada del manifiesto.
+
+La actualización incluye vistas previas y audio MP3 en lotes y transferencias.
+Ver [Eliminación manual y audio MP3](docs/dashboard-eliminacion-y-mp3.md).
+
+Validación de esta integración en Windows/Python 3.13: **304 pruebas, OK,
+10 saltadas** (cinco requieren Linux y cinco privilegios para symlinks), en
+41.723 segundos. AST: 0 infracciones en 22 archivos; JavaScript y auditoría
+de repositorio/historial correctos. Manifiesto real antes/después: **84 / 84**
+líneas, solo lectura. Log: `%TEMP%/tests_host_actualizado.log`. No se inició
+la bandeja real para probar ni se validó Linux en este equipo.
+
 ## Estructura del material
 
 ```text

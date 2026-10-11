@@ -32,6 +32,8 @@ def clasificar_familia_medio(extension: str) -> str:
     ext = extension.lower() if extension.startswith(".") else f".{extension.lower()}"
     if ext in EXTENSIONES_IMAGENES_DEFECTO:
         return "fotos"
+    if ext == ".mp3":
+        return "audios"
     return "videos"
 
 

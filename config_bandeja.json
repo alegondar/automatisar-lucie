@@ -18,7 +18,8 @@
     ".jpg",
     ".jpeg",
     ".png",
-    ".webp"
+    ".webp",
+    ".mp3"
   ],
   "patrones_candidatos": {
     "grok": "grok-video-*",
@@ -49,4 +50,3 @@
     ".tmp.mp4"
   ]
 }
-
