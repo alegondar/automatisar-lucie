@@ -25,6 +25,8 @@ import socket
 import subprocess
 import time
 import uuid
+import threading
+from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from bandeja.plataforma import (
@@ -146,6 +148,21 @@ def leer_marcador_pendrive(ruta_raiz: str) -> Optional[Dict[str, Any]]:
 
 _unidades_silenciadas: Set[str] = set()
 _operacion_pendrive_activa: bool = False
+_lock_operacion_pendrive = threading.Lock()
+
+
+@contextmanager
+def operacion_pendrive_exclusiva():
+    """Serializa envío, reversión y eliminación manual; bloquea el desmontaje."""
+    global _operacion_pendrive_activa
+    if not _lock_operacion_pendrive.acquire(blocking=False):
+        raise ValueError('Hay otra operación en curso sobre el pendrive. Esperá a que termine.')
+    _operacion_pendrive_activa = True
+    try:
+        yield
+    finally:
+        _operacion_pendrive_activa = False
+        _lock_operacion_pendrive.release()
 
 
 def detectar_pendrive(config: Optional[ConfiguracionBandeja] = None) -> Optional[Dict[str, Any]]:
@@ -340,7 +357,7 @@ def _es_extension_foto(ext: str) -> bool:
 
 
 def _es_extension_multimedia(ext: str) -> bool:
-    return _es_extension_video(ext) or _es_extension_foto(ext)
+    return _es_extension_video(ext) or _es_extension_foto(ext) or ext.lower() == ".mp3"
 
 
 def escanear_sala_espera_carpetas(ruta_destino_base: str,
@@ -403,6 +420,7 @@ def escanear_sala_espera_carpetas(ruta_destino_base: str,
 
             cant_fotos = 0
             cant_vids = 0
+            cant_audios = 0
             cant_no_media = 0
             bytes_totales = 0
             mtime_max = 0.0
@@ -450,6 +468,9 @@ def escanear_sala_espera_carpetas(ruta_destino_base: str,
                     elif es_fot:
                         cant_fotos += 1
                         tipo_arch = "foto"
+                    elif ext_lower == ".mp3":
+                        cant_audios += 1
+                        tipo_arch = "audio"
                     else:
                         cant_no_media += 1
                         tipo_arch = "otro"
@@ -513,6 +534,7 @@ def escanear_sala_espera_carpetas(ruta_destino_base: str,
                 "ruta_absoluta": ruta_cap,
                 "fotos": cant_fotos,
                 "videos": cant_vids,
+                "audios": cant_audios,
                 "no_multimedia": cant_no_media,
                 "total_archivos": len(archivos_lista),
                 "bytes_totales": bytes_totales,
@@ -1269,6 +1291,8 @@ def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
                 candidatos_archivos.append((p, rel_dir or sub_videos, nombre, "crudo", "videos sin editar", tam))
             elif tipo_arch == "foto":
                 candidatos_archivos.append((p, rel_dir or sub_fotos, nombre, "imagen", "imagenes", tam))
+            elif tipo_arch == "audio":
+                candidatos_archivos.append((p, rel_dir or 'audios', nombre, "audio", "audios", tam))
             else:
                 item_no_med = {
                     "personaje": pers,
@@ -1411,12 +1435,8 @@ def ejecutar_envio_pendrive(simulacion_o_capitulos: Any,
                             db: Optional[GestorBaseDatosBandeja] = None,
                             movimientos: Optional[Any] = None) -> Dict[str, Any]:
     """Ejecuta la transferencia física segura de archivos hacia el pendrive."""
-    global _operacion_pendrive_activa
-    _operacion_pendrive_activa = True
-    try:
+    with operacion_pendrive_exclusiva():
         return _ejecutar_envio_pendrive_interno(simulacion_o_capitulos, config, db, movimientos)
-    finally:
-        _operacion_pendrive_activa = False
 
 
 def _ejecutar_envio_pendrive_interno(simulacion_o_capitulos: Any,
@@ -1641,12 +1661,8 @@ def deshacer_envio_pendrive(id_operacion: str,
                             db: Optional[GestorBaseDatosBandeja] = None,
                             ruta_bitacora: Optional[str] = None) -> Dict[str, Any]:
     """Revierte una operación de envío al pendrive sin borrar absolutamente nada."""
-    global _operacion_pendrive_activa
-    _operacion_pendrive_activa = True
-    try:
+    with operacion_pendrive_exclusiva():
         return _deshacer_envio_pendrive_interno(id_operacion, operacion, config, db, ruta_bitacora)
-    finally:
-        _operacion_pendrive_activa = False
 
 
 def _deshacer_envio_pendrive_interno(id_operacion: str,

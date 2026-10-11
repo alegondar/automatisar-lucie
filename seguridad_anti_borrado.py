@@ -5,7 +5,9 @@ seguridad_anti_borrado.py
 
 Analizador estático de código basado en AST (Abstract Syntax Tree) que hace
 cumplir la Regla de Oro #1 y #7 del proyecto:
-PROHIBICIÓN ABSOLUTA DE BORRADO Y PISADO CIEGO.
+PROHIBICIÓN DE BORRADO AUTOMÁTICO Y PISADO CIEGO.
+Solo se admiten os.unlink(ruta) y os.rmdir(ruta) en el método manual confirmado
+GestorEliminacionPendrive.ejecutar (bandeja/eliminacion.py).
 
 Detecta y prohíbe las siguientes 11 primitivas:
 1. os.remove
@@ -161,6 +163,25 @@ def analizar_ast_codigo(codigo_fuente: str, nombre_archivo: str = "<codigo>") ->
     
     analizador = AnalizadorASTAntiBorrado(nombre_archivo=nombre_archivo)
     analizador.visit(arbol)
+    # Excepción manual autorizada: únicamente las dos llamadas explícitas dentro
+    # de GestorEliminacionPendrive.ejecutar. No se excluye ningún archivo completo.
+    ruta_norm = nombre_archivo.replace("\\", "/")
+    if ruta_norm.endswith("/bandeja/eliminacion.py") or ruta_norm == "bandeja/eliminacion.py":
+        permitidas = set()
+        for clase in arbol.body:
+            if isinstance(clase, ast.ClassDef) and clase.name == "GestorEliminacionPendrive":
+                for metodo in clase.body:
+                    if isinstance(metodo, ast.FunctionDef) and metodo.name == "ejecutar":
+                        for llamada in ast.walk(metodo):
+                            if (isinstance(llamada, ast.Call) and isinstance(llamada.func, ast.Attribute)
+                                    and isinstance(llamada.func.value, ast.Name)
+                                    and llamada.func.value.id == "os"
+                                    and llamada.func.attr in ("unlink", "rmdir")
+                                    and len(llamada.args) == 1 and not llamada.keywords
+                                    and isinstance(llamada.args[0], ast.Name)
+                                    and llamada.args[0].id == "ruta"):
+                                permitidas.add((llamada.lineno, llamada.col_offset))
+        return [v for v in analizador.infracciones if (v.linea, v.columna) not in permitidas]
     return analizador.infracciones
 
 

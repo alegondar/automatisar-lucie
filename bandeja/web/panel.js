@@ -65,6 +65,7 @@
     }
 
     function hayModalAbierto() {
+      if (document.getElementById('dialog-eliminacion')?.open || document.getElementById('dialog-eliminacion-imagen')?.open) return true;
       const idsModales = ['modal-simulacion', 'modal-terminar-capitulo', 'modal-descartar-capitulo', 'modal-plan-envio', 'modal-vincular-pendrive', 'modal-visor-media', 'modal-control-pendrive'];
       return idsModales.some(id => {
         const el = document.getElementById(id);
@@ -303,6 +304,8 @@
 
     function mostrarPestana(pestana, ev) {
       pestanaActual = pestana;
+      document.body?.classList?.toggle('vista-eliminacion', pestana === 'eliminacion');
+      if (pestana !== 'eliminacion') document.querySelectorAll('#sec-eliminacion video, #sec-eliminacion audio').forEach(m => m.pause());
       document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
       if (ev && ev.target) {
         ev.target.classList.add('active');
@@ -317,10 +320,13 @@
       document.getElementById('sec-capitulos-cerrados').style.display = (pestana === 'capitulos-cerrados') ? 'block' : 'none';
       document.getElementById('sec-descartados').style.display = (pestana === 'descartados') ? 'block' : 'none';
       document.getElementById('sec-pendrive').style.display = (pestana === 'pendrive') ? 'block' : 'none';
+      document.getElementById('sec-eliminacion').style.display = (pestana === 'eliminacion') ? 'block' : 'none';
       document.getElementById('sec-edicion').style.display = (pestana === 'edicion') ? 'block' : 'none';
       document.getElementById('sec-historial').style.display = (pestana === 'historial') ? 'block' : 'none';
 
-      if (pestana === 'historial') {
+      if (pestana === 'eliminacion') {
+        cargarEliminacion();
+      } else if (pestana === 'historial') {
         cargarHistorial();
       } else if (pestana === 'pendrive') {
         cargarVistaPendrive();
@@ -336,7 +342,9 @@
     }
 
     async function recargarVistaActual() {
-      if (pestanaActual === 'historial') {
+      if (pestanaActual === 'eliminacion') {
+        await cargarEliminacion();
+      } else if (pestanaActual === 'historial') {
         await cargarHistorial();
       } else if (pestanaActual === 'pendrive') {
         await cargarVistaPendrive();
@@ -1283,6 +1291,10 @@
     }
 
     function generarHtmlMiniatura(loteId, a) {
+      if (a.nombre && a.nombre.toLowerCase().endsWith('.mp3')) {
+        const src = a.id_media ? `/api/media?id=${encodeURIComponent(a.id_media)}` : '';
+        return `<div class="audio-thumb"><span>🎵 ${escapeHTML(a.nombre)}</span><audio controls preload="none" src="${src}"></audio></div>`;
+      }
       const esVid = esArchivoVideo(a.nombre);
       const mediaId = a.id_media || '';
       const fallbackSvg = `data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22><rect width=%22100%%22 height=%22100%%22 fill=%22%23222%22/><text x=%2250%%22 y=%2250%%22 fill=%22%23888%22 text-anchor=%22middle%22 dy=%22.3em%22>Media</text></svg>`;
@@ -1320,7 +1332,7 @@
         const cKey = loteId.slice(9);
         const cObj = (carpetasPendriveData || []).find(c => `${c.personaje}/${c.carpeta}` === cKey);
         if (cObj) {
-          listaArchivos = (cObj.archivos || []).filter(a => a.tipo === 'video' || a.tipo === 'foto');
+          listaArchivos = (cObj.archivos || []).filter(a => a.tipo === 'video' || a.tipo === 'foto' || a.tipo === 'audio');
         }
       } else {
         const todosLotes = (datosEstado.lotes || []).concat(datosEstado.lotes_anteriores || []);
@@ -1422,7 +1434,7 @@
       const mediaId = archivo.id_media || archivo.ruta_relativa || archivo.identificador || '';
       const srcUrl = `/api/media?id=${encodeURIComponent(mediaId)}`;
 
-      if (esArchivoVideo(archivo.nombre)) {
+      if (esArchivoVideo(archivo.nombre) || archivo.nombre.toLowerCase().endsWith('.mp3')) {
         if (vid) {
           vid.onerror = () => {
             vid.style.display = 'none';
@@ -2997,6 +3009,7 @@
                     <div style="display:flex; gap:4px; flex-wrap:wrap; align-items:center;">
                       <span class="tag-tipo tag-video">${c.videos} vid</span>
                       <span class="tag-tipo tag-imagen">${c.fotos} fot</span>
+                      ${c.audios ? `<span class="tag-tipo">${c.audios} aud</span>` : ''}
                       ${c.no_multimedia > 0 ? `<span class="tag-no-media" title="${c.no_multimedia} archivo(s) no multimedia (no se envían)">${c.no_multimedia} otros</span>` : ''}
                     </div>
                     <div style="font-size:0.8rem; color:var(--text-muted); margin-top:2px;">${escapeHTML(c.bytes_totales_fmt)}</div>
@@ -3059,7 +3072,7 @@
                             </thead>
                             <tbody>
                               ${(c.archivos || []).map(a => {
-                                const esMedia = (a.tipo === 'video' || a.tipo === 'foto');
+                                const esMedia = (a.tipo === 'video' || a.tipo === 'foto' || a.tipo === 'audio');
                                 const onclickVisor = esMedia ? `onclick="abrirVisorMedia('pendrive:${escapeHTML(cKey)}', '${escapeHTML(a.id_media)}')"` : '';
                                 const cursorStyle = esMedia ? 'cursor:pointer; text-decoration:underline;' : '';
                                 return `
@@ -4046,3 +4059,278 @@
     cargarDatos().then(() => {
       programarSiguienteSondeo();
     });
+
+    let planEliminacion = null;
+    let eliminacionEnCurso = false;
+
+    let carpetaEliminacionActual = '';
+    let carpetasEliminacion = [];
+    const seleccionEliminacion = new Set();
+    let cargaEliminacionEnCurso = false;
+
+    function actualizarSeleccionEliminacion() {
+      const cantidad = seleccionEliminacion.size;
+      document.getElementById('eliminacion-conteo').textContent = cantidad
+        ? `${cantidad} elemento${cantidad === 1 ? '' : 's'} seleccionado${cantidad === 1 ? '' : 's'}`
+        : 'Ningún elemento seleccionado';
+      const boton = document.getElementById('eliminacion-simular');
+      boton.disabled = !cantidad || eliminacionEnCurso || cargaEliminacionEnCurso;
+      boton.textContent = cantidad ? `Eliminar seleccionados (${cantidad})` : 'Eliminar seleccionados';
+      document.getElementById('eliminacion-limpiar').disabled = !cantidad || eliminacionEnCurso;
+      const resumen = document.getElementById('eliminacion-seleccion');
+      resumen.replaceChildren();
+      seleccionEliminacion.forEach(ruta => {
+        const chip = document.createElement('span');
+        chip.textContent = ruta;
+        resumen.append(chip);
+      });
+    }
+
+    let observadorMediosEliminacion = null;
+
+    function crearVistaPreviaEliminacion(entrada) {
+      const src = `/api/media?id=${encodeURIComponent(entrada.id_media)}`;
+      if (entrada.formato === 'imagen') {
+        const boton = document.createElement('button');
+        boton.type = 'button';
+        boton.className = 'eliminacion-miniatura';
+        boton.setAttribute('aria-label', `Ver imagen ${entrada.ruta}`);
+        const imagen = document.createElement('img');
+        imagen.src = src;
+        imagen.alt = entrada.ruta.split('/').at(-1);
+        imagen.loading = 'lazy';
+        imagen.width = 320;
+        imagen.height = 180;
+        imagen.addEventListener('error', () => { imagen.hidden = true; boton.textContent = 'Vista previa no disponible'; });
+        boton.append(imagen);
+        boton.addEventListener('click', () => {
+          const grande = document.getElementById('eliminacion-imagen-grande');
+          grande.src = src;
+          grande.alt = imagen.alt;
+          document.getElementById('eliminacion-imagen-titulo').textContent = imagen.alt;
+          document.getElementById('dialog-eliminacion-imagen').showModal();
+        });
+        return boton;
+      }
+      const contenedor = document.createElement('div');
+      contenedor.className = 'eliminacion-media';
+      const medio = document.createElement(entrada.formato === 'audio' ? 'audio' : 'video');
+      medio.controls = true;
+      medio.preload = 'none';
+      medio.setAttribute('aria-label', `Reproducir ${entrada.ruta}`);
+      if (entrada.formato === 'audio') {
+        const icono = document.createElement('span');
+        icono.className = 'eliminacion-audio-icono';
+        icono.textContent = '♫';
+        icono.setAttribute('aria-hidden', 'true');
+        contenedor.append(icono);
+        medio.src = src;
+      } else {
+        medio.width = 320;
+        medio.height = 180;
+        medio.playsInline = true;
+        medio.dataset.src = src;
+        medio.addEventListener('loadedmetadata', () => { if (medio.duration > .1) medio.currentTime = .1; }, {once: true});
+      }
+      const aviso = document.createElement('span');
+      aviso.className = 'eliminacion-previa-error';
+      aviso.hidden = true;
+      aviso.textContent = 'El navegador no puede reproducir este formato.';
+      medio.addEventListener('error', () => { aviso.hidden = false; });
+      contenedor.append(medio, aviso);
+      return contenedor;
+    }
+
+    function activarPreviaMediosEliminacion() {
+      const videos = document.querySelectorAll('#eliminacion-lista video[data-src]');
+      function cargar(video) {
+        video.preload = 'metadata';
+        video.src = video.dataset.src;
+        delete video.dataset.src;
+      }
+      if (typeof IntersectionObserver === 'undefined') { videos.forEach(cargar); return; }
+      observadorMediosEliminacion = new IntersectionObserver(entries => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) { cargar(entry.target); observadorMediosEliminacion.unobserve(entry.target); }
+        });
+      }, {rootMargin: '150px'});
+      videos.forEach(v => observadorMediosEliminacion.observe(v));
+    }
+
+    function mostrarCarpetasEliminacion(carpeta = '') {
+      document.querySelectorAll('#eliminacion-lista video, #eliminacion-lista audio').forEach(m => m.pause());
+      observadorMediosEliminacion?.disconnect();
+      carpetaEliminacionActual = carpeta;
+      const ubicacion = document.getElementById('eliminacion-ruta');
+      ubicacion.replaceChildren();
+      const partes = carpeta ? carpeta.split('/') : [];
+      ['LucieSinReglas', ...partes].forEach((nombre, index) => {
+        const boton = document.createElement('button');
+        boton.type = 'button';
+        boton.textContent = nombre;
+        boton.setAttribute('aria-label', nombre);
+        if (index === partes.length) boton.setAttribute('aria-current', 'location');
+        boton.addEventListener('click', () => mostrarCarpetasEliminacion(partes.slice(0, index).join('/')));
+        ubicacion.append(boton);
+      });
+      const lista = document.getElementById('eliminacion-lista');
+      lista.replaceChildren();
+      const leyenda = document.createElement('legend');
+      leyenda.textContent = carpeta ? `Contenido de ${partes.at(-1)}` : 'Carpetas y multimedia del proyecto';
+      lista.append(leyenda);
+      const visibles = carpetasEliminacion.filter(entrada => {
+        const idx = entrada.ruta.lastIndexOf('/');
+        return (idx < 0 ? '' : entrada.ruta.slice(0, idx)) === carpeta;
+      });
+      visibles.forEach(entrada => {
+        const tarjeta = document.createElement('div');
+        tarjeta.className = 'eliminacion-carpeta';
+        const etiqueta = document.createElement('label');
+        const check = document.createElement('input');
+        check.type = 'checkbox';
+        check.value = entrada.ruta;
+        check.checked = seleccionEliminacion.has(entrada.ruta);
+        check.setAttribute('aria-label', `Seleccionar ${entrada.ruta}`);
+        check.addEventListener('change', () => {
+          if (check.checked) seleccionEliminacion.add(entrada.ruta);
+          else seleccionEliminacion.delete(entrada.ruta);
+          actualizarSeleccionEliminacion();
+        });
+        const nombre = document.createElement('span');
+        nombre.textContent = entrada.ruta.split('/').at(-1);
+        const icono = document.createElement('span');
+        icono.className = 'eliminacion-icono';
+        icono.textContent = entrada.tipo === 'carpeta' ? '📁' : (entrada.formato === 'audio' ? '🎵' : (entrada.formato === 'video' ? '🎬' : '🖼️'));
+        icono.setAttribute('aria-hidden', 'true');
+        etiqueta.append(check, icono, nombre);
+        tarjeta.append(etiqueta);
+        if (entrada.tipo === 'carpeta') {
+          const abrir = document.createElement('button');
+          abrir.type = 'button';
+          abrir.className = 'eliminacion-abrir';
+          abrir.textContent = 'Abrir →';
+          abrir.setAttribute('aria-label', `Abrir ${entrada.ruta}`);
+          abrir.addEventListener('click', () => mostrarCarpetasEliminacion(entrada.ruta));
+          tarjeta.append(abrir);
+        } else {
+          tarjeta.classList.add('eliminacion-archivo');
+          tarjeta.append(crearVistaPreviaEliminacion(entrada));
+          const info = document.createElement('small');
+          info.textContent = `${entrada.formato.toUpperCase()} · ${(entrada.tamano / 1024 / 1024).toFixed(2)} MB`;
+          tarjeta.append(info);
+        }
+        lista.append(tarjeta);
+      });
+      if (!visibles.length) {
+        const vacio = document.createElement('p');
+        vacio.className = 'eliminacion-vacio';
+        vacio.textContent = carpeta ? 'No hay subcarpetas, videos, imágenes ni MP3 en esta carpeta.' : 'No hay carpetas ni multimedia disponibles en el proyecto.';
+        lista.append(vacio);
+      }
+      activarPreviaMediosEliminacion();
+      actualizarSeleccionEliminacion();
+    }
+
+    async function cargarEliminacion(forzar = false) {
+      if (!document.getElementById('eliminacion-lista') || eliminacionEnCurso || cargaEliminacionEnCurso || (!forzar && seleccionEliminacion.size)) return;
+      const estado = document.getElementById('eliminacion-estado');
+      cargaEliminacionEnCurso = true;
+      actualizarSeleccionEliminacion();
+      estado.textContent = 'Cargando carpetas del proyecto…';
+      try {
+        const datos = await apiFetch('/api/pendrive/eliminacion');
+        carpetasEliminacion = datos.entradas;
+        document.getElementById('eliminacion-raiz').textContent = datos.ruta_proyecto;
+        const disponibles = new Set(carpetasEliminacion.map(e => e.ruta));
+        seleccionEliminacion.forEach(ruta => { if (!disponibles.has(ruta)) seleccionEliminacion.delete(ruta); });
+        if (carpetaEliminacionActual && !carpetasEliminacion.some(e => e.ruta === carpetaEliminacionActual && e.tipo === 'carpeta')) carpetaEliminacionActual = '';
+        mostrarCarpetasEliminacion(carpetaEliminacionActual);
+        estado.textContent = 'Marcá los elementos que quieras eliminar y presioná Eliminar seleccionados.';
+      } catch (e) {
+        carpetasEliminacion = [];
+        seleccionEliminacion.clear();
+        mostrarCarpetasEliminacion();
+        document.getElementById('eliminacion-raiz').textContent = 'Pendrive no disponible';
+        estado.textContent = e.message;
+      } finally {
+        cargaEliminacionEnCurso = false;
+        actualizarSeleccionEliminacion();
+      }
+    }
+
+    async function simularEliminacion() {
+      const seleccion = Array.from(seleccionEliminacion);
+      const boton = document.getElementById('eliminacion-simular');
+      boton.disabled = true;
+      document.getElementById('eliminacion-estado').textContent = 'Preparando la revisión de los elementos seleccionados…';
+      try {
+        planEliminacion = await apiFetch('/api/pendrive/eliminacion-simular', {
+          method: 'POST', body: JSON.stringify({seleccion})
+        });
+        const detalle = document.getElementById('eliminacion-detalle');
+        detalle.replaceChildren();
+        planEliminacion.entradas.forEach(e => {
+          const li = document.createElement('li');
+          li.textContent = `${e.tipo}: ${e.ruta} (${e.tamano} bytes)`;
+          detalle.append(li);
+        });
+        document.getElementById('eliminacion-resumen').textContent = `${planEliminacion.entradas.length} elementos · ${planEliminacion.total_bytes} bytes · Pendrive ${planEliminacion.pendrive_id}`;
+        document.getElementById('eliminacion-confirmacion').value = '';
+        document.getElementById('eliminacion-ejecutar').disabled = true;
+        document.getElementById('dialog-eliminacion').showModal();
+      } catch (e) { document.getElementById('eliminacion-estado').textContent = e.message; }
+      finally { boton.disabled = seleccion.length === 0; }
+    }
+
+    async function ejecutarEliminacionManual() {
+      const confirmacion = document.getElementById('eliminacion-confirmacion').value;
+      if (!planEliminacion || confirmacion !== 'ELIMINAR' || eliminacionEnCurso) return;
+      eliminacionEnCurso = true;
+      const boton = document.getElementById('eliminacion-ejecutar');
+      const cancelar = document.getElementById('eliminacion-cancelar');
+      boton.disabled = cancelar.disabled = true;
+      const estado = document.getElementById('eliminacion-estado');
+      estado.textContent = 'Eliminando los elementos confirmados…';
+      try {
+        const resultado = await apiFetch('/api/pendrive/eliminar', {
+          method: 'POST', body: JSON.stringify({token: planEliminacion.token, confirmacion})
+        });
+        document.getElementById('dialog-eliminacion').close();
+        eliminacionEnCurso = false;
+        seleccionEliminacion.clear();
+        await cargarEliminacion(true);
+        estado.textContent = `Eliminados: ${resultado.eliminados.length}. ` +
+          (resultado.errores.length ? `Se detuvo: ${resultado.errores.map(e => `${e.ruta}: ${e.error}`).join('; ')}` : 'Borrado manual completado.');
+      } catch (e) {
+        document.getElementById('dialog-eliminacion').close();
+        estado.textContent = `${e.message} Revisá el estado del pendrive antes de volver a simular.`;
+      } finally {
+        planEliminacion = null;
+        eliminacionEnCurso = false;
+        cancelar.disabled = false;
+      }
+    }
+
+    function conectarEliminacionManual() {
+      const eventos = [
+        ['nav-btn-eliminacion', 'click', () => mostrarPestana('eliminacion')],
+        ['eliminacion-refrescar', 'click', () => cargarEliminacion(true)],
+        ['eliminacion-limpiar', 'click', () => {
+          seleccionEliminacion.clear();
+          mostrarCarpetasEliminacion(carpetaEliminacionActual);
+        }],
+        ['eliminacion-simular', 'click', simularEliminacion],
+        ['eliminacion-ejecutar', 'click', ejecutarEliminacionManual],
+        ['eliminacion-confirmacion', 'input', e => {
+          document.getElementById('eliminacion-ejecutar').disabled = eliminacionEnCurso || e.target.value !== 'ELIMINAR';
+        }],
+        ['eliminacion-cancelar', 'click', () => document.getElementById('dialog-eliminacion').close()],
+        ['dialog-eliminacion', 'cancel', e => { if (eliminacionEnCurso) e.preventDefault(); }],
+        ['dialog-eliminacion', 'close', () => { planEliminacion = null; }]
+      ];
+      eventos.forEach(([id, tipo, fn]) => {
+        const el = document.getElementById(id);
+        if (el && typeof el.addEventListener === 'function') el.addEventListener(tipo, fn);
+      });
+    }
+    conectarEliminacionManual();

@@ -11,10 +11,10 @@ El sistema coordina la captura no invasiva de descargas de inteligencia artifici
 
 ## 🛡️ Las 7 Reglas de Oro de Seguridad
 
-Dado el valor irreemplazable de las creaciones y grabaciones, toda la plataforma opera bajo siete principios inmutables:
+Dado el valor irreemplazable de las creaciones y grabaciones, toda la plataforma opera bajo siete principios de seguridad:
 
-1. **Prohibición Absoluta de Borrado y Pisado Ciego:**  
-   Queda estrictamente prohibida la invocación de primitivas destructivas del sistema operativo (`os.remove`, `os.unlink`, `os.rmdir`, `os.removedirs`, `shutil.rmtree`, `shutil.move`, `os.replace`, `send2trash` o comandos de shell con `rm`). Los descartes se trasladan a carpetas protegidas (`_descartados/`) preservando cada byte original.
+1. **Prohibición de Borrado Automático y Pisado Ciego:**
+   Fuera del flujo manual confirmado, queda estrictamente prohibida la invocación de primitivas destructivas del sistema operativo (`os.remove`, `os.unlink`, `os.rmdir`, `os.removedirs`, `shutil.rmtree`, `shutil.move`, `os.replace`, `send2trash` o comandos de shell con `rm`). Los descartes se trasladan a carpetas protegidas (`_descartados/`) preservando cada byte original. Excepción: en «Eliminar capítulos» el usuario puede seleccionar carpetas o archivos multimedia dentro del proyecto LucieSinReglas del pendrive, revisar la simulación y escribir ELIMINAR para borrarlos permanentemente. Se protegen la raíz, los metadatos y los enlaces; se revalida identidad y contenido antes de ejecutar.
 2. **Simulación Previa Obligatoria (Dry-Run):**  
    Ningún archivo se traslada o copia sin generar antes una simulación detallada que exponga los orígenes, los destinos exactos calculados, los tamaños y el estado del almacenamiento.
 3. **Aprobación Granular por el Usuario:**  
@@ -24,9 +24,9 @@ Dado el valor irreemplazable de las creaciones y grabaciones, toda la plataforma
 5. **Verificación de Integridad por SHA-256 y Atomicidad:**  
    La transferencia hacia pendrives se realiza escribiendo en archivos temporales `.part`, sincronizando buffers físicos con `fsync` y verificando la coincidencia exacta de hash SHA-256 antes del renombrado final.
 6. **Bitácora Append-Only y Operaciones Reversibles:**  
-   Cada movimiento queda documentado en bitácoras cronológicas `.jsonl`. El sistema cuenta con mecanismos de deshacer (`/api/deshacer`) capaces de retornar los archivos a su ubicación original sin colisiones.
+   Cada eliminación manual se registra en `.lucie/eliminaciones.jsonl` y es irreversible, sin opción de deshacer. Cada movimiento queda documentado en bitácoras cronológicas `.jsonl`. El sistema cuenta con mecanismos de deshacer (`/api/deshacer`) capaces de retornar los archivos a su ubicación original sin colisiones.
 7. **Verificación Estática Continua (AST):**  
-   Un analizador sintáctico automatizado ([`seguridad_anti_borrado.py`](seguridad_anti_borrado.py)) audita el árbol de sintaxis abstracta de cada archivo operativo, garantizando que ninguna actualización introduzca código destructivo.
+   Un analizador sintáctico automatizado ([`seguridad_anti_borrado.py`](seguridad_anti_borrado.py)) audita el árbol de sintaxis abstracta de cada archivo operativo, prohibiendo el borrado automático y el pisado. Solo admite las dos primitivas del método manual `GestorEliminacionPendrive.ejecutar`; las pruebas verifican su confinamiento y confirmación.
 
 ---
 
@@ -77,7 +77,7 @@ Dado el valor irreemplazable de las creaciones y grabaciones, toda la plataforma
 * [`bandeja_descargas.py`](bandeja_descargas.py): Punto de inicio principal para arrancar el servidor de la bandeja de descargas.
 * [`inventario_pendrive.py`](inventario_pendrive.py): Herramienta CLI de auditoría en modo estrictamente de solo lectura para unidades USB (duplicados globales por SHA-256, desglose de carpetas y duraciones).
 * [`plan_limpieza.py`](plan_limpieza.py): Generador y validador de planes de ordenamiento y limpieza simulada (dry-run).
-* [`seguridad_anti_borrado.py`](seguridad_anti_borrado.py): Analizador estático AST que valida la ausencia de primitivas destructivas en todos los módulos operativos.
+* [`seguridad_anti_borrado.py`](seguridad_anti_borrado.py): Analizador AST que prohíbe las primitivas destructivas fuera del método de eliminación manual confirmado.
 * [`auditar_repo.py`](auditar_repo.py): Auditor integral del repositorio que inspecciona archivos rastreados y el historial de Git en busca de credenciales, secretos, datos personales o archivos pesados.
 * [`instalar_hooks.py`](instalar_hooks.py): Instalador seguro de creación exclusiva del hook Git `pre-push`.
 * [`verificar_windows.py`](verificar_windows.py): Diagnóstico de compatibilidad de entorno y rutas reservadas para Windows.
@@ -121,7 +121,7 @@ env HOME=/tmp/homefalso python3 -m unittest discover -s . -p "test_*.py"
 
 ### Auditoría AST Anti-Borrado (Regla de Oro #1 y #7)
 
-Valida que ningún archivo operativo invoque llamadas de borrado o sobrescritura ciega:
+Valida la prohibición de borrado automático y sobrescritura ciega, con la excepción explícita del método manual confirmado:
 
 ```bash
 python3 seguridad_anti_borrado.py .
@@ -148,3 +148,10 @@ python3 instalar_hooks.py
 * El script instala `.git/hooks/pre-push` de forma segura.
 * **Garantía de creación exclusiva:** Si ya existe un hook configurado, no lo sobrescribe.
 * Al ejecutar cualquier comando `git push`, el hook ejecutará automáticamente `python3 auditar_repo.py --historial` y cancelará el envío si se detecta alguna anomalía.
+
+### Audio MP3
+
+El uso, las garantías del borrado manual y las limitaciones conocidas están
+documentados en [Dashboard: eliminación y MP3](docs/dashboard-eliminacion-y-mp3.md).
+
+Los `.mp3` se detectan como multimedia. Con alias conocido o capítulo en foco se incorporan a lotes; los demás aparecen en «Sin identificar» y pueden adoptarse con «Del proyecto». Se trasladan a `audios/` conservando su nombre, sin sobrescribir, y se envían al pendrive bajo `audios/<personaje>/<capítulo>/`.

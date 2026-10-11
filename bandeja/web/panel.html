@@ -48,12 +48,49 @@
     <button class="nav-btn" id="nav-btn-capitulos-cerrados" onclick="mostrarPestana('capitulos-cerrados', event)">Capítulos Cerrados</button>
     <button class="nav-btn" id="nav-btn-descartados" onclick="mostrarPestana('descartados', event)">Descartados</button>
     <button class="nav-btn" id="nav-btn-pendrive" onclick="mostrarPestana('pendrive', event)">Pendrive</button>
+    <button class="nav-btn" id="nav-btn-eliminacion" type="button">Eliminar capítulos</button>
     <button class="nav-btn" id="nav-btn-edicion" onclick="mostrarPestana('edicion', event)">Edición</button>
     <button class="nav-btn" id="nav-btn-historial" onclick="mostrarPestana('historial', event)">Historial</button>
     <button class="nav-btn" onclick="recargarVistaActual()">Refrescar</button>
   </nav>
 
   <main>
+    <section id="sec-eliminacion" style="display:none;">
+      <div class="eliminacion-cabecera">
+        <div><h2>Eliminar carpetas y archivos del proyecto</h2>
+        <p>Marcá carpetas, videos, imágenes o MP3. Abrí una carpeta para revisar su contenido. El borrado es permanente.</p></div>
+        <button id="eliminacion-refrescar" class="btn-sm" type="button">Actualizar</button>
+      </div>
+      <div class="eliminacion-ubicacion"><span>Proyecto en el pendrive</span><code id="eliminacion-raiz">LucieSinReglas</code></div>
+      <div class="eliminacion-barra">
+        <span id="eliminacion-conteo">Ningún elemento seleccionado</span>
+        <div class="eliminacion-acciones">
+          <button id="eliminacion-limpiar" class="btn-sm" type="button" disabled>Quitar selección</button>
+          <button id="eliminacion-simular" class="btn-sm" type="button" disabled>Eliminar seleccionados</button>
+        </div>
+      </div>
+      <div id="eliminacion-seleccion" class="eliminacion-seleccion" aria-label="Elementos seleccionados"></div>
+      <nav id="eliminacion-ruta" class="eliminacion-ruta" aria-label="Ubicación dentro del proyecto"></nav>
+      <fieldset id="eliminacion-lista"><legend>Carpetas del proyecto</legend></fieldset>
+      <p id="eliminacion-estado" role="status" aria-live="polite"></p>
+    </section>
+    <dialog id="dialog-eliminacion" aria-labelledby="eliminacion-titulo">
+      <h2 id="eliminacion-titulo">Confirmar eliminación permanente</h2>
+      <p id="eliminacion-resumen"></p>
+      <p>Se eliminarán únicamente los siguientes elementos. Esta acción no se puede deshacer.</p>
+      <ul id="eliminacion-detalle"></ul>
+      <label for="eliminacion-confirmacion">Escribí ELIMINAR para confirmar</label>
+      <input id="eliminacion-confirmacion" autocomplete="off">
+      <div class="eliminacion-acciones">
+        <button id="eliminacion-cancelar" class="btn-sm" type="button" autofocus>Cancelar</button>
+        <button id="eliminacion-ejecutar" class="btn-sm" type="button" disabled>Eliminar permanentemente</button>
+      </div>
+    </dialog>
+    <dialog id="dialog-eliminacion-imagen" aria-labelledby="eliminacion-imagen-titulo">
+      <h2 id="eliminacion-imagen-titulo">Vista previa</h2>
+      <img id="eliminacion-imagen-grande" alt="">
+      <form method="dialog"><button class="btn-sm" type="submit" autofocus>Cerrar vista previa</button></form>
+    </dialog>
     <!-- Alerta de capítulo olvidado (>12h) -->
     <div id="banner-capitulo-olvidado" class="banner-capitulo-olvidado" style="display:none;">
       <div id="banner-olvidado-texto" style="font-weight:600; font-size:0.95rem;">
