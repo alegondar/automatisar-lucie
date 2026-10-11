@@ -50,6 +50,7 @@ from bandeja.plataforma import (
     notificar_escritorio,
     normalizar_ruta_relativa_posix,
     convertir_ruta_relativa_a_local,
+    verificar_archivo_exclusivo,
 )
 from bandeja.lotes import (
     obtener_fecha_llegada,
@@ -491,6 +492,35 @@ class TestPlataformaExclusivaSO(unittest.TestCase):
         sock.setsockopt(socket.SOL_SOCKET, so_excl, 1)
         sock.bind(("127.0.0.1", 0))
         sock.close()
+
+    @unittest.skipUnless(os.name == "nt", "Prueba exclusiva para entorno Windows nativo")
+    def test_verificar_archivo_exclusivo_windows(self):
+        """Verifica que verificar_archivo_exclusivo detecte archivo en uso mientras otro manejador lo tiene abierto para escritura."""
+        import msvcrt
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ruta = os.path.join(tmp_dir, "archivo_test_exclusivo.mp4")
+            with open(ruta, "wb") as f:
+                f.write(b"datos de prueba para bloqueo exclusivo")
+
+            h = open(ruta, "r+b")
+            try:
+                msvcrt.locking(h.fileno(), msvcrt.LK_NBLCK, 1)
+                self.assertFalse(
+                    verificar_archivo_exclusivo(ruta),
+                    f"El archivo '{ruta}' debe indicar 'en uso' (False) mientras otro manejador lo tiene abierto para escritura",
+                )
+            finally:
+                try:
+                    msvcrt.locking(h.fileno(), msvcrt.LK_UNLCK, 1)
+                except Exception:
+                    pass
+                h.close()
+
+            self.assertTrue(
+                verificar_archivo_exclusivo(ruta),
+                f"El archivo '{ruta}' debe indicar libre (True) una vez que el manejador se cierra",
+            )
 
     @unittest.skipUnless(os.name == "posix", "Prueba exclusiva para entorno Linux / POSIX")
     def test_nativa_linux_proc_mounts_existencia(self):
