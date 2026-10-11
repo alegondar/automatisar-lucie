@@ -121,14 +121,31 @@ def verificar_archivo_exclusivo(ruta: str) -> bool:
     try:
         modo = "r+b" if os.access(ruta, os.W_OK) else "rb"
         if os.name == "nt":
-            import msvcrt
-            with open(ruta, modo) as f:
-                try:
-                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
-                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
-                    return True
-                except (OSError, IOError, PermissionError):
-                    return False
+            import ctypes
+            from ctypes import wintypes
+
+            # Mantener la apertura Python bajo la guardia hermetica de tests.
+            with open(ruta, "rb"):
+                pass
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            crear_archivo = kernel32.CreateFileW
+            crear_archivo.argtypes = (
+                wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+            )
+            crear_archivo.restype = wintypes.HANDLE
+            cerrar_handle = kernel32.CloseHandle
+            cerrar_handle.argtypes = (wintypes.HANDLE,)
+            cerrar_handle.restype = wintypes.BOOL
+            # GENERIC_READ, sin comparticion, OPEN_EXISTING: nunca crea ni pisa.
+            # Un bloqueo de bytes msvcrt no detecta escritores sin bloqueo explicito.
+            handle = crear_archivo(os.fspath(ruta), 0x80000000, 0, None, 3, 0x80, None)
+            if handle == wintypes.HANDLE(-1).value:
+                return False
+            try:
+                return True
+            finally:
+                cerrar_handle(handle)
         else:
             import fcntl
             with open(ruta, modo) as f:

@@ -196,6 +196,27 @@ class TestVigilanteCapCut(unittest.TestCase):
         self.assertEqual(vigilante.tomar_fotografia_inicial(), 0)
         self.assertEqual(vigilante.escanear(), [])
 
+    @unittest.skipUnless(os.name == "nt", "Requiere la semantica de comparticion de archivos de Windows")
+    def test_export_en_subcarpeta_espera_cierre_del_escritor(self):
+        vigilante = VigilanteCapCut(ruta_capcut=self.tmp_dir, sondeos_estabilidad=1)
+        self.assertEqual(vigilante.tomar_fotografia_inicial(), 0)
+        ruta = os.path.join(self.tmp_dir, "Proyecto (01)", "Exports", "0818(15).mp4")
+        os.makedirs(os.path.dirname(ruta))
+        contenido = b"export temporal de CapCut"
+        with open(ruta, "xb") as escritor:
+            escritor.write(contenido)
+            escritor.flush()
+            self.assertEqual(vigilante.escanear(), [], "No debe emitir un export abierto para escritura")
+        nuevos = vigilante.escanear()
+        self.assertEqual(len(nuevos), 1)
+        self.assertEqual(nuevos[0]["nombre"], "0818(15).mp4")
+        self.assertEqual(nuevos[0]["ruta_absoluta"], ruta)
+        self.assertEqual(nuevos[0]["carpeta_relativa"], os.path.join("Proyecto (01)", "Exports"))
+        self.assertEqual(nuevos[0]["tamano"], len(contenido))
+        self.assertEqual(vigilante.escanear(), [])
+        with open(ruta, "rb") as lector:
+            self.assertEqual(lector.read(), contenido)
+
     def test_vigilante_capcut_nombres_con_parentesis_y_subcarpetas(self):
         """Ejercita el vigilante con nombres de export estilo CapCut '0818(15).mp4' y subcarpetas anidadas."""
         vigilante = VigilanteCapCut(

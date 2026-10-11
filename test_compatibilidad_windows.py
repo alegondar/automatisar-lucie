@@ -522,6 +522,19 @@ class TestPlataformaExclusivaSO(unittest.TestCase):
                 f"El archivo '{ruta}' debe indicar libre (True) una vez que el manejador se cierra",
             )
 
+    @unittest.skipUnless(os.name == "nt", "Requiere la semantica de comparticion de archivos de Windows")
+    def test_archivo_abierto_para_escritura_sin_bloqueo_explicito(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ruta = os.path.join(tmp_dir, "0818(15).mp4")
+            contenido = b"export en curso"
+            with open(ruta, "xb") as escritor:
+                escritor.write(contenido)
+                escritor.flush()
+                self.assertFalse(verificar_archivo_exclusivo(ruta), "El escritor abierto debe indicar en uso")
+            self.assertTrue(verificar_archivo_exclusivo(ruta), "Al cerrar el escritor debe indicar libre")
+            with open(ruta, "rb") as lector:
+                self.assertEqual(lector.read(), contenido)
+
     @unittest.skipUnless(os.name == "posix", "Prueba exclusiva para entorno Linux / POSIX")
     def test_nativa_linux_proc_mounts_existencia(self):
         # Se ejecuta únicamente si el host real es Linux / POSIX
