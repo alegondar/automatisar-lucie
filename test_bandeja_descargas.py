@@ -57,6 +57,16 @@ def setUpModule():
     guardia_hermetica.activar_guardia()
 
 
+def crear_symlink_o_saltar(test, destino, enlace, *, directorio=False):
+    """Saltar solo cuando Windows niega el privilegio de crear el enlace real."""
+    try:
+        os.symlink(destino, enlace, target_is_directory=directorio)
+    except OSError as exc:
+        if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+            test.skipTest("Windows no habilita symlinks: falta privilegio (WinError 1314) o modo desarrollador")
+        raise
+
+
 class TestListaBlancaYBandeja(unittest.TestCase):
     """Pruebas del filtro de lista blanca y clasificación de archivos."""
 
@@ -2597,7 +2607,6 @@ class TestDescartarCapitulo(unittest.TestCase):
         )
         self.assertFalse(valido_res)
 
-    @unittest.skipUnless(os.name == "posix", "Requiere enlaces simbólicos sin privilegios (POSIX)")
     def test_confinamiento_symlink_saliente_rechazado(self):
         """Enlaces simbólicos que apunten fuera de _lucie se rechazan tajantemente."""
         cap = self.db.empezar_capitulo("lucie", "test_symlink")
@@ -2610,7 +2619,7 @@ class TestDescartarCapitulo(unittest.TestCase):
             f.write(b"fuera de lucie")
 
         symlink_path = os.path.join(carpeta_escena, "link_peligroso.txt")
-        os.symlink(archivo_afuera, symlink_path)
+        crear_symlink_o_saltar(self, archivo_afuera, symlink_path)
 
         with self.assertRaises(ErrorSeguridadBandeja):
             self.movimientos.simular_descartar_capitulo(cap["id"])
@@ -5119,7 +5128,6 @@ class TestVistaPreviaMedia(unittest.TestCase):
         )
         self.assertEqual(status, 403)
 
-    @unittest.skipUnless(os.name == "posix", "Requiere enlaces simbólicos sin privilegios (POSIX)")
     def test_api_media_seguridad_symlink_escape(self):
         """Symlink que escapa de las raíces permitidas es rechazado con 403."""
         # Archivo externo y symlink que escapa de Descargas
@@ -5128,7 +5136,7 @@ class TestVistaPreviaMedia(unittest.TestCase):
             f.write(b"EXTERNO_NO_PERMITIDO")
 
         ruta_symlink = os.path.join(self.descargas, "grok-video-symlink_escape.mp4")
-        os.symlink(ruta_externa, ruta_symlink)
+        crear_symlink_o_saltar(self, ruta_externa, ruta_symlink)
         self.detector._historial_tamanio[ruta_symlink] = (len(b"EXTERNO_NO_PERMITIDO"), time.time() - 10.0)
 
         self.vigilante.escanear()
@@ -5583,7 +5591,6 @@ class TestListaEnvioPendrivePorCarpetas(unittest.TestCase):
         self.assertIn("visible.mp4", nombres_profundo)
         self.assertNotIn("ignorado.mp4", nombres_profundo)
 
-    @unittest.skipUnless(os.name == "posix", "Requiere enlaces simbólicos sin privilegios (POSIX)")
     def test_escaneo_no_sigue_symlinks_externos(self):
         """followlinks=False no sigue symlinks externos."""
         from bandeja.pendrive import escanear_sala_espera_carpetas
@@ -5594,7 +5601,7 @@ class TestListaEnvioPendrivePorCarpetas(unittest.TestCase):
         dir_cap = os.path.join(self.destino, "lucie", "cap_seguro")
         os.makedirs(dir_cap, exist_ok=True)
         link_path = os.path.join(dir_cap, "enlace_afuera")
-        os.symlink(fuera, link_path)
+        crear_symlink_o_saltar(self, fuera, link_path, directorio=True)
 
         res = escanear_sala_espera_carpetas(self.destino, db=self.db)
         mapa = {c["carpeta"]: c for c in res}

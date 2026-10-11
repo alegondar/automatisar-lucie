@@ -79,8 +79,10 @@ class TestSeguridadYConfinamiento(unittest.TestCase):
         symlink_dentro = os.path.join(self.tmp_dir, "enlace_trampa.txt")
         try:
             os.symlink(archivo_externo, symlink_dentro)
-        except OSError:
-            self.skipTest("El sistema no permite crear symlinks sin privilegios.")
+        except OSError as exc:
+            if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+                self.skipTest("Windows no habilita symlinks: falta privilegio (WinError 1314) o modo desarrollador")
+            raise
 
         # Debe ser rechazado porque realpath apunta fuera de la raíz
         self.assertFalse(esta_dentro_de_raiz(symlink_dentro, self.tmp_dir))
