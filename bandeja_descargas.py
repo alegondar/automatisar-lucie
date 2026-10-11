@@ -25,6 +25,9 @@ from typing import Dict, List, Optional, Set, Tuple, Any, Union
 
 from bandeja import *
 from bandeja.servidor import HandlerServidorBandeja, crear_servidor, GeneradorMiniaturas
+from bandeja.capcut import VigilanteCapCut
+from bandeja.edicion import vincular_nuevo_export, procesar_exports_pendientes_copia
+from bandeja.pendrive import detectar_pendrive
 
 # Reconfiguración de consola para evitar fallos de codificación en Windows
 if hasattr(sys.stdout, "reconfigure"):
@@ -38,6 +41,27 @@ if not logger.handlers:
     _handler_log.setFormatter(logging.Formatter("[%(asctime)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
     logger.addHandler(_handler_log)
     logger.setLevel(logging.INFO)
+
+
+def crear_vigilante_capcut(config, db, ruta_bitacora):
+    def punto_montaje():
+        info = detectar_pendrive(config)
+        if info and info.get("conectado"):
+            return info.get("punto_montaje") or info.get("ruta_montaje")
+        return None
+
+    def nuevo_export(info):
+        vincular_nuevo_export(info, punto_montaje(), db, config.carpeta_raiz_pendrive,
+                             ruta_bitacora, copiar_automaticamente=config.envio_exports_capcut == "automatico")
+
+    def procesar_pendientes():
+        punto = punto_montaje()
+        if punto:
+            procesar_exports_pendientes_copia(punto, db, config.carpeta_raiz_pendrive, ruta_bitacora)
+
+    return VigilanteCapCut(config.obtener_carpeta_exportacion_capcut(),
+                          extensiones_temporales=config.extensiones_temporales_capcut,
+                          callback_nuevo_export=nuevo_export, callback_sondeo=procesar_pendientes)
 
 
 def main():
@@ -67,10 +91,12 @@ def main():
     miniaturas = GeneradorMiniaturas(db)
 
     vigilante = VigilanteBandeja(config, db, filtro, detector, agrupador)
+    vigilante_capcut = crear_vigilante_capcut(config, db, movimientos.ruta_bitacora)
 
     token_csrf = secrets.token_urlsafe(32)
     try:
-        servidor = crear_servidor(config, db, vigilante, movimientos, miniaturas, token_csrf=token_csrf)
+        servidor = crear_servidor(config, db, vigilante, movimientos, miniaturas, token_csrf=token_csrf,
+                                 vigilante_capcut=vigilante_capcut)
     except OSError as e:
         err_str = str(e).lower()
         err_code = getattr(e, "winerror", None) or getattr(e, "errno", None)
@@ -80,6 +106,7 @@ def main():
         raise
 
     vigilante.iniciar()
+    vigilante_capcut.iniciar()
 
     print(f"[*] Bandeja de Descargas iniciada en http://{config.host_servidor}:{config.puerto_servidor}")
     print(f"[*] Vigilando: {config.ruta_descargas}")
@@ -91,6 +118,7 @@ def main():
         print("\n[*] Deteniendo servidor y vigilante...")
     finally:
         vigilante.detener()
+        vigilante_capcut.detener()
         servidor.server_close()
 
 

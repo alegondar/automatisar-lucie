@@ -49,6 +49,7 @@
     <button class="nav-btn" id="nav-btn-descartados" onclick="mostrarPestana('descartados', event)">Descartados</button>
     <button class="nav-btn" id="nav-btn-pendrive" onclick="mostrarPestana('pendrive', event)">Pendrive</button>
     <button class="nav-btn" id="nav-btn-edicion" onclick="mostrarPestana('edicion', event)">Edición</button>
+    <button class="nav-btn" id="nav-btn-completados" onclick="mostrarPestana('completados', event)">Videos completados</button>
     <button class="nav-btn" id="nav-btn-historial" onclick="mostrarPestana('historial', event)">Historial</button>
     <button class="nav-btn" onclick="recargarVistaActual()">Refrescar</button>
   </nav>
@@ -359,12 +360,13 @@
         <div id="contenedor-editados-completos">Cargando balance de capítulos...</div>
       </div>
 
-      <!-- 4. Exports de CapCut (sin asignar / en cola) -->
+    </section>
+    <section id="sec-completados" style="display:none;">
       <div class="card">
         <div class="card-header">
           <div>
-            <h2>4. Exports de CapCut</h2>
-            <small style="color:var(--text-muted)">Detección pasiva en la carpeta de CapCut (%LOCALAPPDATA%\CapCut\Videos)</small>
+            <h2>Videos completados</h2>
+            <small style="color:var(--text-muted)">Revisá el export de CapCut y su envío a videos completos. El original se conserva en CapCut.</small>
           </div>
           <div style="display:flex; gap:8px; align-items:center;">
             <button class="btn-sm" onclick="escanearCapCutManual()">Escanear CapCut ahora</button>

@@ -44,6 +44,7 @@ class VigilanteCapCut:
         sondeos_estabilidad: int = 3,
         intervalo_sondeo: float = 2.0,
         callback_nuevo_export: Optional[Callable[[Dict[str, Any]], None]] = None,
+        callback_sondeo: Optional[Callable[[], None]] = None,
     ):
         if not ruta_capcut or ruta_capcut == "auto":
             self.ruta_capcut = os.path.abspath(obtener_ruta_exportacion_capcut())
@@ -57,6 +58,7 @@ class VigilanteCapCut:
         self.sondeos_estabilidad = max(1, sondeos_estabilidad)
         self.intervalo_sondeo = max(0.1, intervalo_sondeo)
         self.callback_nuevo_export = callback_nuevo_export
+        self.callback_sondeo = callback_sondeo
 
         self._preexistentes: Set[str] = set()
         self._exports_detectados: Set[str] = set()
@@ -125,6 +127,8 @@ class VigilanteCapCut:
                     norm = os.path.normcase(os.path.abspath(ruta_arch))
 
                     # 1. Ignorar preexistentes y ya detectados
+                    if os.path.islink(ruta_arch):
+                        continue
                     if norm in self._preexistentes or norm in self._exports_detectados:
                         continue
 
@@ -188,6 +192,12 @@ class VigilanteCapCut:
                         self.callback_nuevo_export(info)
                     except Exception as e:
                         logger.error(f"[CapCut] Error en callback_nuevo_export: {e}")
+
+            if self.callback_sondeo:
+                try:
+                    self.callback_sondeo()
+                except Exception as e:
+                    logger.error(f"[CapCut] Error al procesar pendientes: {e}")
 
             return nuevos_listos
 

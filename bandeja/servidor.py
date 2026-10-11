@@ -8,6 +8,7 @@ bandeja de descargas. Gestiona endpoints REST de la API y sirve activos
 estáticos exclusivamente mediante lista blanca estricta con inyección segura de CSRF.
 """
 
+import datetime
 import os
 import json
 import html
@@ -62,6 +63,8 @@ from bandeja.edicion import (
     deshacer_copia_completo,
     vincular_nuevo_export,
     procesar_exports_pendientes_copia,
+    obtener_videos_completados,
+    obtener_sesiones_para_export,
 )
 
 RUTA_WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
@@ -436,8 +439,17 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             return
 
         ruta = None
+        if str(media_id).startswith("capcut:") and self.db:
+            export_id = str(media_id)[7:]
+            export = next((e for e in self.db.obtener_exports_pendientes()
+                           if str(e["id"]) == export_id and e["estado"] != "descartado"), None)
+            if export:
+                if not esta_confinado_en_raiz(export["ruta_origen"], self.config.obtener_carpeta_exportacion_capcut()):
+                    self._enviar_error(HTTPStatus.FORBIDDEN, "Export fuera de la carpeta de CapCut.", solo_cabeceras=solo_cabeceras)
+                    return
+                ruta = export["ruta_origen"]
         if self.vigilante:
-            ruta = self.vigilante.resolver_ruta_media(str(media_id))
+            ruta = ruta or self.vigilante.resolver_ruta_media(str(media_id))
 
         # Si no se encuentra en vigilante, intentar resolver en el pendrive vinculado
         raiz_pen_detectada = None
@@ -684,6 +696,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         elif ruta == "/api/edicion/deshacer-terminar":
             self._handle_edicion_deshacer_terminar(body)
         elif ruta == "/api/capcut/asignar-export":
+            self._handle_capcut_asignar_export(body)
+        elif ruta == "/api/capcut/enviar-export":
             self._handle_capcut_asignar_export(body)
         elif ruta == "/api/capcut/descartar-export":
             self._handle_capcut_descartar_export(body)
@@ -1257,6 +1271,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
                     "en_edicion": self.db.obtener_sesiones_edicion(estado="en_edicion") if self.db else [],
                     "conteos_capitulo": {},
                     "exports_sin_asignar": self.db.obtener_exports_pendientes(estado="sin_asignar") if self.db else [],
+                    "videos_completados": obtener_videos_completados(self.db) if self.db else [],
+                    "sesiones_para_export": obtener_sesiones_para_export(self.db) if self.db else [],
                 }, solo_cabeceras=solo_cabeceras)
                 return
 
@@ -1271,7 +1287,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
     def _handle_capcut_exports(self, solo_cabeceras: bool = False):
         try:
-            exports = self.db.obtener_exports_pendientes() if self.db else []
+            exports = obtener_videos_completados(self.db) if self.db else []
             self._enviar_json({"exports": exports}, solo_cabeceras=solo_cabeceras)
         except Exception as e:
             self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al obtener exports de CapCut: {e}", solo_cabeceras=solo_cabeceras)
@@ -1348,8 +1364,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     def _handle_capcut_asignar_export(self, body: Dict[str, Any]):
         export_id = body.get("export_id")
         sesion_id = body.get("sesion_id")
-        if not export_id or not sesion_id:
-            self._enviar_error(HTTPStatus.BAD_REQUEST, "Campos 'export_id' y 'sesion_id' requeridos.")
+        if not export_id:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "Campo 'export_id' requerido.")
             return
 
         exp_list = self.db.obtener_exports_pendientes() if self.db else []
@@ -1358,12 +1374,24 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._enviar_error(HTTPStatus.NOT_FOUND, "Export no encontrado.")
             return
 
+        if target_exp["estado"] in ("copiado", "descartado"):
+            self._enviar_error(HTTPStatus.CONFLICT, "El export ya fue enviado o descartado.")
+            return
+        if not esta_confinado_en_raiz(target_exp["ruta_origen"], self.config.obtener_carpeta_exportacion_capcut()):
+            self._enviar_error(HTTPStatus.FORBIDDEN, "Export fuera de la carpeta de CapCut.")
+            return
+        sesion_id = sesion_id or target_exp.get("sesion_id")
+        if not sesion_id:
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "Selecciona la edicion correspondiente al export.")
+            return
+
         sesion = self.db.obtener_sesion_por_id(int(sesion_id))
         if not sesion:
             self._enviar_error(HTTPStatus.NOT_FOUND, "Sesión no encontrada.")
             return
 
-        self.db.actualizar_export_pendiente(int(export_id), sesion_id=int(sesion_id))
+        self.db.actualizar_export_pendiente(int(export_id), sesion_id=int(sesion_id), estado="pendiente_copia", error=None)
+        self.db.actualizar_sesion_edicion(int(sesion_id), export_asociado=target_exp["ruta_origen"])
 
         info_pen = detectar_pendrive(self.config)
         if info_pen and info_pen.get("conectado"):
@@ -1378,7 +1406,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
                     int(export_id),
                     estado="copiado",
                     fecha_copia=datetime.datetime.now().isoformat(),
-                    sha256=res_copia.get("sha256")
+                    sha256=res_copia.get("sha256"),
+                    error=None,
                 )
                 self._enviar_json({"exito": True, "resultado_copia": res_copia})
             except Exception as e:

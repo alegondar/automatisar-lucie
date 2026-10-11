@@ -802,12 +802,13 @@ class GestorBaseDatosBandeja:
             cur = con.cursor()
             fecha_ahora = datetime.datetime.now().isoformat()
             cur.execute("""
-            INSERT OR REPLACE INTO exports_pendientes (
+            INSERT INTO exports_pendientes (
                 ruta_origen, nombre, tamano, mtime, sha256, sesion_id, estado, fecha_deteccion
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(ruta_origen) DO NOTHING
             """, (ruta_origen, nombre, tamano, mtime, sha256, sesion_id, estado, fecha_ahora))
             con.commit()
-            return cur.lastrowid
+            cur.execute("SELECT id FROM exports_pendientes WHERE ruta_origen = ?", (ruta_origen,))
+            return cur.fetchone()[0]
 
     def obtener_exports_pendientes(self, estado: Optional[str] = None) -> List[Dict[str, Any]]:
         """Obtiene la lista de exports pendientes o sin asignar."""

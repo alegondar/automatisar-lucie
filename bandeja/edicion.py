@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from bandeja.config import ConfiguracionBandeja, calcular_sha256
 from bandeja.db import GestorBaseDatosBandeja
 from bandeja.pendrive import NOMBRE_MANIFIESTO_PENDRIVE
-from bandeja.plataforma import esta_confinado_en_raiz
+from bandeja.plataforma import esta_confinado_en_raiz, verificar_archivo_exclusivo
 
 logger = logging.getLogger("bandeja_edicion")
 
@@ -231,6 +231,8 @@ def obtener_secciones_edicion(
         "en_edicion": sesiones_activas,
         "conteos_capitulo": conteos_capitulo,
         "exports_sin_asignar": exports_sin_asignar,
+        "videos_completados": obtener_videos_completados(db),
+        "sesiones_para_export": obtener_sesiones_para_export(db),
     }
 
 
@@ -524,6 +526,8 @@ def copiar_export_a_videos_completos(
     """
     if not os.path.isfile(ruta_origen):
         raise FileNotFoundError(f"El archivo exportado no existe: '{ruta_origen}'")
+    if not verificar_archivo_exclusivo(ruta_origen):
+        raise OSError("El export sigue en uso. Espera a que CapCut termine de escribirlo.")
 
     pendrive_raiz = os.path.join(pendrive_montaje, carpeta_raiz)
     personaje = sesion.get("personaje", "general")
@@ -662,6 +666,9 @@ def deshacer_copia_completo(
     <pendrive>/<carpeta_raiz>/_revertidos/<nombre> mediante os.rename.
     NO BORRA NUNCA EL ARCHIVO (Regla de Oro #1).
     """
+    pendrive_raiz = os.path.join(pendrive_montaje, carpeta_raiz)
+    if not esta_confinado_en_raiz(video_completo_ruta, os.path.join(pendrive_raiz, "videos completos")):
+        raise ValueError("El video debe estar dentro de videos completos del pendrive vinculado.")
     if not os.path.isfile(video_completo_ruta):
         raise FileNotFoundError(f"El archivo no existe: '{video_completo_ruta}'")
 
@@ -704,15 +711,40 @@ def deshacer_copia_completo(
         }
     )
 
-    return {
-        "exito": True,
-        "ruta_revertida": dest_revertido,
-    }
+    for sesion in db.obtener_sesiones_edicion():
+        if sesion.get("video_completo_ruta") != video_completo_ruta:
+            continue
+        db.actualizar_sesion_edicion(sesion["id"], video_completo_ruta=None,
+                                    estado="editado" if sesion.get("fecha_cierre") else "en_edicion")
+        for export in db.obtener_exports_pendientes():
+            if export.get("sesion_id") == sesion["id"] and export["estado"] == "copiado":
+                db.actualizar_export_pendiente(export["id"], estado="sin_asignar", fecha_copia=None, error=None)
+    return {"exito": True, "ruta_revertida": dest_revertido}
 
 
 # =========================================================================
 # Lógica de Vinculación Determinista y Cola Offline
 # =========================================================================
+
+def obtener_sesiones_para_export(db: GestorBaseDatosBandeja) -> List[Dict[str, Any]]:
+    """Una sesion terminada sigue esperando su export hasta que se asocie uno."""
+    return [s for s in db.obtener_sesiones_edicion()
+            if s["estado"] in ("en_edicion", "editado") and not s.get("export_asociado")]
+
+
+def obtener_videos_completados(db: GestorBaseDatosBandeja) -> List[Dict[str, Any]]:
+    sesiones = {s["id"]: s for s in db.obtener_sesiones_edicion()}
+    resultado = []
+    for export in db.obtener_exports_pendientes():
+        if export["estado"] == "descartado":
+            continue
+        sesion = sesiones.get(export.get("sesion_id")) or {}
+        resultado.append({**export, "nombre_video": sesion.get("nombre") or export["nombre"],
+                          "ruta_destino": sesion.get("video_completo_ruta"),
+                          "capitulo": sesion.get("capitulo"),
+                          "personaje": sesion.get("personaje")})
+    return resultado
+
 
 def vincular_nuevo_export(
     export_info: Dict[str, Any],
@@ -720,14 +752,16 @@ def vincular_nuevo_export(
     db: GestorBaseDatosBandeja,
     carpeta_raiz: str = "LucieSinReglas",
     ruta_bitacora: str = "bitacora_bandeja.jsonl",
+    copiar_automaticamente: bool = True,
 ) -> Dict[str, Any]:
     """
     Aplica la regla de vinculación determinista:
-    - Si existe exactamente 1 sesión en estado 'en_edicion':
+    - Si existe exactamente 1 sesión 'en_edicion' o 'editado' esperando export:
       Asocia automáticamente el export a dicha sesión.
-      Si el pendrive está vinculado y accesible, ejecuta la copia automática.
+      En modo automático, si el pendrive está accesible, ejecuta la copia.
       Si el pendrive está desconectado, queda encolado como 'pendiente_copia'.
-    - Si hay 0 o >1 sesiones en 'en_edicion':
+      En modo manual, espera el envío explícito desde el dashboard.
+    - Si hay 0 o >1 sesiones esperando export:
       Registra el export como 'sin_asignar' para decisión manual del usuario.
     """
     ruta_origen = export_info["ruta_absoluta"]
@@ -735,11 +769,20 @@ def vincular_nuevo_export(
     tamano = export_info["tamano"]
     mtime = export_info["mtime"]
 
-    sesiones_activas = db.obtener_sesiones_edicion(estado="en_edicion")
+    existente = next((e for e in db.obtener_exports_pendientes() if e["ruta_origen"] == ruta_origen), None)
+    if existente:
+        return {"vinculado": bool(existente.get("sesion_id")), "modo": "ya_registrado", "export_id": existente["id"]}
+    sesiones_activas = obtener_sesiones_para_export(db)
 
     if len(sesiones_activas) == 1:
         sesion = sesiones_activas[0]
         sesion_id = sesion["id"]
+        db.actualizar_sesion_edicion(sesion_id, export_asociado=ruta_origen)
+
+        if not copiar_automaticamente:
+            export_id = db.registrar_export_pendiente(ruta_origen, nombre, tamano, mtime,
+                                                     sesion_id=sesion_id, estado="sin_asignar")
+            return {"vinculado": True, "modo": "esperando_envio", "sesion_id": sesion_id, "export_id": export_id}
 
         if pendrive_montaje and os.path.isdir(pendrive_montaje):
             # Pendrive conectado: copia automática inmediata
@@ -765,6 +808,7 @@ def vincular_nuevo_export(
                     estado="copiado",
                     fecha_copia=datetime.datetime.now().isoformat(),
                     sha256=res_copia.get("sha256"),
+                    error=None,
                 )
                 return {
                     "vinculado": True,
@@ -849,6 +893,7 @@ def procesar_exports_pendientes_copia(
                 estado="copiado",
                 fecha_copia=datetime.datetime.now().isoformat(),
                 sha256=res_copia.get("sha256"),
+                error=None,
             )
             resultados.append({"export_id": exp["id"], "exito": True, "detalle": res_copia})
         except Exception as e:

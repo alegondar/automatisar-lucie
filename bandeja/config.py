@@ -116,6 +116,7 @@ class ConfiguracionBandeja:
         self.margen_libre_bytes = 1024 * 1024 * 1024  # 1 GiB por defecto
         self.carpeta_exportacion_capcut: str = "auto"
         self.al_exportar: str = "preguntar"  # "preguntar" | "automatico" | "manual"
+        self.envio_exports_capcut: str = "automatico"  # "automatico" | "manual"
         self.extensiones_temporales_capcut: List[str] = [".tmp", ".part", ".crdownload", ".tmp.mp4"]
         self._inicializar_config_local_windows()
         self.cargar()
@@ -232,6 +233,8 @@ class ConfiguracionBandeja:
             val_al = str(datos["al_exportar"]).strip().lower()
             if val_al in ("preguntar", "automatico", "manual"):
                 self.al_exportar = val_al
+        if datos.get("envio_exports_capcut") in ("automatico", "manual"):
+            self.envio_exports_capcut = datos["envio_exports_capcut"]
         if "extensiones_temporales_capcut" in datos and isinstance(datos["extensiones_temporales_capcut"], list):
             self.extensiones_temporales_capcut = [str(ext).lower().strip() for ext in datos["extensiones_temporales_capcut"] if str(ext).strip()]
 

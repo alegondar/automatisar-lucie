@@ -6182,6 +6182,66 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
             self.assertTrue(os.path.isfile(self.clip_path))
             self.assertFalse(os.path.isfile(dest_esperado))
 
+    def test_export_capcut_vista_previa_envio_y_deshacer(self):
+        from bandeja.edicion import crear_sesion, vincular_nuevo_export
+        capcut = os.path.join(self.tmp_dir, "CapCut")
+        os.makedirs(capcut)
+        self.config.carpeta_exportacion_capcut = capcut
+        origen = os.path.join(capcut, "0818(15).mp4")
+        contenido = b"export final capcut para revisar"
+        with open(origen, "xb") as archivo:
+            archivo.write(contenido)
+        sesion = crear_sesion(self.db, ["lucie/capitulo_01/toma_01.mp4"], "lucie", "capitulo_01", "Mi video")
+        registrado = vincular_nuevo_export({"ruta_absoluta": origen, "nombre": "0818(15).mp4", "tamano": len(contenido), "mtime": 1},
+                                          None, self.db, ruta_bitacora=self.bitacora, copiar_automaticamente=False)
+        export_id = registrado["export_id"]
+        with patch("bandeja.servidor.detectar_pendrive", return_value=None):
+            status, datos, _ = self._get("/api/edicion/secciones")
+            self.assertEqual(status, 200)
+            self.assertFalse(datos["conectado"])
+            self.assertEqual(datos["videos_completados"][0]["nombre_video"], "Mi video")
+            status, _, raw = self._get(f"/api/media?id=capcut:{export_id}", {"Range": "bytes=0-5"})
+            self.assertEqual(status, 206)
+            self.assertEqual(raw, contenido[:6])
+        mock_pen = {"conectado": True, "punto_montaje": self.pendrive_dir}
+        with patch("bandeja.servidor.detectar_pendrive", return_value=mock_pen), patch("bandeja.edicion.datetime", wraps=datetime) as reloj:
+            reloj.datetime.now.return_value = datetime.datetime(2026, 10, 11)
+            status, _ = self._post("/api/capcut/enviar-export", {"export_id": export_id}, csrf="invalido")
+            self.assertEqual(status, 403)
+            self.assertEqual(self.db.obtener_exports_pendientes()[0]["estado"], "sin_asignar")
+            status, datos = self._post("/api/capcut/enviar-export", {"export_id": export_id})
+            self.assertEqual(status, 200, datos)
+            destino = datos["resultado_copia"]["destino"]
+            self.assertEqual(destino, os.path.join(self.raiz_pen, "videos completos", "lucie", "capitulo_01",
+                                                 "Mi video - octubre - semana 2 - 2026", "Mi video.mp4"))
+            with open(destino, "rb") as archivo:
+                self.assertEqual(archivo.read(), contenido)
+            status, datos, _ = self._get("/api/capcut/exports")
+            self.assertEqual(datos["exports"][0]["estado"], "copiado")
+            status, _ = self._post("/api/capcut/enviar-export", {"export_id": export_id})
+            self.assertEqual(status, 409)
+            status, _ = self._post("/api/capcut/deshacer-completo", {"video_completo_ruta": destino})
+            self.assertEqual(status, 200)
+            self.assertFalse(os.path.exists(destino))
+            self.assertEqual(self.db.obtener_exports_pendientes()[0]["estado"], "sin_asignar")
+            self.assertIsNone(self.db.obtener_sesion_por_id(sesion["id"])["video_completo_ruta"])
+        with open(origen, "rb") as archivo:
+            self.assertEqual(archivo.read(), contenido)
+
+    def test_capcut_rechaza_export_fuera_de_su_carpeta(self):
+        from bandeja.edicion import crear_sesion
+        self.config.carpeta_exportacion_capcut = os.path.join(self.tmp_dir, "CapCut")
+        os.makedirs(self.config.carpeta_exportacion_capcut)
+        sesion = crear_sesion(self.db, ["lucie/capitulo_01/toma_01.mp4"], "lucie", "capitulo_01")
+        export_id = self.db.registrar_export_pendiente(self.clip_path, "toma_01.mp4", len(self.clip_contenido), 1, sesion_id=sesion["id"])
+        status, _ = self._post("/api/capcut/enviar-export", {"export_id": export_id})
+        self.assertEqual(status, 403)
+        status, _, _ = self._get(f"/api/media?id=capcut:{export_id}")
+        self.assertEqual(status, 403)
+        status, _, _ = self._get(f"/api/media?id=capcut:{export_id + 1}")
+        self.assertEqual(status, 404)
+        self.assertFalse(os.path.exists(os.path.join(self.raiz_pen, "videos completos")))
+
     def test_streaming_media_pendrive_con_range(self):
         """Verifica que /api/media permita streaming seguro con HTTP Range desde el pendrive vinculado."""
         mock_pen = {

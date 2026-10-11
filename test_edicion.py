@@ -30,6 +30,7 @@ from bandeja.edicion import (
     deshacer_copia_completo,
     vincular_nuevo_export,
     procesar_exports_pendientes_copia,
+    obtener_videos_completados,
 )
 
 
@@ -381,6 +382,10 @@ class TestEdicionCapCut(unittest.TestCase):
 
         # Caso 2: Exactamente 1 sesión, pero pendrive desconectado (None) -> encolado offline
         s1 = crear_sesion(self.db, ["lucie/cap01/c1.mp4"], "lucie", "cap01")
+        export_file = os.path.join(capcut_dir, "0818(18).mp4")
+        with open(export_file, "xb") as archivo:
+            archivo.write(b"video_export_offline")
+        export_info = {**export_info, "ruta_absoluta": export_file, "nombre": "0818(18).mp4"}
         res1 = vincular_nuevo_export(
             export_info=export_info,
             pendrive_montaje=None,
@@ -422,6 +427,73 @@ class TestEdicionCapCut(unittest.TestCase):
         )
         self.assertFalse(res2["vinculado"])
         self.assertEqual(res2["modo"], "sin_asignar")
+
+    def test_vigilante_real_export_despues_de_terminar_edicion(self):
+        from bandeja_descargas import crear_vigilante_capcut
+        export_dir = os.path.join(self.tmp_dir, "CapCut")
+        os.makedirs(export_dir)
+        config = ConfiguracionBandeja()
+        config.carpeta_exportacion_capcut = export_dir
+        self._crear_clip_crudo("lucie", "cap01", "clip.mp4")
+        sesion = crear_sesion(self.db, ["lucie/cap01/clip.mp4"], "lucie", "cap01", "Mi video")
+        finalizar_edicion_crudos(self.db, sesion["id"], self.pendrive_montaje, self.carpeta_raiz, self.bitacora_path)
+        vigilante = crear_vigilante_capcut(config, self.db, self.bitacora_path)
+        vigilante.tomar_fotografia_inicial()
+        origen = os.path.join(export_dir, "0818(15).mp4")
+        with open(origen, "xb") as archivo:
+            archivo.write(b"video completo exportado")
+        with patch("bandeja_descargas.detectar_pendrive", return_value={"conectado": True, "punto_montaje": self.pendrive_montaje}):
+            for _ in range(4):
+                vigilante.escanear()
+        export = obtener_videos_completados(self.db)[0]
+        self.assertEqual(export["estado"], "copiado")
+        self.assertEqual(export["nombre_video"], "Mi video")
+        self.assertEqual(export["sesion_id"], sesion["id"])
+        self.assertEqual(export["ruta_destino"], os.path.join(self.pendrive_raiz, "videos completos", "lucie", "cap01", "Mi video - octubre - semana 2 - 2026", "Mi video.mp4"))
+        self.assertEqual(calcular_sha256(origen), calcular_sha256(export["ruta_destino"]))
+        self.assertTrue(os.path.isfile(origen))
+        self.assertEqual(len(self.db.obtener_exports_pendientes()), 1)
+
+    def test_vigilante_copia_al_reconectar_sin_nuevo_export(self):
+        from bandeja_descargas import crear_vigilante_capcut
+        export_dir = os.path.join(self.tmp_dir, "CapCut")
+        os.makedirs(export_dir)
+        config = ConfiguracionBandeja()
+        config.carpeta_exportacion_capcut = export_dir
+        crear_sesion(self.db, ["lucie/cap01/clip.mp4"], "lucie", "cap01", "Mi video")
+        vigilante = crear_vigilante_capcut(config, self.db, self.bitacora_path)
+        vigilante.tomar_fotografia_inicial()
+        origen = os.path.join(export_dir, "0818(15).mp4")
+        with open(origen, "xb") as archivo:
+            archivo.write(b"video completo exportado")
+        with patch("bandeja_descargas.detectar_pendrive", return_value=None):
+            for _ in range(3):
+                vigilante.escanear()
+        self.assertEqual(self.db.obtener_exports_pendientes()[0]["estado"], "pendiente_copia")
+        with patch("bandeja_descargas.detectar_pendrive", return_value={"conectado": True, "punto_montaje": self.pendrive_montaje}):
+            vigilante.escanear()
+        self.assertEqual(self.db.obtener_exports_pendientes()[0]["estado"], "copiado")
+
+    def test_vigilante_manual_no_copia_hasta_confirmar(self):
+        from bandeja_descargas import crear_vigilante_capcut
+        export_dir = os.path.join(self.tmp_dir, "CapCut")
+        os.makedirs(export_dir)
+        config = ConfiguracionBandeja()
+        config.carpeta_exportacion_capcut = export_dir
+        config.envio_exports_capcut = "manual"
+        sesion = crear_sesion(self.db, ["lucie/cap01/clip.mp4"], "lucie", "cap01", "Mi video")
+        vigilante = crear_vigilante_capcut(config, self.db, self.bitacora_path)
+        vigilante.tomar_fotografia_inicial()
+        origen = os.path.join(export_dir, "0818(15).mp4")
+        with open(origen, "xb") as archivo:
+            archivo.write(b"video completo exportado")
+        with patch("bandeja_descargas.detectar_pendrive", return_value={"conectado": True, "punto_montaje": self.pendrive_montaje}):
+            for _ in range(4):
+                vigilante.escanear()
+        export = self.db.obtener_exports_pendientes()[0]
+        self.assertEqual(export["estado"], "sin_asignar")
+        self.assertEqual(export["sesion_id"], sesion["id"])
+        self.assertFalse(os.path.exists(os.path.join(self.pendrive_raiz, "videos completos")))
 
     def test_obtener_secciones_edicion_con_vigilante_registra_media(self):
         """Verifica que obtener_secciones_edicion asigne id_media a los clips cuando vigilante está presente."""

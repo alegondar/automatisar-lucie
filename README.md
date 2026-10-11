@@ -164,6 +164,28 @@ equipo. Los meses se escriben en español y las semanas se cuentan dentro del me
 1–7 es semana 1, 8–14 semana 2, 15–21 semana 3, 22–28 semana 4 y 29–31 semana 5.
 El nombre del archivo se conserva; la carpeta usa ese nombre sin la extensión.
 
+### Exports de CapCut y videos completados
+
+La bandeja inicia el vigilante de la carpeta de exportación de CapCut y espera
+a que cada nuevo video se estabilice y quede libre de escritura. Cuando hay una
+sola sesión esperando un export, incluso después de pulsar «Terminé de editar»,
+la copia en `videos completos` recibe el nombre de esa sesión. El export numérico
+original de CapCut se conserva. Los archivos presentes al iniciar el vigilante
+no se importan automáticamente.
+
+La pestaña **Videos completados** muestra el export original con reproductor,
+el nombre de la edición, los pendientes, errores y la ruta enviada al pendrive.
+Si varias sesiones esperan exports, permite elegir la edición antes de enviar.
+Los envíos autorizados pendientes se retoman al reconectar el pendrive, aunque
+no aparezca un nuevo export. «Deshacer envío» conserva el video en `_revertidos`
+y requiere un nuevo envío explícito para volver a copiarlo.
+
+Por defecto el envío es automático. Para revisar cada export antes de enviarlo,
+configurar `"envio_exports_capcut": "manual"` en la configuración de la bandeja.
+En ese modo se asocia la sesión automáticamente, pero la copia espera el botón
+**Enviar al pendrive**. Esta opción es independiente de `al_exportar`, que
+corresponde al tratamiento de los clips crudos.
+
 Las rutas efectivas quedan registradas para permitir reintentos y deshacer aunque
 cambie la fecha. Los archivos existentes conservan su estructura anterior y no se
 reorganizan automáticamente. Los destinos ocupados se respetan sin sobrescribir.

@@ -318,13 +318,14 @@
       document.getElementById('sec-descartados').style.display = (pestana === 'descartados') ? 'block' : 'none';
       document.getElementById('sec-pendrive').style.display = (pestana === 'pendrive') ? 'block' : 'none';
       document.getElementById('sec-edicion').style.display = (pestana === 'edicion') ? 'block' : 'none';
+      document.getElementById('sec-completados').style.display = (pestana === 'completados') ? 'block' : 'none';
       document.getElementById('sec-historial').style.display = (pestana === 'historial') ? 'block' : 'none';
 
       if (pestana === 'historial') {
         cargarHistorial();
       } else if (pestana === 'pendrive') {
         cargarVistaPendrive();
-      } else if (pestana === 'edicion') {
+      } else if (pestana === 'edicion' || pestana === 'completados') {
         cargarVistaEdicion();
       } else if (pestana === 'capitulos-abiertos') {
         cargarCapitulosAbiertos();
@@ -340,7 +341,7 @@
         await cargarHistorial();
       } else if (pestanaActual === 'pendrive') {
         await cargarVistaPendrive();
-      } else if (pestanaActual === 'edicion') {
+      } else if (pestanaActual === 'edicion' || pestanaActual === 'completados') {
         await cargarVistaEdicion();
       } else if (pestanaActual === 'capitulos-abiertos') {
         await cargarCapitulosAbiertos();
@@ -529,6 +530,7 @@
       sondeoEnCurso = true;
       try {
         const res = await apiFetch('/api/estado-version');
+        if (pestanaActual === 'completados') await cargarVistaEdicion();
 
         if (res.banner_pendrive) {
           if (typeof res.banner_pendrive === 'string') {
@@ -3510,7 +3512,7 @@
           }
           if (contEnEdicion) contEnEdicion.innerHTML = '<p style="color:var(--text-muted);">Sin sesiones disponibles.</p>';
           if (contEditados) contEditados.innerHTML = '<p style="color:var(--text-muted);">Sin datos de capítulos.</p>';
-          if (contExports) renderizarExportsCapCut(data.exports_sin_asignar || [], []);
+          if (contExports) renderizarExportsCapCut(data.videos_completados || [], data.sesiones_para_export || []);
           return;
         }
 
@@ -3525,7 +3527,7 @@
         renderizarEditadosYCompletos(data.conteos_capitulo || {});
 
         // 4. Exports de CapCut
-        renderizarExportsCapCut(data.exports_sin_asignar || [], data.en_edicion || []);
+        renderizarExportsCapCut(data.videos_completados || [], data.sesiones_para_export || []);
 
       } catch (err) {
         console.error("Error al cargar vista de edición:", err);
@@ -3848,9 +3850,13 @@
     function renderizarExportsCapCut(exports, sesionesActivas) {
       const cont = document.getElementById('contenedor-exports-capcut');
       if (!cont) return;
+      const firma = JSON.stringify([exports, sesionesActivas]);
+      if (cont.dataset.firma === firma) return;
+      if (Array.from(cont.querySelectorAll('video')).some(video => !video.paused)) return;
+      cont.dataset.firma = firma;
 
       if (!exports || exports.length === 0) {
-        cont.innerHTML = '<p style="color:var(--text-muted); padding:10px;">No hay exportaciones pendientes o sin asignar de CapCut.</p>';
+        cont.innerHTML = '<p style="color:var(--text-muted); padding:10px;">Los nuevos videos exportados por CapCut aparecerán aquí cuando termine la exportación.</p>';
         return;
       }
 
@@ -3858,20 +3864,27 @@
       exports.forEach(exp => {
         const tamStr = (exp.tamano / (1024 * 1024)).toFixed(1) + ' MB';
         const selectId = `sel-sesion-export-${exp.id}`;
+        const copiado = exp.estado === 'copiado';
+        const estado = copiado ? 'ENVIADO AL PENDRIVE' : exp.error ? 'ERROR DE ENVÍO' : exp.sesion_id ? 'PENDIENTE DE ENVÍO' : 'ELEGIR EDICIÓN';
         html += `
           <div style="background:var(--card-alt); border:1px solid var(--border); border-radius:6px; padding:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
             <div>
-              <span class="badge" style="background:#f59e0b; color:#000; font-weight:600; margin-right:6px;">EXPORT SIN ASIGNAR</span>
-              <strong>${escapeHTML(exp.nombre)}</strong>
+              <span class="badge" style="background:${copiado ? '#4ade80' : '#f59e0b'}; color:#000; font-weight:600; margin-right:6px;">${estado}</span>
+              <strong>${escapeHTML(exp.nombre_video || exp.nombre)}</strong>
               <span style="color:var(--text-muted); font-size:0.85rem; margin-left:6px;">(${tamStr})</span>
+              <p style="color:var(--text-muted);">Export de CapCut: ${escapeHTML(exp.nombre)}</p>
+              <video controls preload="none" style="width:280px; max-width:100%; max-height:220px;" src="/api/media?id=capcut%3A${exp.id}"></video>
+              ${exp.ruta_destino ? `<p style="overflow-wrap:anywhere;">Destino: ${escapeHTML(exp.ruta_destino)}</p>` : ''}
+              ${exp.error ? `<p class="error-box">${escapeHTML(exp.error)}</p>` : ''}
             </div>
             <div style="display:flex; gap:8px; align-items:center;">
-              <select id="${selectId}" style="padding:4px 8px; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text); font-size:0.85rem;">
+              ${!copiado && !exp.sesion_id ? `<select id="${selectId}" style="padding:4px 8px; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text); font-size:0.85rem;">
                 <option value="">Seleccionar sesión...</option>
                 ${sesionesActivas.map(s => `<option value="${s.id}">${escapeHTML(s.nombre)} (${escapeHTML(s.capitulo)})</option>`).join('')}
-              </select>
-              <button class="btn-sm" onclick="asignarExportASesion(${exp.id}, '${selectId}')" style="background:var(--accent); color:#000; font-weight:600;">Asignar</button>
-              <button class="btn-sm btn-secundario" onclick="descartarExportCapCut(${exp.id})">Descartar</button>
+              </select>` : ''}
+              ${!copiado ? `<button class="btn-sm" onclick="asignarExportASesion(${exp.id}, '${selectId}', ${exp.sesion_id || 'null'})" style="background:var(--accent); color:#000; font-weight:600;">Enviar al pendrive</button>
+              <button class="btn-sm btn-secundario" onclick="descartarExportCapCut(${exp.id})">Descartar de la lista</button>` : ''}
+              ${copiado && exp.ruta_destino ? `<button class="btn-sm btn-secundario" data-ruta="${escapeHTML(exp.ruta_destino)}" onclick="deshacerCopiaCompleto(this.dataset.ruta)">Deshacer envío</button>` : ''}
             </div>
           </div>
         `;
@@ -3880,9 +3893,9 @@
       cont.innerHTML = html;
     }
 
-    async function asignarExportASesion(exportId, selectElemId) {
+    async function asignarExportASesion(exportId, selectElemId, sesionAsociada = null) {
       const select = document.getElementById(selectElemId);
-      const sesionId = select ? select.value : '';
+      const sesionId = sesionAsociada || (select ? select.value : '');
       if (!sesionId) {
         alert("Por favor seleccioná una sesión a la cual asociar este export.");
         return;
