@@ -327,6 +327,35 @@ class TestEdicionCapCut(unittest.TestCase):
         self.assertFalse(res2["vinculado"])
         self.assertEqual(res2["modo"], "sin_asignar")
 
+    def test_obtener_secciones_edicion_con_vigilante_registra_media(self):
+        """Verifica que obtener_secciones_edicion asigne id_media a los clips cuando vigilante está presente."""
+        self._crear_clip_crudo("lucie", "cap01", "clip_vigilante.mp4", b"datos_media")
+
+        class VigilanteMock:
+            def __init__(self):
+                self.registros = {}
+
+            def registrar_ruta_media(self, ruta_completa: str) -> str:
+                import hashlib
+                h = hashlib.sha256(ruta_completa.encode("utf-8")).hexdigest()[:16]
+                self.registros[h] = ruta_completa
+                return h
+
+        mock_v = VigilanteMock()
+        secciones = obtener_secciones_edicion(
+            self.pendrive_montaje,
+            self.db,
+            self.carpeta_raiz,
+            vigilante=mock_v,
+        )
+
+        clips_para_editar = [c for c in secciones["para_editar"] if c["nombre"] == "clip_vigilante.mp4"]
+        self.assertEqual(len(clips_para_editar), 1)
+        clip = clips_para_editar[0]
+        self.assertIn("id_media", clip)
+        self.assertIn(clip["id_media"], mock_v.registros)
+        self.assertTrue(os.path.isfile(mock_v.registros[clip["id_media"]]))
+
 
 if __name__ == "__main__":
     unittest.main()

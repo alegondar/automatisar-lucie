@@ -441,17 +441,41 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
         # Si no se encuentra en vigilante, intentar resolver en el pendrive vinculado
         raiz_pen_detectada = None
+        punto_pen_detectado = None
         try:
             info_pen = detectar_pendrive(self.config)
             if info_pen and info_pen.get("conectado"):
                 punto_pen = info_pen.get("punto_montaje") or info_pen.get("ruta_montaje")
                 if punto_pen:
+                    punto_pen_detectado = punto_pen
                     carpeta_raiz = getattr(self.config, "carpeta_raiz_pendrive", "LucieSinReglas")
                     raiz_pen_detectada = os.path.join(punto_pen, carpeta_raiz)
                     if not ruta:
-                        cand = os.path.join(raiz_pen_detectada, str(media_id).replace("/", os.sep))
-                        if esta_confinado_en_raiz(cand, raiz_pen_detectada) and os.path.isfile(cand):
-                            ruta = cand
+                        raw_id = str(media_id)
+                        if raw_id.startswith("pendrive:"):
+                            raw_id = raw_id[9:]
+                        norm_rel = raw_id.replace("/", os.sep).replace("\\", os.sep).lstrip(os.sep)
+                        candidatos = [
+                            os.path.join(raiz_pen_detectada, norm_rel),
+                            os.path.join(raiz_pen_detectada, "videos sin editar", norm_rel),
+                            os.path.join(raiz_pen_detectada, "videos ya editados", norm_rel),
+                            os.path.join(raiz_pen_detectada, "videos completos", norm_rel),
+                            os.path.join(raiz_pen_detectada, "videos1", norm_rel),
+                        ]
+                        if punto_pen:
+                            candidatos.extend([
+                                os.path.join(punto_pen, norm_rel),
+                                os.path.join(punto_pen, "videos sin editar", norm_rel),
+                                os.path.join(punto_pen, "videos ya editados", norm_rel),
+                                os.path.join(punto_pen, "videos completos", norm_rel),
+                                os.path.join(punto_pen, "videos1", norm_rel),
+                            ])
+                        for cand in candidatos:
+                            confinado = (esta_confinado_en_raiz(cand, raiz_pen_detectada) or 
+                                         (punto_pen and esta_confinado_en_raiz(cand, punto_pen)))
+                            if confinado and os.path.isfile(cand):
+                                ruta = cand
+                                break
         except Exception:
             pass
 
@@ -469,6 +493,14 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         ]
         if raiz_pen_detectada:
             raices_permitidas.append(raiz_pen_detectada)
+        if punto_pen_detectado:
+            raices_permitidas.append(punto_pen_detectado)
+        try:
+            dir_capcut = self.config.obtener_carpeta_exportacion_capcut()
+            if dir_capcut and os.path.isdir(dir_capcut):
+                raices_permitidas.append(dir_capcut)
+        except Exception:
+            pass
 
         dentro_de_raices = any(esta_confinado_en_raiz(real_ruta, raiz) for raiz in raices_permitidas)
 
@@ -1230,7 +1262,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
             punto_pen = info_pen.get("punto_montaje") or info_pen.get("ruta_montaje")
             carpeta_raiz = getattr(self.config, "carpeta_raiz_pendrive", "LucieSinReglas")
-            datos = obtener_secciones_edicion(punto_pen, self.db, carpeta_raiz=carpeta_raiz)
+            datos = obtener_secciones_edicion(punto_pen, self.db, carpeta_raiz=carpeta_raiz, vigilante=self.vigilante)
             datos["conectado"] = True
             datos["pendrive_info"] = info_pen
             self._enviar_json(datos, solo_cabeceras=solo_cabeceras)

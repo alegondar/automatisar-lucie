@@ -1314,6 +1314,8 @@
       let listaArchivos = [];
       if (loteId === 'sin_identificar') {
         listaArchivos = datosEstado.sin_identificar || [];
+      } else if (loteId === 'edicion_sin_editar') {
+        listaArchivos = clipsParaEditar || [];
       } else if (loteId && loteId.startsWith('pendrive:')) {
         const cKey = loteId.slice(9);
         const cObj = (carpetasPendriveData || []).find(c => `${c.personaje}/${c.carpeta}` === cKey);
@@ -1330,7 +1332,12 @@
 
       if (!listaArchivos.length) return;
 
-      const idx = listaArchivos.findIndex(a => a.id_media === idMedia);
+      const idx = listaArchivos.findIndex(a => 
+        (a.id_media && a.id_media === idMedia) || 
+        (a.identificador && a.identificador === idMedia) || 
+        (a.ruta_relativa && a.ruta_relativa === idMedia) || 
+        (a.nombre && a.nombre === idMedia)
+      );
       if (idx === -1) return;
 
       visorLoteIdActual = loteId;
@@ -1350,6 +1357,9 @@
       if (visorIndiceActual < 0 || visorIndiceActual >= visorListaActual.length) return;
       const archivo = visorListaActual[visorIndiceActual];
       visorArchivoActual = archivo;
+      if (!archivo.ruta) {
+        archivo.ruta = archivo.ruta_relativa || archivo.identificador || archivo.nombre || '';
+      }
 
       const hNombre = document.getElementById('visor-nombre');
       const divMeta = document.getElementById('visor-meta');
@@ -1359,15 +1369,22 @@
       const vid = document.getElementById('visor-video');
       const errBox = document.getElementById('visor-error-formato');
       const feedback = document.getElementById('visor-copiar-feedback');
+      const navPrev = document.querySelector('.visor-nav-prev');
+      const navNext = document.querySelector('.visor-nav-next');
 
       if (feedback) feedback.style.display = 'none';
       if (errBox) errBox.style.display = 'none';
+
+      if (navPrev) navPrev.style.display = visorListaActual.length > 1 ? 'flex' : 'none';
+      if (navNext) navNext.style.display = visorListaActual.length > 1 ? 'flex' : 'none';
 
       if (hNombre) hNombre.innerText = archivo.nombre || '';
       if (divMeta) {
         let loteDesc = '';
         if (visorLoteIdActual === 'sin_identificar') {
           loteDesc = 'Sin identificar';
+        } else if (visorLoteIdActual === 'edicion_sin_editar') {
+          loteDesc = `Para editar: ${archivo.personaje || ''} / ${archivo.capitulo || ''}`;
         } else if (visorLoteIdActual && visorLoteIdActual.startsWith('pendrive:')) {
           const cKey = visorLoteIdActual.slice(9);
           loteDesc = `Sala de espera: ${cKey}`;
@@ -1376,13 +1393,13 @@
           const l = todosLotes.find(lot => lot.lote_id === visorLoteIdActual);
           loteDesc = l ? (l.es_anterior ? `Lote #${l.numero} (Anteriores)` : `Lote #${l.numero}`) : 'Lote';
         }
-        const pesoFmt = archivo.tamanio_fmt || formatearBytes(archivo.tamanio || archivo.tamanio_bytes || 0);
+        const pesoFmt = archivo.tamanio_fmt || formatearBytes(archivo.tamanio || archivo.tamanio_bytes || archivo.tamano || 0);
         const fechaTxt = archivo.fecha_modificacion || archivo.fecha_llegada || archivo.fecha || '';
-        divMeta.innerText = `${loteDesc} • ${pesoFmt} • 🕒 ${fechaTxt}`;
+        divMeta.innerText = `${loteDesc} • ${pesoFmt}${fechaTxt ? ' • 🕒 ' + fechaTxt : ''}`;
       }
 
       if (chk) {
-        if (visorLoteIdActual === 'sin_identificar' || (visorLoteIdActual && visorLoteIdActual.startsWith('pendrive:'))) {
+        if (visorLoteIdActual === 'sin_identificar' || visorLoteIdActual === 'edicion_sin_editar' || (visorLoteIdActual && visorLoteIdActual.startsWith('pendrive:'))) {
           if (lblChk) lblChk.style.display = 'none';
         } else {
           if (lblChk) lblChk.style.display = 'flex';
@@ -1402,8 +1419,8 @@
         vid.style.display = 'none';
       }
 
-      const mediaId = archivo.id_media || '';
-      const srcUrl = `/api/media?id=${mediaId}`;
+      const mediaId = archivo.id_media || archivo.ruta_relativa || archivo.identificador || '';
+      const srcUrl = `/api/media?id=${encodeURIComponent(mediaId)}`;
 
       if (esArchivoVideo(archivo.nombre)) {
         if (vid) {
@@ -1413,6 +1430,7 @@
           };
           vid.src = srcUrl;
           vid.style.display = 'block';
+          vid.play().catch(() => {});
         }
       } else {
         if (img) {
@@ -3549,13 +3567,13 @@
               <input type="checkbox" onchange="toggleSeleccionClipParaEditar('${escapeHTML(c.identificador)}')" ${sel}>
             </td>
             <td style="padding:8px; font-weight:500;">
-              <span title="${escapeHTML(c.ruta_relativa)}">${escapeHTML(c.nombre)}</span>
+              <span style="cursor:pointer;" onclick="previsualizarClipPendrive('${escapeHTML(c.id_media || c.ruta_relativa || c.identificador)}', '${escapeHTML(c.nombre)}')" title="${escapeHTML(c.ruta_relativa)}">${escapeHTML(c.nombre)}</span>
             </td>
             <td style="padding:8px; color:var(--text-muted);">${escapeHTML(c.personaje)}</td>
             <td style="padding:8px; color:var(--text-muted);"><span class="badge" style="background:#1e1b4b; color:#a5b4fc;">${escapeHTML(c.capitulo)}</span></td>
             <td style="padding:8px; color:var(--text-muted); font-size:0.85rem;">${tamStr}</td>
             <td style="padding:8px; text-align:right;">
-              <button class="btn-sm" onclick="previsualizarClipPendrive('${escapeHTML(c.ruta_relativa)}', '${escapeHTML(c.nombre)}')" style="padding:3px 8px; font-size:0.8rem; background:var(--card-alt); border:1px solid var(--border); color:var(--text);">▶ Ver</button>
+              <button class="btn-sm" onclick="previsualizarClipPendrive('${escapeHTML(c.id_media || c.ruta_relativa || c.identificador)}', '${escapeHTML(c.nombre)}')" style="padding:3px 8px; font-size:0.8rem; background:var(--card-alt); border:1px solid var(--border); color:var(--text); cursor:pointer;">▶ Ver</button>
             </td>
           </tr>
         `;
@@ -3962,21 +3980,66 @@
       }
     }
 
-    function previsualizarClipPendrive(rutaRelativa, nombre) {
+    function previsualizarClipPendrive(rutaRelativaOId, nombre) {
+      if (clipsParaEditar && clipsParaEditar.length) {
+        const idx = clipsParaEditar.findIndex(c => 
+          (c.id_media && c.id_media === rutaRelativaOId) || 
+          c.ruta_relativa === rutaRelativaOId || 
+          c.identificador === rutaRelativaOId || 
+          c.nombre === nombre
+        );
+        if (idx !== -1) {
+          abrirVisorMedia('edicion_sin_editar', rutaRelativaOId);
+          return;
+        }
+      }
+
       const visor = document.getElementById('modal-visor-media');
       const video = document.getElementById('visor-video');
       const img = document.getElementById('visor-img');
       const nombreEl = document.getElementById('visor-nombre');
       const metaEl = document.getElementById('visor-meta');
+      const errBox = document.getElementById('visor-error-formato');
+      const feedback = document.getElementById('visor-copiar-feedback');
+      const lblChk = document.getElementById('visor-lbl-seleccion');
+      const navPrev = document.querySelector('.visor-nav-prev');
+      const navNext = document.querySelector('.visor-nav-next');
       if (!visor || !video) return;
 
-      if (img) img.style.display = 'none';
-      if (nombreEl) nombreEl.innerText = nombre;
-      if (metaEl) metaEl.innerText = rutaRelativa;
+      if (img) {
+        img.removeAttribute('src');
+        img.style.display = 'none';
+      }
+      if (errBox) errBox.style.display = 'none';
+      if (feedback) feedback.style.display = 'none';
+      if (lblChk) lblChk.style.display = 'none';
+      if (navPrev) navPrev.style.display = 'none';
+      if (navNext) navNext.style.display = 'none';
 
-      video.src = `/api/media?id=${encodeURIComponent(rutaRelativa)}`;
+      if (nombreEl) nombreEl.innerText = nombre || '';
+      if (metaEl) metaEl.innerText = `Para editar • ${rutaRelativaOId || ''}`;
+
+      visorArchivoActual = {
+        nombre: nombre,
+        ruta: rutaRelativaOId
+      };
+      visorLoteIdActual = 'edicion_sin_editar';
+      visorListaActual = [];
+      visorIndiceActual = -1;
+
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+
+      video.onerror = () => {
+        video.style.display = 'none';
+        if (errBox) errBox.style.display = 'block';
+      };
+
+      video.src = `/api/media?id=${encodeURIComponent(rutaRelativaOId)}`;
       video.style.display = 'block';
       visor.style.display = 'flex';
+      visor.focus();
       video.play().catch(() => {});
     }
 

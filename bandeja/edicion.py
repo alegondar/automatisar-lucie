@@ -87,6 +87,7 @@ def obtener_secciones_edicion(
     pendrive_montaje: str,
     db: GestorBaseDatosBandeja,
     carpeta_raiz: str = "LucieSinReglas",
+    vigilante: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     Inspecciona el pendrive (fuente de verdad) y la base de datos para construir
@@ -140,11 +141,18 @@ def obtener_secciones_edicion(
                         tamano = 0
                         mtime = 0
 
+                    id_media = None
+                    if vigilante and hasattr(vigilante, "registrar_ruta_media"):
+                        try:
+                            id_media = vigilante.registrar_ruta_media(ruta_abs)
+                        except Exception:
+                            id_media = None
+
                     if identificador_clip in clips_en_sesion:
                         conteos_capitulo[capitulo]["en_edicion"] += 1
                     else:
                         conteos_capitulo[capitulo]["sin_editar"] += 1
-                        para_editar.append({
+                        clip_dict: Dict[str, Any] = {
                             "identificador": identificador_clip,
                             "nombre": arch,
                             "personaje": personaje,
@@ -152,7 +160,10 @@ def obtener_secciones_edicion(
                             "ruta_relativa": identificador_clip,
                             "tamano": tamano,
                             "mtime": mtime,
-                        })
+                        }
+                        if id_media:
+                            clip_dict["id_media"] = id_media
+                        para_editar.append(clip_dict)
 
     # 2. Explorar 'videos ya editados'
     if os.path.exists(dir_ya_editados):

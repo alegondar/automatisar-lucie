@@ -6186,6 +6186,13 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
             self.assertEqual(status, 206)
             self.assertEqual(raw, self.clip_contenido[:10])
 
+            # Probar también con identificador sin el prefijo 'videos sin editar/'
+            rel_sin_prefijo = "lucie/capitulo_01/toma_01.mp4"
+            id_quoted_sin_prefijo = urllib.parse.quote(rel_sin_prefijo)
+            status_sp, _, raw_sp = self._get(f"/api/media?id={id_quoted_sin_prefijo}", headers_extra={"Range": "bytes=0-9"})
+            self.assertEqual(status_sp, 206)
+            self.assertEqual(raw_sp, self.clip_contenido[:10])
+
             status_fuera, _, _ = self._get("/api/media?id=../../../../etc/passwd")
             self.assertIn(status_fuera, (403, 404))
 
