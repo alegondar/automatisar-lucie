@@ -1029,7 +1029,11 @@ class TestCapituloActivoYReconocimientoNombres(unittest.TestCase):
 
     def test_asignacion_inmediata_capitulo_activo(self):
         """Con capítulo activo, cualquier candidato nuevo se asigna a personaje/capitulo sin importar nombre ni hora."""
-        self.db.guardar_capitulo_activo("lucie", "capitulo_01", habilitado=True)
+        # Estos tests prueban asignacion, no el limite temporal: separar el inicio
+        # del archivo evita depender de la precision del reloj del filesystem.
+        with patch("bandeja.db.datetime", wraps=datetime) as reloj:
+            reloj.datetime.now.return_value = datetime.datetime.now() - datetime.timedelta(minutes=1)
+            self.db.guardar_capitulo_activo("lucie", "capitulo_01", habilitado=True)
 
         arch_extrano = os.path.join(self.descargas, "video_random_sin_alias.mp4")
         with open(arch_extrano, "wb") as f:
@@ -1055,7 +1059,9 @@ class TestCapituloActivoYReconocimientoNombres(unittest.TestCase):
 
     def test_modificar_o_desactivar_capitulo_no_reasigna_existentes(self):
         """Modificar o desactivar el capítulo activo no altera archivos ya detectados."""
-        self.db.guardar_capitulo_activo("lucie", "cap_inicial", habilitado=True)
+        with patch("bandeja.db.datetime", wraps=datetime) as reloj:
+            reloj.datetime.now.return_value = datetime.datetime.now() - datetime.timedelta(minutes=1)
+            self.db.guardar_capitulo_activo("lucie", "cap_inicial", habilitado=True)
         arch1 = os.path.join(self.descargas, "video_a.mp4")
         with open(arch1, "wb") as f:
             f.write(b"data a")
