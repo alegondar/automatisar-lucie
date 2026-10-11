@@ -27,3 +27,29 @@ La estructura final de salidas es `<categoria>/<personaje>/<nombre - mes - año>
 con videos directamente dentro, sin semana ni subcarpetas de capítulo.
 CapCut conserva sus originales. Ver el mapa de módulos, API, estados, modo manual,
 reintentos, reversión y validaciones en `ESTADO_ACTUAL.md`.
+
+## Cierre de cambios y publicación en GitHub
+
+Esta instrucción se aplica en cada sesión y a cada tarea que termine con cambios
+en el proyecto, incluidos cambios de documentación o de estas instrucciones.
+
+- Antes de cerrar la tarea, terminar el trabajo y las validaciones pertinentes,
+  revisar el diff y resumir qué cambió y qué se comprobó.
+- Preguntar por iniciativa propia: «¿Querés que haga el commit y suba estos
+  cambios a GitHub en la rama `<rama_actual>`?». No esperar a que el usuario
+  solicite la publicación. Si hay commits locales anteriores pendientes de subir,
+  indicar que también se incluirán en el push.
+- Esperar una confirmación explícita. Esta regla autoriza preguntar, pero no
+  autoriza por sí sola hacer commit o push. Si el usuario ya autorizó expresamente
+  ambas acciones para estos mismos cambios, ejecutarlas sin preguntar de nuevo.
+- Con la confirmación, revisar `git status` y el diff, seleccionar explícitamente
+  solo los archivos de la tarea, ejecutar las auditorías correspondientes y crear
+  un commit descriptivo. No incluir cambios ajenos, secretos, bases de datos,
+  configuraciones locales, material multimedia, exports, logs o informes generados.
+- Subir la rama de trabajo a `origin`; si no tiene upstream, usar
+  `git push -u origin <rama_actual>`. No modificar ni publicar `master`, no usar
+  force push ni saltar hooks o auditorías. Verificar el resultado y comunicar
+  la rama y el commit publicados; no afirmar éxito si el push falló.
+- Si el usuario rechaza o posterga, conservar los cambios locales y no insistir
+  sobre el mismo lote. Volver a preguntar al terminar un nuevo lote de cambios.
+- Si no hubo cambios ni commits pendientes, no ofrecer un commit vacío.
