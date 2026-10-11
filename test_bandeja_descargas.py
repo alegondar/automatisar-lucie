@@ -6139,7 +6139,8 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
             "punto_montaje": self.pendrive_dir,
             "id": "12345678-1234-4234-8234-123456789abc"
         }
-        with patch("bandeja.servidor.detectar_pendrive", return_value=mock_pen):
+        with patch("bandeja.servidor.detectar_pendrive", return_value=mock_pen), patch("bandeja.edicion.datetime", wraps=datetime) as reloj:
+            reloj.datetime.now.return_value = datetime.datetime(2026, 10, 11, 12, 30)
             # 1. GET /api/edicion/secciones
             status, data, _ = self._get("/api/edicion/secciones")
             self.assertEqual(status, 200)
@@ -6168,11 +6169,13 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
             status_term, res_term = self._post("/api/edicion/terminar", {"sesion_id": sesion_id})
             self.assertEqual(status_term, 200)
             self.assertTrue(res_term.get("exito"))
-            dest_esperado = os.path.join(self.raiz_pen, "videos ya editados", "lucie", "capitulo_01", "toma_01.mp4")
+            dest_esperado = os.path.join(self.raiz_pen, "videos ya editados", "lucie", "capitulo_01",
+                                         "toma_01 - octubre - semana 2 - 2026", "toma_01.mp4")
             self.assertTrue(os.path.isfile(dest_esperado))
             self.assertFalse(os.path.isfile(self.clip_path))
 
             # 5. POST /api/edicion/deshacer-terminar
+            reloj.datetime.now.return_value = datetime.datetime(2027, 1, 3)
             status_desh, res_desh = self._post("/api/edicion/deshacer-terminar", {"sesion_id": sesion_id})
             self.assertEqual(status_desh, 200)
             self.assertTrue(res_desh.get("exito"))

@@ -31,6 +31,40 @@ from bandeja.plataforma import esta_confinado_en_raiz
 logger = logging.getLogger("bandeja_edicion")
 
 
+def nombre_carpeta_video(nombre: str, fecha: Optional[datetime.datetime] = None) -> str:
+    """Nombre del video y fecha local del traslado; semanas del mes de siete dias."""
+    fecha = fecha or datetime.datetime.now()
+    meses = (
+        "enero", "febrero", "marzo", "abril", "mayo", "junio",
+        "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+    )
+    base = os.path.splitext(os.path.basename(nombre))[0]
+    semana = (fecha.day - 1) // 7 + 1
+    return f"{base} - {meses[fecha.month - 1]} - semana {semana} - {fecha.year}"
+
+
+def _destinos_editados_sesion(pendrive_raiz: str, identificador: str) -> Dict[str, str]:
+    """Recupera rutas efectivas del manifiesto para reintentos y deshacer sin fecha actual."""
+    ruta = os.path.join(pendrive_raiz, ".lucie", NOMBRE_MANIFIESTO_PENDRIVE)
+    destinos = {}
+    if not os.path.isfile(ruta):
+        return destinos
+    with open(ruta, "r", encoding="utf-8") as archivo:
+        for linea in archivo:
+            try:
+                evento = json.loads(linea)
+            except json.JSONDecodeError:
+                continue
+            if evento.get("sesion_id") != identificador:
+                continue
+            clip = evento.get("clip")
+            if evento.get("tipo_evento") == "editado" and evento.get("ruta_destino"):
+                destinos[clip] = os.path.join(pendrive_raiz, evento["ruta_destino"].replace("/", os.sep))
+            elif evento.get("tipo_evento") == "deshacer_editado":
+                destinos.pop(clip, None)
+    return destinos
+
+
 def calcular_nombre_defecto(clips: List[str], capitulo: str) -> str:
     """
     Calcula el nombre por defecto del video final:
@@ -286,6 +320,8 @@ def finalizar_edicion_crudos(
     dir_ya_editados = os.path.join(pendrive_raiz, "videos ya editados")
 
     clips = sesion.get("clips", [])
+    destinos_registrados = _destinos_editados_sesion(pendrive_raiz, sesion["identificador"])
+    fecha_traslado = datetime.datetime.now()
     movidos = []
     conflictos = []
     omisiones = []
@@ -293,9 +329,16 @@ def finalizar_edicion_crudos(
     for rel_clip in clips:
         # Asegurar ruta confinada
         ruta_orig = os.path.join(dir_sin_editar, rel_clip.replace("/", os.sep))
-        ruta_dest = os.path.join(dir_ya_editados, rel_clip.replace("/", os.sep))
+        ruta_anterior = os.path.join(dir_ya_editados, rel_clip.replace("/", os.sep))
+        ruta_dest = destinos_registrados.get(rel_clip)
+        if not ruta_dest:
+            ruta_dest = ruta_anterior if os.path.exists(ruta_anterior) else os.path.join(
+                os.path.dirname(ruta_anterior),
+                nombre_carpeta_video(os.path.basename(ruta_anterior), fecha_traslado),
+                os.path.basename(ruta_anterior),
+            )
 
-        if not esta_confinado_en_raiz(ruta_orig, pendrive_raiz) or not esta_confinado_en_raiz(ruta_dest, pendrive_raiz):
+        if not esta_confinado_en_raiz(ruta_orig, dir_sin_editar) or not esta_confinado_en_raiz(ruta_dest, dir_ya_editados):
             conflictos.append({"clip": rel_clip, "error": "Ruta no confinada en el pendrive"})
             continue
 
@@ -342,6 +385,7 @@ def finalizar_edicion_crudos(
                 "tipo_evento": "editado",
                 "sesion_id": sesion["identificador"],
                 "clip": rel_clip,
+                "ruta_destino": os.path.relpath(ruta_dest, pendrive_raiz).replace(os.sep, "/"),
                 "sha256": sha_orig,
             }
         )
@@ -397,12 +441,17 @@ def deshacer_finalizar_edicion(
     dir_ya_editados = os.path.join(pendrive_raiz, "videos ya editados")
 
     clips = sesion.get("clips", [])
+    destinos_registrados = _destinos_editados_sesion(pendrive_raiz, sesion["identificador"])
     revertidos = []
     conflictos = []
 
     for rel_clip in clips:
         ruta_orig = os.path.join(dir_sin_editar, rel_clip.replace("/", os.sep))
-        ruta_dest = os.path.join(dir_ya_editados, rel_clip.replace("/", os.sep))
+        ruta_dest = destinos_registrados.get(rel_clip) or os.path.join(dir_ya_editados, rel_clip.replace("/", os.sep))
+
+        if not esta_confinado_en_raiz(ruta_orig, dir_sin_editar) or not esta_confinado_en_raiz(ruta_dest, dir_ya_editados):
+            conflictos.append({"clip": rel_clip, "error": "Ruta no confinada en el pendrive"})
+            continue
 
         if not os.path.isfile(ruta_dest):
             continue
@@ -464,7 +513,7 @@ def copiar_export_a_videos_completos(
 ) -> Dict[str, Any]:
     """
     Copia de forma segura el video final exportado por CapCut a:
-    <pendrive>/<carpeta_raiz>/videos completos/<personaje>/<capítulo>/<nombre_final>
+    <pendrive>/<carpeta_raiz>/videos completos/<personaje>/<capítulo>/<video - mes - semana - año>/<nombre_final>
     Protocolo de seguridad:
     1. Comprueba espacio suficiente en pendrive.
     2. Comprueba que destino no exista (evita pisado ciego).
@@ -484,6 +533,14 @@ def copiar_export_a_videos_completos(
         nombre_final = f"{nombre_final}.mp4"
 
     dir_completos = os.path.join(pendrive_raiz, "videos completos", personaje, capitulo)
+    ruta_anterior = os.path.join(dir_completos, nombre_final)
+    sesion_actual = db.obtener_sesion_por_id(sesion["id"]) or sesion
+    ruta_registrada = sesion_actual.get("video_completo_ruta")
+    if ruta_registrada and esta_confinado_en_raiz(ruta_registrada, pendrive_raiz) and os.path.exists(ruta_registrada):
+        raise FileExistsError(f"La sesion ya tiene un video completo en '{ruta_registrada}'. No se sobreescribe.")
+    if esta_confinado_en_raiz(ruta_anterior, pendrive_raiz) and os.path.exists(ruta_anterior):
+        raise FileExistsError(f"El destino anterior '{ruta_anterior}' ya existe. No se sobreescribe.")
+    dir_completos = os.path.join(dir_completos, nombre_carpeta_video(nombre_final))
     ruta_destino = os.path.join(dir_completos, nombre_final)
 
     if not esta_confinado_en_raiz(ruta_destino, pendrive_raiz):

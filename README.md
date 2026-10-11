@@ -148,3 +148,22 @@ python3 instalar_hooks.py
 * El script instala `.git/hooks/pre-push` de forma segura.
 * **Garantía de creación exclusiva:** Si ya existe un hook configurado, no lo sobrescribe.
 * Al ejecutar cualquier comando `git push`, el hook ejecutará automáticamente `python3 auditar_repo.py --historial` y cancelará el envío si se detecta alguna anomalía.
+
+## Organización de videos editados y completos
+
+Al pasar un clip a `videos ya editados` o copiar un export a `videos completos`,
+se crea una carpeta individual dentro de su personaje y capítulo:
+
+```text
+videos ya editados/lucie/cap01/Toma 1 - octubre - semana 2 - 2026/Toma 1.mp4
+videos completos/lucie/cap01/Mi video - octubre - semana 2 - 2026/Mi video.mp4
+```
+
+La fecha corresponde al momento del traslado o copia, según el reloj local del
+equipo. Los meses se escriben en español y las semanas se cuentan dentro del mes:
+1–7 es semana 1, 8–14 semana 2, 15–21 semana 3, 22–28 semana 4 y 29–31 semana 5.
+El nombre del archivo se conserva; la carpeta usa ese nombre sin la extensión.
+
+Las rutas efectivas quedan registradas para permitir reintentos y deshacer aunque
+cambie la fecha. Los archivos existentes conservan su estructura anterior y no se
+reorganizan automáticamente. Los destinos ocupados se respetan sin sobrescribir.
