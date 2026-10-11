@@ -1,5 +1,11 @@
 # Design: Modo Edición con CapCut (Tramo 3)
 
+> Diseño inicial conservado como historial. Para el comportamiento implementado
+> al 2026-10-11, consultar [ESTADO_ACTUAL.md](../../../ESTADO_ACTUAL.md): carpetas
+> únicas con mes/año, sesiones `en_edicion` o `editado`, modo manual opcional,
+> pestaña Videos completados y registro persistente de identificadores del visor.
+> Los eventos se registran en `.lucie/manifiesto.jsonl`, no en el marcador de vinculación.
+
 ## Context
 
 El sistema gestiona la ingesta y envío estructurado de clips hacia un pendrive en `LucieSinReglas/videos sin editar/<personaje>/<capítulo>/`. En Windows, el usuario edita estos clips con CapCut, el cual exporta a `%LOCALAPPDATA%\CapCut\Videos` con nombres no correlativos (ej. `0818(15)`). El proyecto exige el cumplimiento irrestricto de las 7 Reglas de Oro: prohibición absoluta de borrado o truncado destructivo, simulación/aprobación granular, verificación de destino sin pisado, validación de hash post-copia, registro reversible y hermeticidad de pruebas unitarias.

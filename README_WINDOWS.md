@@ -66,3 +66,24 @@ Puede comprobar la compatibilidad de su entorno Windows ejecutando en una consol
 python verificar_windows.py
 ```
 Este script evaluará el sistema, rutas, nombres reservados, codificación y exclusividad de puertos, guardando un diagnóstico en `verificacion_windows.txt` sin borrar ningún dato.
+
+## 7. Edición, CapCut y reproducción
+
+El funcionamiento actual, las rutas finales y los controles de seguridad están
+documentados en [ESTADO_ACTUAL.md](ESTADO_ACTUAL.md). Las carpetas de salida usan
+nombre de edición, mes y año, con los videos directamente dentro.
+
+CapCut conserva su export original. La bandeja copia el nuevo export con el
+nombre de la sesión al pendrive vinculado y muestra el estado en **Videos
+completados**. Para exigir el botón de envío antes de copiar, usar
+`"envio_exports_capcut": "manual"` en `config_bandeja.local.json`.
+
+La exclusividad Windows se comprueba con `CreateFileW` sin compartir el archivo;
+un simple bloqueo de bytes `msvcrt` no detectaba todos los escritores abiertos.
+El visor de Edición conserva ahora sus identificadores entre sondeos y distingue
+errores HTTP de formatos no admitidos por el navegador. Después de actualizar,
+reiniciar la bandeja y recargar con `Ctrl+F5`.
+
+Última validación registrada: 286 pruebas, OK, 9 saltadas; AST con 0 infracciones.
+Consultar los motivos de los saltos y los límites de la validación en la guía
+de estado. Nunca ejecutar pruebas contra carpetas reales del usuario.

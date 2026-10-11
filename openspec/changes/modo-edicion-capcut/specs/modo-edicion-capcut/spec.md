@@ -1,5 +1,10 @@
 # Spec Delta
 
+> Especificación inicial. Las actualizaciones implementadas de estructura,
+> asociación, envío y revisión se documentan en
+> [ESTADO_ACTUAL.md](../../../../../ESTADO_ACTUAL.md). Ese documento describe
+> el estado vigente; las rutas anteriores de este delta son históricas.
+
 ## Purpose
 
 Permite gestionar el ciclo de posproducción con CapCut: agrupar clips en sesiones de edición, monitorear exportaciones sin alterar el directorio de CapCut, copiar videos finales a 'videos completos' con verificación de integridad y trasladar crudos a 'videos ya editados' de forma reversible.

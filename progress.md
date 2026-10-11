@@ -1,5 +1,18 @@
 # Registro de Progreso (progress.md)
 
+## Sesión: 2026-10-11 — Windows, edición y CapCut
+
+Implementados y commiteados: detección de escritores Windows, pruebas de symlinks
+según privilegios reales, fixtures temporales de capítulos, carpetas únicas por
+edición con mes/año, envío y revisión de exports CapCut, y persistencia de los
+identificadores del visor entre sondeos. El detalle vigente y la evidencia están
+en [ESTADO_ACTUAL.md](ESTADO_ACTUAL.md); sustituye el diseño intermedio con semana.
+
+Última suite: 286 pruebas OK, 9 saltadas; AST 0 infracciones y JavaScript válido.
+Manifiesto antes/después: 54/54. Linux no ejecutado en esta máquina.
+Documentación actualizada para continuidad; rama `organizar-videos-por-fecha`,
+con `master` intacto. Las propuestas anteriores se conservan como historial.
+
 ## Sesión: 2026-10-03
 
 ### [09:28] Inicialización del proyecto

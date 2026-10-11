@@ -1,5 +1,10 @@
 # Plan de Tareas: Script de Auditoría e Inventario de Pendrive
 
+> Este plan corresponde al inventario inicial de 2026-10-03. Para el estado
+> actual de Windows, edición y CapCut, consultar [ESTADO_ACTUAL.md](ESTADO_ACTUAL.md)
+> y [progress.md](progress.md). No usar el estado histórico de este plan como
+> indicador del avance de esas funcionalidades.
+
 ## Objetivo
 Desarrollar un script en Python robusto, multiplataforma (Linux/Kali y Windows) y estrictamente de **SOLO LECTURA** para auditar e inventariar todo el contenido de un pendrive con análisis de archivos, detección de duplicados globales y carpetas sospechosas, cálculo de almacenamiento y generación de informes detallados.
 

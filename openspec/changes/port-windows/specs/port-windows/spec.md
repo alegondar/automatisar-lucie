@@ -1,5 +1,10 @@
 # Spec Delta: Compatibilidad con Windows 10/11 (port-windows)
 
+> Correcciones posteriores y validación del 2026-10-11:
+> [ESTADO_ACTUAL.md](../../../../../ESTADO_ACTUAL.md). Windows comprueba
+> exclusividad con `CreateFileW` sin compartir; los tests de symlinks dependen
+> del privilegio real, y la rama Linux de bloqueo permanece intacta.
+
 ## Purpose
 
 Proveer soporte nativo para la ejecución de la bandeja de descargas en sistemas operativos Windows 10 y Windows 11 con Python 3.13, manteniendo paridad funcional estricta con Linux, aislamiento de código de sistema operativo en la capa de plataforma, utilización exclusiva de la biblioteca estándar (incluyendo ctypes), y pleno cumplimiento de las 7 Reglas de Oro con cero infracciones en el análisis estático AST anti-borrado.

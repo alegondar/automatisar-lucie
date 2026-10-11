@@ -1,5 +1,8 @@
 schema: spec-driven
 
+# Estado implementado y guía de continuidad; no sustituye las Reglas de Oro.
+# Ver ../ESTADO_ACTUAL.md y ../AGENTS.md antes de proponer cambios.
+
 # Project context (Reglas de Oro del proyecto)
 context: |
   REGLAS DE ORO (obligatorias en todo el proyecto):
@@ -10,3 +13,10 @@ context: |
   5. VERIFICACIÓN DE HASH POST-COPIA Y REVERSIÓN SIN BORRAR: Después de copiar, recalcular el hash en el destino y compararlo con el origen. Si el hash no coincide, la copia defectuosa NUNCA se elimina; se mueve a _a_revisar/copias_fallidas/ y se registra en la bitácora.
   6. REGISTRO .JSONL Y DESHACER: Cada operación queda en un registro .jsonl con opción de deshacer.
   7. TEST ANTI-BORRADO: Test automático estático (AST) que falle si aparece cualquier llamada prohibida de borrado o pisado en el código (os.remove, os.unlink, os.rmdir, os.removedirs, Path.unlink, Path.rmdir, shutil.rmtree, shutil.move, os.replace, send2trash, subprocess/os.system con rm).
+  ESTADO IMPLEMENTADO (2026-10-11):
+  - Salidas de edición: categoria/personaje/nombre - mes español - año/, con videos directamente dentro; sin semana ni subcarpetas de capítulo. No migrar estructuras anteriores automáticamente.
+  - CapCut conserva sus originales. La copia recibe el nombre de la sesión; solo una sesión candidata permite asociación automática, en estados en_edicion o editado.
+  - El envío automático de exports corresponde a autorización expresa del usuario para ese flujo específico, conservando colisiones, hash, registro y reversión; no extiende permisos a otras acciones. envio_exports_capcut=manual exige envío explícito desde Videos completados.
+  - Pruebas herméticas exclusivamente temporales. No tocar Descargas, CapCut ni pendrive reales; para la suite solo contar el manifiesto en lectura antes/después, y detenerse si cambia.
+  - Windows usa CreateFileW sin compartir para comprobar exclusividad; Linux conserva fcntl.flock. Preservar ambos sistemas.
+  - Consultar ESTADO_ACTUAL.md para módulos, API, estados, reintentos, deshacer, reproducción y evidencia de validación; no confundir propuestas históricas con el comportamiento actual.

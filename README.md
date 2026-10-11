@@ -151,6 +151,9 @@ python3 instalar_hooks.py
 
 ## Organización de videos editados y completos
 
+Para próximas sesiones y mantenimiento, consultar [Estado actual del sistema](ESTADO_ACTUAL.md)
+y [Guía para agentes](AGENTS.md). La constitución permanece en [openspec/config.yaml](openspec/config.yaml).
+
 Al pasar un clip a `videos ya editados` o copiar un export a `videos completos`,
 se crea una única carpeta con el nombre de la edición dentro de su personaje.
 Los videos quedan directamente dentro de ella, sin subcarpetas:
