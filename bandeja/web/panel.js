@@ -1595,7 +1595,7 @@
 
       const otrasEscenas = (datosEstado.escenas || [])
         .filter(e => !nombresAbiertos.has(e.nombre))
-        .map(e => `<option value="${escapeHTML(e.nombre)}" data-tipo="${e.tipo}" ${(matchOtraEscena && e.nombre === escenaPre) ? 'selected' : ''}>[${e.tipo === 'descargas_alias' ? 'En Descargas' : 'Destino'}] ${escapeHTML(e.nombre)}</option>`)
+        .map(e => `<option value="${escapeHTML(e.nombre)}" data-tipo="${e.tipo}" data-personaje="${escapeHTML(e.personaje || "")}" ${(matchOtraEscena && e.nombre === escenaPre) ? 'selected' : ''}>[${e.tipo === 'en_edicion' ? 'En edici?n: ' + e.personaje : e.tipo === 'descargas_alias' ? 'En Descargas' : 'Destino'}] ${escapeHTML(e.nombre)}</option>`)
         .join('');
 
       const escenasOptions = optElegir + optFoco + optsAbiertosSecundarios + optNueva + otrasEscenas;
@@ -1683,7 +1683,7 @@
 
       const otrasEscenasAnt = (datosEstado.escenas || [])
         .filter(e => !nombresAbiertosAnt.has(e.nombre))
-        .map(e => `<option value="${escapeHTML(e.nombre)}" data-tipo="${e.tipo}">[${e.tipo === 'descargas_alias' ? 'En Descargas' : 'Destino'}] ${escapeHTML(e.nombre)}</option>`)
+        .map(e => `<option value="${escapeHTML(e.nombre)}" data-tipo="${e.tipo}" data-personaje="${escapeHTML(e.personaje || "")}">[${e.tipo === 'en_edicion' ? 'En edici?n: ' + e.personaje : e.tipo === 'descargas_alias' ? 'En Descargas' : 'Destino'}] ${escapeHTML(e.nombre)}</option>`)
         .join('');
 
       const escenasOptions = optFocoAnt + optsAbiertosSecundariosAnt + otrasEscenasAnt;
@@ -3641,8 +3641,13 @@
       const btn = document.getElementById('btn-crear-sesion');
       if (!btn) return;
       const count = clipsSeleccionadosParaEditar.size;
-      btn.innerText = `Voy a editar estos (${count})`;
+      btn.innerText = `Crear nueva sesión (${count})`;
       btn.disabled = (count === 0);
+      const sumar = document.getElementById('btn-sumar-seleccionados');
+      if (sumar) {
+        sumar.innerText = `Sumar video (${count})`;
+        sumar.disabled = (count === 0);
+      }
     }
 
     function filtrarClipsParaEditar() {
@@ -3730,6 +3735,14 @@
     }
 
     function renderizarSesionesEnEdicion(sesiones) {
+      const destino = document.getElementById('sesion-destino-sumar');
+      if (destino) {
+        const anterior = destino.value;
+        destino.innerHTML = '<option value="">Elegí una sesión en curso</option>' +
+          (sesiones || []).filter(s => !s.video_completo_ruta).map(s =>
+            `<option value="${s.id}">${escapeHTML(s.nombre)} (${escapeHTML(s.personaje)} / ${escapeHTML(s.capitulo)})</option>`).join('');
+        if (Array.from(destino.options).some(o => o.value === anterior)) destino.value = anterior;
+      }
       const cont = document.getElementById('contenedor-en-edicion');
       if (!cont) return;
 
@@ -3768,13 +3781,25 @@
       cont.innerHTML = html;
     }
 
+    function sumarVideosSesionElegida() {
+      const selector = document.getElementById('sesion-destino-sumar');
+      if (!selector || !selector.value) {
+        mostrarAvisoEdicion('Elegí la sesión que ya estás editando en «Sumar seleccionados a».');
+        return;
+      }
+      return sumarVideosSesion(Number(selector.value));
+    }
+
     async function sumarVideosSesion(sesionId) {
       const seleccion = clipsParaEditar.filter(c => clipsSeleccionadosParaEditar.has(c.identificador));
       if (!seleccion.length) {
         mostrarAvisoEdicion('Seleccioná los videos en «Para editar» y luego pulsá «Sumar video» en la sesión deseada.');
         return;
       }
-      if (!confirm(`¿Sumar estos ${seleccion.length} video(s) a esta sesión?\n${seleccion.map(c => c.nombre).join('\n')}\nLos archivos conservarán su ubicación.`)) return;
+      const selector = document.getElementById('sesion-destino-sumar');
+      const opcion = selector ? Array.from(selector.options).find(o => Number(o.value) === sesionId) : null;
+      const nombre = opcion ? opcion.textContent : `sesión ${sesionId}`;
+      if (!confirm(`¿Sumar estos ${seleccion.length} video(s) a «${nombre}»?\n${seleccion.map(c => c.nombre).join('\n')}\nLos archivos conservarán su ubicación.`)) return;
       try {
         const resultado = await apiFetch('/api/edicion/sumar-videos', {
           method: 'POST', body: JSON.stringify({ sesion_id: sesionId, clips: seleccion.map(c => c.ruta_relativa) })

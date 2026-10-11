@@ -56,6 +56,7 @@ class VigilanteBandeja:
         self._estado_pendrive: Dict[str, Any] = {"conectado": False, "sin_respuesta": False}
         self._mapa_media: Dict[str, str] = {}
         self._media_registrada: Dict[str, str] = {}
+        self._hashes_archivos = {}
         self._version_forzada: int = 0
         self._lock = threading.Lock()
 
@@ -176,7 +177,12 @@ class VigilanteBandeja:
             # Comprobar en base de datos SQLite si ya tiene decisión tomada
             reg = self.db.obtener_por_ruta(ruta_completa)
             try:
-                hash_val = reg["hash"] if reg else calcular_sha256(ruta_completa)
+                firma = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+                cache = self._hashes_archivos.get(ruta_completa)
+                hash_val = cache[1] if cache and cache[0] == firma else calcular_sha256(ruta_completa)
+                self._hashes_archivos[ruta_completa] = (firma, hash_val)
+                if reg and reg["hash"] != hash_val:
+                    reg = None
             except (PermissionError, OSError) as e_hash:
                 logger.debug(f"[BANDEJA][VIGILANTE] Archivo bloqueado o inaccesible al calcular hash '{ruta_completa}': {e_hash}")
                 continue
@@ -488,12 +494,17 @@ class VigilanteBandeja:
             self._detener.wait(self.config.intervalo_sondeo_segundos)
 
     def obtener_estado(self) -> Dict[str, Any]:
+        sesiones = self.db.obtener_sesiones_edicion(estado="en_edicion")
         with self._lock:
+            escenas = list(self._escenas_existentes_actuales)
+            for sesion in sesiones:
+                if not any(e.get("nombre") == sesion["capitulo"] and e.get("personaje") == sesion["personaje"] for e in escenas):
+                    escenas.append({"nombre": sesion["capitulo"], "personaje": sesion["personaje"], "tipo": "en_edicion"})
             return {
                 "lotes": list(self._lotes_actuales),
                 "lotes_anteriores": list(self._lotes_anteriores_actuales),
                 "sin_identificar": list(self._sin_identificar_actuales),
-                "escenas": list(self._escenas_existentes_actuales),
+                "escenas": escenas,
                 "pendrive": dict(self._estado_pendrive)
             }
 

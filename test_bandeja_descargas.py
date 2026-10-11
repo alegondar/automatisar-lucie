@@ -4527,6 +4527,26 @@ class TestPreseleccionRecienteYSeleccionGlobal(unittest.TestCase):
         cfg_cero = ConfiguracionBandeja(ruta_cfg)
         self.assertEqual(cfg_cero.horas_material_reciente, 0.0)
 
+    def test_descarga_reemplazada_no_hereda_hash_enviado(self):
+        ruta = self._crear_archivo_con_antiguedad("lucie_nuevo.mp4", 1, b"video anterior")
+        viejo = calcular_sha256(ruta)
+        self.db.registrar_o_actualizar(viejo, ruta, "detectado")
+        vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+        with patch("bandeja.vigilante.detectar_pendrive", return_value={"punto_montaje": self.tmp_dir}), patch("bandeja.vigilante.leer_manifiesto_pendrive", return_value=[{"sha256": viejo, "estado": "enviado", "nombre": "viejo.mp4"}]):
+            vigilante.escanear()
+            self._crear_archivo_con_antiguedad("lucie_nuevo.mp4", 1, b"video diferente y nuevo")
+            vigilante.escanear()
+        archivos = [a for l in vigilante.obtener_estado()["lotes"] for a in l["archivos"]]
+        self.assertEqual(len(archivos), 1)
+        self.assertNotEqual(archivos[0]["hash"], viejo)
+        self.assertIsNone(archivos[0]["duplicado"])
+
+    def test_capitulo_en_edicion_disponible_sin_carpeta_de_espera(self):
+        self.db.crear_sesion_edicion("sesion", "Rappi", "Rappi.mp4", "roli", "la chica del rappi", [])
+        vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
+        escenas = vigilante.obtener_estado()["escenas"]
+        self.assertIn({"nombre": "la chica del rappi", "personaje": "roli", "tipo": "en_edicion"}, escenas)
+
     def test_obtener_fecha_llegada_devuelve_maximo_mtime_y_ctime(self):
         """La función obtener_fecha_llegada devuelve el valor máximo entre mtime y ctime."""
         from bandeja.lotes import obtener_fecha_llegada

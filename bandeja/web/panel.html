@@ -365,9 +365,17 @@
             <button class="btn-sm btn-secundario" onclick="seleccionarTodosParaEditar()">Todos</button>
             <button class="btn-sm btn-secundario" onclick="deseleccionarTodosParaEditar()">Ninguno</button>
             <button class="btn-sm" id="btn-crear-sesion" onclick="abrirModalCrearSesion()" style="background:var(--accent); color:#000; font-weight:600; padding:6px 14px;" disabled>
-              Voy a editar estos (0)
+                Crear nueva sesión (0)
             </button>
           </div>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:12px 0;">
+          <label for="sesion-destino-sumar">Sumar seleccionados a:</label>
+          <select id="sesion-destino-sumar" aria-label="Sesión en curso para sumar videos">
+            <option value="">Elegí una sesión en curso</option>
+          </select>
+          <button class="btn-sm btn-secundario" id="btn-sumar-seleccionados" onclick="sumarVideosSesionElegida()" disabled>Sumar video (0)</button>
+          <small>Para agregar clips a una edición iniciada, elegí su sesión y pulsá «Sumar video».</small>
         </div>
         <div id="contenedor-para-editar">Cargando clips para editar...</div>
       </div>

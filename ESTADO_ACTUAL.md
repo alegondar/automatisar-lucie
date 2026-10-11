@@ -57,6 +57,18 @@ registrada en SQLite evita volver a copiar una misma sesión en otro mes.
    de archivos; los nuevos clips se incluyen al terminar la edición. Solo se
    admiten videos existentes del mismo personaje, sin enlaces ni rutas fuera
    de crudos, y que no pertenezcan a otra sesión activa. Repetir no duplica clips.
+   Junto a la lista de crudos, **Sumar seleccionados a** permite elegir la sesión
+   existente y pulsar **Sumar video**. La confirmación muestra su nombre.
+   **Crear nueva sesión** abre una edición separada. Si un clip se incorporó por
+   error a una sesión nueva, cancelar esa sesión lo devuelve a Para editar sin
+   mover ni borrar archivos; luego puede sumarse a la sesión original.
+   En Lotes detectados, el selector de escena incluye **En edición** con el
+   personaje y capítulo de las sesiones activas, aunque su carpeta ya no esté en
+   la sala de espera. Seleccionarlo ajusta el personaje del lote. El envío sigue
+   pasando por simulación y aprobación; después se suma el clip desde Edición.
+   La detección de duplicados recalcula el hash cuando cambia la identidad,
+   tamaño o fechas del archivo; no reutiliza ciegamente el hash histórico de su
+   ruta. Una copia con bytes idénticos sigue marcada como duplicada.
 3. El vigilante de CapCut, iniciado junto con la bandeja, busca nuevos `.mp4`
    y `.mov`, también en subcarpetas hasta profundidad 3. Acepta nombres numéricos
    como `0818(15).mp4`. Ignora archivos preexistentes en su fotografía inicial,
@@ -130,6 +142,15 @@ fallo de red y formato no decodificable. No se añadió transcodificación: un c
 que el navegador no admita puede seguir sin reproducirse.
 
 ## Validación registrada y límites
+
+Corrección de descargas para capítulos en edición: **309 pruebas, OK,
+10 saltadas**, en Windows/Python 3.13 (45.474 segundos); manifiesto real
+**84 / 84** líneas. Log: `%TEMP%/tests_descarga_edicion.log`. Regresiones
+temporales verifican que cambiar un archivo en la misma ruta no herede su hash
+anterior y que una sesión activa ofrezca su capítulo sin carpeta de espera.
+Node verificó la opción En edición con el personaje correcto; sintaxis JS,
+AST y auditoría de repositorio/historial correctos. No se inspeccionó el video
+real reportado ni se probó la interacción en navegador o Linux.
 
 Validación de «Sumar video» en Windows/Python 3.13: **307 pruebas, OK,
 10 saltadas**, en 43.418 segundos; saltos por interfaces Linux y privilegios
