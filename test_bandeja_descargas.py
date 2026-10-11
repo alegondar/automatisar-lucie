@@ -1027,7 +1027,7 @@ class TestCapituloActivoYReconocimientoNombres(unittest.TestCase):
 
         vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
         vigilante.escanear()
-        time.sleep(0.06)
+        time.sleep(0.1)
         vigilante.escanear()
 
         estado = vigilante.obtener_estado()
@@ -1052,7 +1052,7 @@ class TestCapituloActivoYReconocimientoNombres(unittest.TestCase):
 
         vigilante = VigilanteBandeja(self.config, self.db, self.filtro, self.detector, self.agrupador)
         vigilante.escanear()
-        time.sleep(0.06)
+        time.sleep(0.1)
         vigilante.escanear()
 
         estado1 = vigilante.obtener_estado()
