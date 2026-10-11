@@ -69,6 +69,13 @@ registrada en SQLite evita volver a copiar una misma sesión en otro mes.
    La detección de duplicados recalcula el hash cuando cambia la identidad,
    tamaño o fechas del archivo; no reutiliza ciegamente el hash histórico de su
    ruta. Una copia con bytes idénticos sigue marcada como duplicada.
+   «Terminé de editar» comprueba todos los orígenes y destinos antes de iniciar
+   traslados. Si falta un clip o hay un destino conflictivo, no traslada nuevos
+   archivos y conserva la sesión abierta. El panel identifica los clips que
+   requieren recuperar su origen. Los traslados de intentos anteriores se
+   reconocen por el manifiesto; no se omiten referencias faltantes sin decisión
+   del usuario. Cambios del disco posteriores a la comprobación pueden aún
+   interrumpir una operación iniciada: no se garantiza atomicidad del lote.
 3. El vigilante de CapCut, iniciado junto con la bandeja, busca nuevos `.mp4`
    y `.mov`, también en subcarpetas hasta profundidad 3. Acepta nombres numéricos
    como `0818(15).mp4`. Ignora archivos preexistentes en su fotografía inicial,
@@ -142,6 +149,15 @@ fallo de red y formato no decodificable. No se añadió transcodificación: un c
 que el navegador no admita puede seguir sin reproducirse.
 
 ## Validación registrada y límites
+
+Validación de comprobación previa al finalizar: Windows/Python 3.13,
+**310 pruebas, OK, 10 saltadas**, en 42.680 segundos. Manifiesto durante la
+suite: **101 / 101** líneas; log `%TEMP%/tests_finalizar_faltante.log`.
+Regresión temporal confirma que un faltante no permite trasladar otros clips,
+no escribe bitácora y conserva la sesión abierta. Sintaxis JS, AST y auditoría
+de repositorio/historial correctos. La inspección real en solo lectura fue
+autorizada expresamente para diagnosticar el incidente; no forma parte de las
+pruebas. No se movió, borró ni restauró material real durante el diagnóstico.
 
 Corrección de descargas para capítulos en edición: **309 pruebas, OK,
 10 saltadas**, en Windows/Python 3.13 (45.474 segundos); manifiesto real

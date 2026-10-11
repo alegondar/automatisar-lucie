@@ -3831,7 +3831,12 @@
           );
           await cargarVistaEdicion();
         } else {
-          alert("Conflicto o error al trasladar crudos: " + JSON.stringify(data.conflictos || data.error));
+          const detalle = (data.conflictos || []).map(c => `${c.clip}: ${c.error}`).join('\n');
+          const estado = data.fase === 'validacion_previa'
+            ? 'No se trasladó ningún archivo: la comprobación previa encontró un problema.'
+            : `Se trasladaron ${(data.movidos || []).length} clips; la sesión sigue abierta.`;
+          alert(`${estado}\n${detalle || data.error || 'No se pudo completar la edición.'}\nRestaurá los archivos faltantes a su ruta original y reintentá. Los traslados anteriores registrados se conservan.`);
+          await cargarVistaEdicion();
         }
       } catch (err) {
         alert("Error de comunicación: " + String(err));

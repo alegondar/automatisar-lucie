@@ -340,6 +340,18 @@ class TestEdicionCapCut(unittest.TestCase):
         with open(dest_existente, "rb") as f:
             self.assertEqual(f.read(), b"contenido_distinto_preexistente")
 
+    def test_finalizar_con_clip_faltante_no_traslada_otros(self):
+        origen = self._crear_clip_crudo("roli", "rappi", "presente.mp4")
+        sesion = crear_sesion(self.db, ["roli/rappi/presente.mp4", "roli/rappi/falta.mp4"], "roli", "rappi")
+        resultado = finalizar_edicion_crudos(self.db, sesion["id"], self.pendrive_montaje,
+                                            self.carpeta_raiz, self.bitacora_path)
+        self.assertFalse(resultado["exito"])
+        self.assertEqual(resultado["movidos"], [])
+        self.assertEqual(resultado["fase"], "validacion_previa")
+        self.assertTrue(os.path.isfile(origen))
+        self.assertFalse(os.path.exists(os.path.join(self.pendrive_raiz, "videos ya editados")))
+        self.assertFalse(os.path.exists(self.bitacora_path))
+        self.assertEqual(self.db.obtener_sesion_por_id(sesion["id"])["estado"], "en_edicion")
     def test_copia_segura_a_videos_completos_y_deshacer(self):
         """Verifica la copia atómica de export a 'videos completos', verificación sha256 y deshacer."""
         # Crear export simulado en carpeta de CapCut

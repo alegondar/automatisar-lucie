@@ -359,6 +359,27 @@ def finalizar_edicion_crudos(
     conflictos = []
     omisiones = []
 
+    # Validar el lote entero antes de mover el primer clip. Un faltante no debe
+    # dejar más archivos trasladados ni una sesión parcialmente finalizada.
+    for rel_clip in clips:
+        ruta_orig = os.path.join(dir_sin_editar, rel_clip.replace("/", os.sep))
+        ruta_anterior = os.path.join(dir_ya_editados, rel_clip.replace("/", os.sep))
+        ruta_dest = destinos_registrados.get(rel_clip) or (
+            ruta_anterior if os.path.exists(ruta_anterior) else os.path.join(
+                dir_ya_editados, sesion["personaje"],
+                nombre_carpeta_video(sesion.get("nombre") or sesion["nombre_final_defecto"], fecha_traslado),
+                os.path.basename(ruta_anterior)))
+        if not esta_confinado_en_raiz(ruta_orig, dir_sin_editar) or not esta_confinado_en_raiz(ruta_dest, dir_ya_editados):
+            conflictos.append({"clip": rel_clip, "error": "Ruta no confinada en el pendrive"})
+        elif not os.path.isfile(ruta_orig) and not os.path.isfile(ruta_dest):
+            conflictos.append({"clip": rel_clip, "error": f"Archivo de origen no existe: '{ruta_orig}'"})
+        elif os.path.exists(ruta_dest) and os.path.isfile(ruta_orig):
+            if not os.path.isfile(ruta_dest) or calcular_sha256(ruta_orig) != calcular_sha256(ruta_dest):
+                conflictos.append({"clip": rel_clip, "error": "Destino ocupado con contenido distinto. Prohibido sobreescribir."})
+    if conflictos:
+        return {"exito": False, "sesion_id": sesion_id, "id_operacion": None,
+                "movidos": [], "conflictos": conflictos, "omisiones": [], "fase": "validacion_previa"}
+
     for rel_clip in clips:
         # Asegurar ruta confinada
         ruta_orig = os.path.join(dir_sin_editar, rel_clip.replace("/", os.sep))
