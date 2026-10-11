@@ -3750,6 +3750,7 @@
                 <span style="color:var(--text-muted); font-size:0.85rem; margin-left:8px;">(${escapeHTML(s.personaje)} / ${escapeHTML(s.capitulo)})</span>
               </div>
               <div style="display:flex; gap:8px;">
+                <button class="btn-sm btn-secundario" onclick="sumarVideosSesion(${s.id})">Sumar video</button>
                 <button class="btn-sm" onclick="terminarEdicionSesion(${s.id})" style="background:#10b981; color:#000; font-weight:600; padding:6px 14px;">Terminé de editar</button>
                 <button class="btn-sm btn-secundario" onclick="cancelarSesionEdicion(${s.id})" style="color:var(--danger);">Cancelar</button>
               </div>
@@ -3765,6 +3766,23 @@
       });
       html += '</div>';
       cont.innerHTML = html;
+    }
+
+    async function sumarVideosSesion(sesionId) {
+      const seleccion = clipsParaEditar.filter(c => clipsSeleccionadosParaEditar.has(c.identificador));
+      if (!seleccion.length) {
+        mostrarAvisoEdicion('Seleccioná los videos en «Para editar» y luego pulsá «Sumar video» en la sesión deseada.');
+        return;
+      }
+      if (!confirm(`¿Sumar estos ${seleccion.length} video(s) a esta sesión?\n${seleccion.map(c => c.nombre).join('\n')}\nLos archivos conservarán su ubicación.`)) return;
+      try {
+        const resultado = await apiFetch('/api/edicion/sumar-videos', {
+          method: 'POST', body: JSON.stringify({ sesion_id: sesionId, clips: seleccion.map(c => c.ruta_relativa) })
+        });
+        clipsSeleccionadosParaEditar.clear();
+        mostrarAvisoEdicion(`Se sumaron ${resultado.agregados.length} video(s) a la sesión.`);
+        await cargarVistaEdicion();
+      } catch (e) { mostrarAvisoEdicion(escapeHTML(e.message)); }
     }
 
     async function terminarEdicionSesion(sesionId) {

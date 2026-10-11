@@ -285,6 +285,31 @@ def crear_sesion(
     }
 
 
+def sumar_videos_sesion(db, sesion_id, clips, punto_montaje, carpeta_raiz="LucieSinReglas"):
+    """Agrega referencias de crudos a una sesión abierta sin mover archivos."""
+    if not isinstance(clips, list) or not clips or any(not isinstance(c, str) for c in clips):
+        raise ValueError("Seleccioná al menos un video válido.")
+    base = os.path.join(punto_montaje, carpeta_raiz, "videos sin editar")
+    for clip in clips:
+        partes = clip.split("/")
+        if len(partes) < 3 or any(p in ("", ".", "..") or "\\" in p or ":" in p for p in partes):
+            raise ValueError("Ruta de video inválida.")
+        ruta = os.path.join(base, *partes)
+        actual = ruta
+        while True:
+            if os.path.islink(actual) or (hasattr(os.path, "isjunction") and os.path.isjunction(actual)):
+                raise ValueError("No se admiten enlaces en la ruta del video.")
+            padre = os.path.dirname(actual)
+            if padre == actual:
+                break
+            actual = padre
+        if os.path.commonpath([os.path.realpath(base), os.path.realpath(ruta)]) != os.path.realpath(base):
+            raise ValueError("Video fuera de la carpeta de crudos.")
+        if not os.path.isfile(ruta) or not ruta.lower().endswith((".mp4", ".mov", ".mkv", ".webm")):
+            raise ValueError("El video ya no está disponible en la carpeta de crudos.")
+    return db.sumar_clips_sesion_edicion(sesion_id, clips)
+
+
 def cancelar_sesion(
     db: GestorBaseDatosBandeja,
     sesion_id: int,

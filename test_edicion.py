@@ -23,6 +23,7 @@ from bandeja.edicion import (
     nombre_carpeta_video,
     obtener_secciones_edicion,
     crear_sesion,
+    sumar_videos_sesion,
     cancelar_sesion,
     finalizar_edicion_crudos,
     deshacer_finalizar_edicion,
@@ -71,6 +72,44 @@ class TestEdicionCapCut(unittest.TestCase):
         with open(ruta_abs, "wb") as f:
             f.write(contenido)
         return ruta_abs
+
+    def test_sumar_video_persiste_y_finaliza_con_originales(self):
+        primero = self._crear_clip_crudo("roli", "rappi", "uno.mp4")
+        segundo = self._crear_clip_crudo("roli", "rappi", "dos.mp4")
+        sesion = crear_sesion(self.db, ["roli/rappi/uno.mp4"], "roli", "rappi", "Mi edición")
+        resultado = sumar_videos_sesion(self.db, sesion["id"], ["roli/rappi/dos.mp4"] * 2,
+                                       self.pendrive_montaje)
+        self.assertEqual(resultado["agregados"], ["roli/rappi/dos.mp4"])
+        self.assertEqual(self.db.obtener_sesion_por_id(sesion["id"])["nombre"], "Mi edición")
+        self.assertTrue(os.path.isfile(primero))
+        self.assertTrue(os.path.isfile(segundo))
+        self.assertEqual(obtener_secciones_edicion(self.pendrive_montaje, self.db)["para_editar"], [])
+        repetido = sumar_videos_sesion(self.db, sesion["id"], ["roli/rappi/dos.mp4"], self.pendrive_montaje)
+        self.assertEqual(repetido["agregados"], [])
+        finalizar_edicion_crudos(self.db, sesion["id"], self.pendrive_montaje,
+                                self.carpeta_raiz, self.bitacora_path)
+        destino = os.path.join(self.pendrive_raiz, "videos ya editados", "roli", "Mi edición - octubre - 2026")
+        self.assertEqual(sorted(os.listdir(destino)), ["dos.mp4", "uno.mp4"])
+
+    def test_sumar_video_rechaza_lote_ocupado_sin_actualizacion_parcial(self):
+        for nombre in ("uno.mp4", "dos.mp4", "tres.mp4"):
+            self._crear_clip_crudo("roli", "rappi", nombre)
+        sesion = crear_sesion(self.db, ["roli/rappi/uno.mp4"], "roli", "rappi")
+        crear_sesion(self.db, ["roli/rappi/tres.mp4"], "roli", "rappi")
+        with self.assertRaises(ValueError):
+            sumar_videos_sesion(self.db, sesion["id"], ["roli/rappi/dos.mp4", "roli/rappi/tres.mp4"], self.pendrive_montaje)
+        self.assertEqual(self.db.obtener_sesion_por_id(sesion["id"])["clips"], ["roli/rappi/uno.mp4"])
+
+    def test_sumar_video_rechaza_rutas_personaje_y_sesion_cerrada(self):
+        self._crear_clip_crudo("roli", "rappi", "uno.mp4")
+        self._crear_clip_crudo("lucie", "otro", "dos.mp4")
+        sesion = crear_sesion(self.db, ["roli/rappi/uno.mp4"], "roli", "rappi")
+        for clips in ([], ["../afuera.mp4"], ["roli/rappi/falta.mp4"], ["lucie/otro/dos.mp4"], "roli/rappi/uno.mp4"):
+            with self.subTest(clips=clips), self.assertRaises(ValueError):
+                sumar_videos_sesion(self.db, sesion["id"], clips, self.pendrive_montaje)
+        cancelar_sesion(self.db, sesion["id"])
+        with self.assertRaises(ValueError):
+            sumar_videos_sesion(self.db, sesion["id"], ["roli/rappi/uno.mp4"], self.pendrive_montaje)
 
     def test_calculo_nombre_defecto(self):
         """Verifica la lógica de nombrado para capítulos y clips individuales."""

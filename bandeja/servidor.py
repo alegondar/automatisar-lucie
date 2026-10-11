@@ -57,6 +57,7 @@ from bandeja.eliminacion import GestorEliminacionPendrive
 from bandeja.edicion import (
     obtener_secciones_edicion,
     crear_sesion,
+    sumar_videos_sesion,
     cancelar_sesion,
     finalizar_edicion_crudos,
     deshacer_finalizar_edicion,
@@ -696,6 +697,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._handle_pendrive_desmontar(body, expulsar=True)
         elif ruta == "/api/edicion/crear-sesion":
             self._handle_edicion_crear_sesion(body)
+        elif ruta == "/api/edicion/sumar-videos":
+            self._handle_edicion_sumar_videos(body)
         elif ruta == "/api/edicion/cancelar-sesion":
             self._handle_edicion_cancelar_sesion(body)
         elif ruta == "/api/edicion/terminar":
@@ -1333,6 +1336,21 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._enviar_json({"exito": True, "sesion": sesion})
         except Exception as e:
             self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al crear sesión: {e}")
+
+    def _handle_edicion_sumar_videos(self, body):
+        try:
+            if not isinstance(body, dict) or type(body.get("sesion_id")) is not int:
+                raise ValueError("Sesión inválida.")
+            info = detectar_pendrive(self.config)
+            if not info or not info.get("conectado"):
+                raise ValueError("No hay pendrive vinculado conectado.")
+            resultado = sumar_videos_sesion(self.db, body["sesion_id"], body.get("clips"),
+                                           info.get("punto_montaje") or info.get("ruta_montaje"),
+                                           self.config.carpeta_raiz_pendrive)
+            self.vigilante.forzar_actualizacion_version()
+            self._enviar_json({"exito": True, **resultado})
+        except (ValueError, OSError) as e:
+            self._enviar_error(HTTPStatus.CONFLICT, str(e))
 
     def _handle_edicion_cancelar_sesion(self, body: Dict[str, Any]):
         sesion_id = body.get("sesion_id")

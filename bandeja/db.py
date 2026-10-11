@@ -766,6 +766,27 @@ class GestorBaseDatosBandeja:
                 res["clips"] = []
             return res
 
+    def sumar_clips_sesion_edicion(self, sesion_id: int, clips: List[str]):
+        """Actualiza la selección completa bajo el mismo bloqueo y transacción."""
+        with self._lock, self._conectar() as con:
+            con.execute("BEGIN IMMEDIATE")
+            fila = con.execute("SELECT * FROM sesiones_edicion WHERE id = ?", (sesion_id,)).fetchone()
+            if not fila or fila["estado"] != "en_edicion" or fila["video_completo_ruta"]:
+                raise ValueError("Solo se pueden sumar videos a una sesión en edición sin video completo.")
+            actuales = json.loads(fila["clips_json"])
+            nuevos = list(dict.fromkeys(clips))
+            for clip in nuevos:
+                if clip.split("/")[0] != fila["personaje"]:
+                    raise ValueError("Los videos deben pertenecer al personaje de la sesión.")
+            for otra in con.execute("SELECT id, clips_json FROM sesiones_edicion WHERE estado = 'en_edicion' AND id != ?", (sesion_id,)):
+                if set(nuevos).intersection(json.loads(otra["clips_json"])):
+                    raise ValueError("Un video seleccionado ya pertenece a otra sesión activa.")
+            agregados = [c for c in nuevos if c not in actuales]
+            con.execute("UPDATE sesiones_edicion SET clips_json = ? WHERE id = ?",
+                        (json.dumps(actuales + agregados, ensure_ascii=False), sesion_id))
+            con.commit()
+            return {"sesion_id": sesion_id, "agregados": agregados, "clips": actuales + agregados}
+
     def actualizar_sesion_edicion(self, sesion_id: int, **campos) -> bool:
         """Actualiza campos dinámicos de una sesión de edición."""
         if not campos:

@@ -51,6 +51,12 @@ registrada en SQLite evita volver a copiar una misma sesión en otro mes.
 1. En **Edición**, seleccionar crudos y crear una sesión con su nombre.
 2. «Terminé de editar» agrupa los crudos en `videos ya editados`. La sesión
    puede recibir el export tanto en estado `en_edicion` como `editado`.
+   Para incorporar un clip faltante a una sesión en curso, seleccionarlo en
+   **Para editar** y pulsar **Sumar video** en la sesión deseada. Se revisa la
+   lista antes de confirmar. Se conservan nombre, clips anteriores y ubicación
+   de archivos; los nuevos clips se incluyen al terminar la edición. Solo se
+   admiten videos existentes del mismo personaje, sin enlaces ni rutas fuera
+   de crudos, y que no pertenezcan a otra sesión activa. Repetir no duplica clips.
 3. El vigilante de CapCut, iniciado junto con la bandeja, busca nuevos `.mp4`
    y `.mov`, también en subcarpetas hasta profundidad 3. Acepta nombres numéricos
    como `0818(15).mp4`. Ignora archivos preexistentes en su fotografía inicial,
@@ -92,6 +98,10 @@ si están libres; no elimina carpetas vacías.
 
 `GET /api/edicion/secciones` incluye `videos_completados` y
 `sesiones_para_export`, incluso sin pendrive conectado.
+`POST /api/edicion/sumar-videos` recibe `sesion_id` entero y `clips` (lista de
+rutas relativas a `videos sin editar`); requiere CSRF, pendrive conectado y
+sesión `en_edicion` sin video completo. Actualiza solo la base local en una
+transacción, sin copiar, mover ni borrar archivos.
 `GET /api/capcut/exports` devuelve exports con información de sesión y destino.
 `POST /api/capcut/enviar-export` acepta `export_id` y, si falta asociación,
 `sesion_id`; comparte el flujo de `/api/capcut/asignar-export`.
@@ -121,7 +131,17 @@ que el navegador no admita puede seguir sin reproducirse.
 
 ## Validación registrada y límites
 
-Última suite completa de esta sesión: Python 3.13 en Windows, **286 pruebas,
+Validación de «Sumar video» en Windows/Python 3.13: **307 pruebas, OK,
+10 saltadas**, en 43.418 segundos; saltos por interfaces Linux y privilegios
+de symlinks ausentes. Manifiesto real: **84 / 84** líneas antes/después.
+Log temporal: `%TEMP%/tests_sumar_video.log`. Se verificaron adición persistente,
+ausencia de duplicados, finalización con todos los clips y rechazo de lotes
+ocupados, rutas inválidas, otro personaje y sesiones cerradas. Node comprobó
+selección vacía, cancelación, errores y confirmación del botón; sintaxis JS,
+AST y auditoría del repositorio/historial correctos. No se inició la bandeja
+real ni se probó esta interacción en un navegador o en Linux.
+
+Suite anterior del visor: Python 3.13 en Windows, **286 pruebas,
 OK, 9 saltadas**, en 45.693 segundos. Cinco saltadas corresponden a interfaces
 Linux y cuatro a falta de privilegios reales para symlinks. Los tests exclusivos
 de Windows se saltan en Linux con motivo explícito. Linux no se ejecutó en esta
