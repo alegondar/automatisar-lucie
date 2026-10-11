@@ -28,6 +28,28 @@ con videos directamente dentro, sin semana ni subcarpetas de capítulo.
 CapCut conserva sus originales. Ver el mapa de módulos, API, estados, modo manual,
 reintentos, reversión y validaciones en `ESTADO_ACTUAL.md`.
 
+## Revisión de GitHub al iniciar cada sesión
+
+- Tras leer las guías iniciales, revisar `git status`, la rama actual y los
+  remotos. Ejecutar `git fetch origin` para comprobar novedades de GitHub sin
+  modificar los archivos de trabajo. Esta comprobación está autorizada por el
+  usuario; no implica autorización para integrar cambios.
+- Comparar la rama actual con su upstream y revisar novedades en las demás
+  ramas remotas. Distinguir cambios entrantes, commits locales pendientes y
+  divergencias; no presentar como actualización una rama histórica ya integrada.
+- Si hay cambios disponibles para incorporar, resumir de qué rama vienen y
+  preguntar: «Hay cambios disponibles en GitHub en `<rama_remota>`.
+  ¿Querés que los descarguemos e integremos en el host?». Esperar confirmación
+  explícita antes de hacer pull, merge, rebase o cambiar la versión instalada.
+- Con la confirmación, integrar en una rama de trabajo, conservar los cambios
+  locales y las mejoras existentes, resolver conflictos y ejecutar las
+  validaciones pertinentes. No modificar `master`, descartar cambios locales,
+  sobrescribir material ni sincronizar bases de datos o configuraciones locales.
+- Si no hay novedades, indicarlo brevemente y continuar con la tarea. Si falla
+  la conexión o autenticación, informar que no se pudo comprobar; no afirmar
+  que el repositorio está actualizado. Si el usuario rechaza o posterga, continuar
+  con la versión local sin insistir durante esa sesión por las mismas novedades.
+
 ## Cierre de cambios y publicación en GitHub
 
 Esta instrucción se aplica en cada sesión y a cada tarea que termine con cambios
