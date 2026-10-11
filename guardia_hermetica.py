@@ -30,10 +30,23 @@ _ORIGINAL_WALK = os.walk
 _GUARDIA_ACTIVADA = False
 _TMP_HOME_DIR: Optional[str] = None
 _RUTAS_PROHIBIDAS: Set[str] = set()
+_PERFIL_REAL_HOST: Optional[str] = None
+_DESCARGAS_REAL_HOST: Optional[str] = None
+
+
+def obtener_perfil_real() -> Optional[str]:
+    """Retorna la ruta del perfil real del usuario en el host antes del aislamiento."""
+    return _PERFIL_REAL_HOST
+
+
+def obtener_ruta_descargas_real() -> Optional[str]:
+    """Retorna la carpeta de descargas real del usuario en el host antes del aislamiento."""
+    return _DESCARGAS_REAL_HOST
 
 
 def _resolver_rutas_reales() -> Set[str]:
     """Identifica las rutas reales del host que deben ser estrictamente inaccesibles en tests."""
+    global _PERFIL_REAL_HOST, _DESCARGAS_REAL_HOST
     rutas = {"/media", "/run/media", "/mnt"}
 
     # Descargas / Downloads del HOME real actual o del usuario del sistema
@@ -58,6 +71,7 @@ def _resolver_rutas_reales() -> Set[str]:
     env_userprofile = os.environ.get("USERPROFILE")
     if env_userprofile and "temp" not in env_userprofile.lower():
         candidatos_home.append(env_userprofile)
+        _PERFIL_REAL_HOST = env_userprofile
 
     env_homedrive = os.environ.get("HOMEDRIVE", "")
     env_homepath = os.environ.get("HOMEPATH", "")
@@ -65,12 +79,18 @@ def _resolver_rutas_reales() -> Set[str]:
         home_completo = env_homedrive + env_homepath
         if "temp" not in home_completo.lower():
             candidatos_home.append(home_completo)
+            if not _PERFIL_REAL_HOST:
+                _PERFIL_REAL_HOST = home_completo
+
+    if not _PERFIL_REAL_HOST and candidatos_home:
+        _PERFIL_REAL_HOST = candidatos_home[0]
 
     try:
         import bandeja.plataforma
         dl_real_win = bandeja.plataforma.obtener_ruta_descargas_windows()
         if dl_real_win and "temp" not in dl_real_win.lower():
             rutas.add(dl_real_win)
+            _DESCARGAS_REAL_HOST = dl_real_win
         capcut_real = bandeja.plataforma.obtener_ruta_exportacion_capcut()
         if capcut_real and "temp" not in capcut_real.lower():
             rutas.add(capcut_real)

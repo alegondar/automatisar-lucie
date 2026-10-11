@@ -78,28 +78,29 @@ class TestGuardiaHermetica(unittest.TestCase):
         self.assertTrue(home_actual.startswith("/tmp") or "temp" in home_actual.lower() or "lucie_hermetico" in home_actual.lower(), f"HOME no es temporal: {home_actual}")
         self.assertFalse(home_actual.startswith("/home/"), f"HOME apunta al usuario real: {home_actual}")
         if os.name == "nt":
-            dl_real_win = obtener_ruta_descargas_windows()
-            perfil_win = os.path.dirname(dl_real_win) if dl_real_win else os.path.expanduser("~")
-            self.assertFalse(home_actual.lower() == perfil_win.lower(), f"HOME apunta al perfil real de Windows: {home_actual}")
+            perfil_win = guardia_hermetica.obtener_perfil_real()
+            if perfil_win:
+                self.assertFalse(home_actual.lower() == perfil_win.lower(), f"HOME apunta al perfil real de Windows: {home_actual}")
 
         ruta_descargas = obtener_ruta_descargas_defecto()
         self.assertTrue(ruta_descargas.startswith(home_actual) or "temp" in ruta_descargas.lower() or "lucie_hermetico" in ruta_descargas.lower(), f"Descargas por defecto fuera de HOME temporal: {ruta_descargas}")
         self.assertFalse(ruta_descargas.startswith("/home/"), f"Descargas por defecto apunta a Descargas real: {ruta_descargas}")
         if os.name == "nt":
-            dl_real_win = obtener_ruta_descargas_windows()
-            self.assertFalse(ruta_descargas.lower() == dl_real_win.lower(), f"Descargas apunta a Descargas real de Windows: {ruta_descargas}")
+            dl_real_win = guardia_hermetica.obtener_ruta_descargas_real()
+            if dl_real_win:
+                self.assertFalse(ruta_descargas.lower() == dl_real_win.lower(), f"Descargas apunta a Descargas real de Windows: {ruta_descargas}")
 
     def test_variables_entorno_windows_redirigidas_a_temporal(self):
         """USERPROFILE, HOMEDRIVE, HOMEPATH, APPDATA, LOCALAPPDATA y TEMP deben apuntar a directorio temporal."""
         if os.name != "nt":
             return
 
-        dl_real_win = obtener_ruta_descargas_windows()
-        perfil_win = os.path.dirname(dl_real_win) if dl_real_win else os.path.expanduser("~")
+        perfil_win = guardia_hermetica.obtener_perfil_real()
 
         userprofile = os.environ.get("USERPROFILE", "")
         self.assertTrue(userprofile, "USERPROFILE no está configurado")
-        self.assertFalse(userprofile.lower() == perfil_win.lower(), f"USERPROFILE apunta al usuario real: {userprofile}")
+        if perfil_win:
+            self.assertFalse(userprofile.lower() == perfil_win.lower(), f"USERPROFILE apunta al usuario real: {userprofile}")
         self.assertTrue("temp" in userprofile.lower() or "lucie_hermetico" in userprofile.lower(), f"USERPROFILE no es temporal: {userprofile}")
 
         appdata = os.environ.get("APPDATA", "")
@@ -116,7 +117,7 @@ class TestGuardiaHermetica(unittest.TestCase):
         if os.name != "nt":
             return
 
-        dl_real = obtener_ruta_descargas_windows()
+        dl_real = guardia_hermetica.obtener_ruta_descargas_real() or obtener_ruta_descargas_windows()
         if guardia_hermetica.es_ruta_prohibida(dl_real)[0]:
             with self.assertRaises(AssertionError) as cm:
                 open(os.path.join(dl_real, "archivo_prohibido.txt"), "r")
