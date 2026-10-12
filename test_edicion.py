@@ -111,6 +111,28 @@ class TestEdicionCapCut(unittest.TestCase):
         with self.assertRaises(ValueError):
             sumar_videos_sesion(self.db, sesion["id"], ["roli/rappi/uno.mp4"], self.pendrive_montaje)
 
+    def test_audio_mp3_en_sesion_finalizacion_y_reversion(self):
+        audio = os.path.join(self.pendrive_raiz, "audios", "roli", "rappi", "canción.MP3")
+        os.makedirs(os.path.dirname(audio), exist_ok=True)
+        with open(audio, "xb") as f:
+            f.write(b"audio original")
+        self._crear_clip_crudo("roli", "rappi", "video.mp4")
+        datos = obtener_secciones_edicion(self.pendrive_montaje, self.db)
+        self.assertEqual(len(datos["para_editar"]), 2)
+        entrada = next(c for c in datos["para_editar"] if c["tipo"] == "audio")
+        self.assertEqual(entrada["ruta_relativa"], "audios/roli/rappi/canción.MP3")
+        sesion = crear_sesion(self.db, ["roli/rappi/video.mp4"], "roli", "rappi", "Edición")
+        sumar_videos_sesion(self.db, sesion["id"], [entrada["ruta_relativa"]], self.pendrive_montaje)
+        self.assertEqual(obtener_secciones_edicion(self.pendrive_montaje, self.db)["para_editar"], [])
+        args = (self.db, sesion["id"], self.pendrive_montaje, self.carpeta_raiz, self.bitacora_path)
+        resultado = finalizar_edicion_crudos(*args)
+        self.assertTrue(resultado["exito"])
+        self.assertEqual(len(resultado["movidos"]), 2)
+        self.assertEqual(len(set(os.path.dirname(c["destino"]) for c in resultado["movidos"])), 1)
+        self.assertTrue(deshacer_finalizar_edicion(*args)["exito"])
+        with open(audio, "rb") as f:
+            self.assertEqual(f.read(), b"audio original")
+
     def test_calculo_nombre_defecto(self):
         """Verifica la lógica de nombrado para capítulos y clips individuales."""
         # Varios clips -> <capítulo>videocompleto.mp4

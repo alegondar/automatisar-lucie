@@ -776,7 +776,9 @@ class GestorBaseDatosBandeja:
             actuales = json.loads(fila["clips_json"])
             nuevos = list(dict.fromkeys(clips))
             for clip in nuevos:
-                if clip.split("/")[0] != fila["personaje"]:
+                partes = clip.split("/")
+                personaje_clip = partes[1] if partes[0] == "audios" else partes[0]
+                if personaje_clip != fila["personaje"]:
                     raise ValueError("Los videos deben pertenecer al personaje de la sesión.")
             for otra in con.execute("SELECT id, clips_json FROM sesiones_edicion WHERE estado = 'en_edicion' AND id != ?", (sesion_id,)):
                 if set(nuevos).intersection(json.loads(otra["clips_json"])):

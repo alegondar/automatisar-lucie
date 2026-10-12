@@ -49,6 +49,15 @@ registrada en SQLite evita volver a copiar una misma sesión en otro mes.
 ## Flujo de edición y CapCut
 
 1. En **Edición**, seleccionar crudos y crear una sesión con su nombre.
+   La lista **Para editar** agrupa por personaje y capítulo con un tilde para
+   seleccionar o desmarcar el capítulo completo, incluidos archivos ocultos
+   por la búsqueda. Crear una sesión exige seleccionar un solo personaje y
+   capítulo para evitar mezclar capítulos con «Todos». Los MP3 aparecen tanto
+   dentro de crudos como en `audios/<personaje>/<capítulo>/`, con tipo audio y
+   vista previa. Pueden sumarse a una sesión existente; al finalizar se agrupan
+   con los videos en la carpeta de la edición, y deshacer restaura su ruta de
+   audio original. Sus IDs usan `audios/` como prefijo para evitar colisiones
+   con los IDs históricos de video.
 2. «Terminé de editar» agrupa los crudos en `videos ya editados`. La sesión
    puede recibir el export tanto en estado `en_edicion` como `editado`.
    Para incorporar un clip faltante a una sesión en curso, seleccionarlo en
@@ -149,6 +158,16 @@ fallo de red y formato no decodificable. No se añadió transcodificación: un c
 que el navegador no admita puede seguir sin reproducirse.
 
 ## Validación registrada y límites
+
+Selección por capítulo y MP3 en edición: Windows/Python 3.13, **311 pruebas,
+OK, 10 saltadas**, en 47.769 segundos. Manifiesto real: **159 / 159** líneas;
+log `%TEMP%/tests_edicion_capitulos_mp3.log`. Prueba temporal de MP3 comprueba
+listado, asociación, cierre con video en la misma carpeta y reversión al origen
+con sus bytes intactos. Node comprueba selección/desmarcado del capítulo,
+inclusión de MP3 ocultos por búsqueda y separación de personajes. Sintaxis JS,
+AST y auditoría de repositorio/historial correctos; no se probó la interacción
+en un navegador ni Linux. Se integró, con autorización, `f17ae98` de GitHub
+(estética del dashboard y manual interno).
 
 Validación de comprobación previa al finalizar: Windows/Python 3.13,
 **310 pruebas, OK, 10 saltadas**, en 42.680 segundos. Manifiesto durante la

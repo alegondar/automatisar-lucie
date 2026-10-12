@@ -3592,7 +3592,23 @@
           <tbody>
       `;
 
+      const grupos = new Map();
       clips.forEach(c => {
+        const clave = JSON.stringify([c.personaje, c.capitulo]);
+        if (!grupos.has(clave)) grupos.set(clave, []);
+        grupos.get(clave).push(c);
+      });
+      let indiceGrupo = 0;
+      grupos.forEach(grupo => {
+        const primero = grupo[0];
+        const indice = indiceGrupo++;
+        const todoCapitulo = clipsParaEditar.filter(c => c.personaje === primero.personaje && c.capitulo === primero.capitulo);
+        const completo = todoCapitulo.every(c => clipsSeleccionadosParaEditar.has(c.identificador));
+        html += `<tr><td colspan="6" style="padding:12px; background:var(--card-alt);">
+          <label><input type="checkbox" data-grupo-edicion="${indice}" ${completo ? 'checked' : ''}>
+          Seleccionar capítulo: <strong>${escapeHTML(primero.personaje)} / ${escapeHTML(primero.capitulo)}</strong>
+          (${todoCapitulo.length} archivos)</label></td></tr>`;
+      grupo.forEach(c => {
         const sel = clipsSeleccionadosParaEditar.has(c.identificador) ? 'checked' : '';
         const tamStr = c.tamano ? (c.tamano / (1024 * 1024)).toFixed(1) + ' MB' : '-';
         html += `
@@ -3601,7 +3617,7 @@
               <input type="checkbox" onchange="toggleSeleccionClipParaEditar('${escapeHTML(c.identificador)}')" ${sel}>
             </td>
             <td style="padding:8px; font-weight:500;">
-              <span style="cursor:pointer;" onclick="previsualizarClipPendrive('${escapeHTML(c.id_media || c.ruta_relativa || c.identificador)}', '${escapeHTML(c.nombre)}')" title="${escapeHTML(c.ruta_relativa)}">${escapeHTML(c.nombre)}</span>
+              <span style="cursor:pointer;" onclick="previsualizarClipPendrive('${escapeHTML(c.id_media || c.ruta_relativa || c.identificador)}', '${escapeHTML(c.nombre)}')" title="${escapeHTML(c.ruta_relativa)}">${c.tipo === 'audio' ? '🎵 ' : ''}${escapeHTML(c.nombre)}</span>
             </td>
             <td style="padding:8px; color:var(--text-muted);">${escapeHTML(c.personaje)}</td>
             <td style="padding:8px; color:var(--text-muted);"><span class="badge" style="background:#1e1b4b; color:#a5b4fc;">${escapeHTML(c.capitulo)}</span></td>
@@ -3612,9 +3628,20 @@
           </tr>
         `;
       });
+      });
 
       html += '</tbody></table>';
       cont.innerHTML = html;
+      cont.querySelectorAll('[data-grupo-edicion]').forEach((checkbox, indice) => {
+        const grupo = Array.from(grupos.values())[indice];
+        checkbox.indeterminate = !checkbox.checked && clipsParaEditar.some(c => c.personaje === grupo[0].personaje && c.capitulo === grupo[0].capitulo && clipsSeleccionadosParaEditar.has(c.identificador));
+        checkbox.addEventListener('change', () => {
+          // Incluye todo el capítulo, incluso archivos ocultos por la búsqueda.
+          clipsParaEditar.filter(c => c.personaje === grupo[0].personaje && c.capitulo === grupo[0].capitulo)
+            .forEach(c => checkbox.checked ? clipsSeleccionadosParaEditar.add(c.identificador) : clipsSeleccionadosParaEditar.delete(c.identificador));
+          filtrarClipsParaEditar();
+        });
+      });
       actualizarBotonCrearSesion();
     }
 
@@ -3624,7 +3651,7 @@
       } else {
         clipsSeleccionadosParaEditar.add(identificador);
       }
-      actualizarBotonCrearSesion();
+      filtrarClipsParaEditar();
     }
 
     function seleccionarTodosParaEditar() {
@@ -3670,6 +3697,10 @@
 
       sesionModalClips = clipsParaEditar.filter(c => clipsSeleccionadosParaEditar.has(c.identificador));
       if (sesionModalClips.length === 0) return;
+      if (sesionModalClips.some(c => c.personaje !== sesionModalClips[0].personaje || c.capitulo !== sesionModalClips[0].capitulo)) {
+        mostrarAvisoEdicion('Para crear una sesión, seleccioná archivos de un solo personaje y capítulo. Usá el tilde del capítulo deseado.');
+        return;
+      }
 
       const primerClip = sesionModalClips[0];
       const capitulo = primerClip.capitulo;

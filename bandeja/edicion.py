@@ -161,18 +161,18 @@ def obtener_secciones_edicion(
             }
 
     # 1. Explorar 'videos sin editar'
-    if os.path.exists(dir_sin_editar):
-        for raiz, _dirs, archivos in os.walk(dir_sin_editar):
+    for base_crudos, prefijo in ((dir_sin_editar, ""), (os.path.join(pendrive_raiz, "audios"), "audios/")):
+        for raiz, _dirs, archivos in os.walk(base_crudos):
             for arch in archivos:
-                if arch.lower().endswith((".mp4", ".mov", ".mkv", ".webm")):
+                if arch.lower().endswith((".mp4", ".mov", ".mkv", ".webm", ".mp3")):
                     ruta_abs = os.path.join(raiz, arch)
-                    rel = os.path.relpath(ruta_abs, dir_sin_editar)
+                    rel = os.path.relpath(ruta_abs, base_crudos)
                     partes = rel.split(os.sep)
                     personaje = partes[0] if len(partes) > 1 else "general"
                     capitulo = partes[1] if len(partes) > 2 else "sin_capitulo"
                     _asegurar_conteo(capitulo)
 
-                    identificador_clip = rel.replace(os.sep, "/")
+                    identificador_clip = prefijo + rel.replace(os.sep, "/")
                     try:
                         st = os.stat(ruta_abs)
                         tamano = st.st_size
@@ -200,6 +200,7 @@ def obtener_secciones_edicion(
                             "ruta_relativa": identificador_clip,
                             "tamano": tamano,
                             "mtime": mtime,
+                            "tipo": "audio" if arch.lower().endswith(".mp3") else "video",
                         }
                         if id_media:
                             clip_dict["id_media"] = id_media
@@ -209,7 +210,7 @@ def obtener_secciones_edicion(
     if os.path.exists(dir_ya_editados):
         for raiz, _dirs, archivos in os.walk(dir_ya_editados):
             for arch in archivos:
-                if arch.lower().endswith((".mp4", ".mov", ".mkv", ".webm")):
+                if arch.lower().endswith((".mp4", ".mov", ".mkv", ".webm", ".mp3")):
                     ruta_abs = os.path.join(raiz, arch)
                     rel = os.path.relpath(ruta_abs, dir_ya_editados)
                     partes = rel.split(os.sep)
@@ -221,7 +222,7 @@ def obtener_secciones_edicion(
     if os.path.exists(dir_completos):
         for raiz, _dirs, archivos in os.walk(dir_completos):
             for arch in archivos:
-                if arch.lower().endswith((".mp4", ".mov", ".mkv", ".webm")):
+                if arch.lower().endswith((".mp4", ".mov", ".mkv", ".webm", ".mp3")):
                     ruta_abs = os.path.join(raiz, arch)
                     rel = os.path.relpath(ruta_abs, dir_completos)
                     partes = rel.split(os.sep)
@@ -285,16 +286,23 @@ def crear_sesion(
     }
 
 
+def _origen_clip(pendrive_raiz, clip):
+    """Los videos conservan IDs históricos; audios usan prefijo audios/."""
+    audio = clip.startswith("audios/")
+    base = os.path.join(pendrive_raiz, "audios" if audio else "videos sin editar")
+    relativa = clip[len("audios/"):] if audio else clip
+    return base, os.path.join(base, relativa.replace("/", os.sep))
+
+
 def sumar_videos_sesion(db, sesion_id, clips, punto_montaje, carpeta_raiz="LucieSinReglas"):
     """Agrega referencias de crudos a una sesión abierta sin mover archivos."""
     if not isinstance(clips, list) or not clips or any(not isinstance(c, str) for c in clips):
         raise ValueError("Seleccioná al menos un video válido.")
-    base = os.path.join(punto_montaje, carpeta_raiz, "videos sin editar")
     for clip in clips:
         partes = clip.split("/")
         if len(partes) < 3 or any(p in ("", ".", "..") or "\\" in p or ":" in p for p in partes):
             raise ValueError("Ruta de video inválida.")
-        ruta = os.path.join(base, *partes)
+        base, ruta = _origen_clip(os.path.join(punto_montaje, carpeta_raiz), clip)
         actual = ruta
         while True:
             if os.path.islink(actual) or (hasattr(os.path, "isjunction") and os.path.isjunction(actual)):
@@ -305,7 +313,7 @@ def sumar_videos_sesion(db, sesion_id, clips, punto_montaje, carpeta_raiz="Lucie
             actual = padre
         if os.path.commonpath([os.path.realpath(base), os.path.realpath(ruta)]) != os.path.realpath(base):
             raise ValueError("Video fuera de la carpeta de crudos.")
-        if not os.path.isfile(ruta) or not ruta.lower().endswith((".mp4", ".mov", ".mkv", ".webm")):
+        if not os.path.isfile(ruta) or not ruta.lower().endswith((".mp4", ".mov", ".mkv", ".webm", ".mp3")):
             raise ValueError("El video ya no está disponible en la carpeta de crudos.")
     return db.sumar_clips_sesion_edicion(sesion_id, clips)
 
@@ -362,14 +370,14 @@ def finalizar_edicion_crudos(
     # Validar el lote entero antes de mover el primer clip. Un faltante no debe
     # dejar más archivos trasladados ni una sesión parcialmente finalizada.
     for rel_clip in clips:
-        ruta_orig = os.path.join(dir_sin_editar, rel_clip.replace("/", os.sep))
+        base_orig, ruta_orig = _origen_clip(pendrive_raiz, rel_clip)
         ruta_anterior = os.path.join(dir_ya_editados, rel_clip.replace("/", os.sep))
         ruta_dest = destinos_registrados.get(rel_clip) or (
             ruta_anterior if os.path.exists(ruta_anterior) else os.path.join(
                 dir_ya_editados, sesion["personaje"],
                 nombre_carpeta_video(sesion.get("nombre") or sesion["nombre_final_defecto"], fecha_traslado),
                 os.path.basename(ruta_anterior)))
-        if not esta_confinado_en_raiz(ruta_orig, dir_sin_editar) or not esta_confinado_en_raiz(ruta_dest, dir_ya_editados):
+        if not esta_confinado_en_raiz(ruta_orig, base_orig) or not esta_confinado_en_raiz(ruta_dest, dir_ya_editados):
             conflictos.append({"clip": rel_clip, "error": "Ruta no confinada en el pendrive"})
         elif not os.path.isfile(ruta_orig) and not os.path.isfile(ruta_dest):
             conflictos.append({"clip": rel_clip, "error": f"Archivo de origen no existe: '{ruta_orig}'"})
@@ -382,7 +390,7 @@ def finalizar_edicion_crudos(
 
     for rel_clip in clips:
         # Asegurar ruta confinada
-        ruta_orig = os.path.join(dir_sin_editar, rel_clip.replace("/", os.sep))
+        base_orig, ruta_orig = _origen_clip(pendrive_raiz, rel_clip)
         ruta_anterior = os.path.join(dir_ya_editados, rel_clip.replace("/", os.sep))
         ruta_dest = destinos_registrados.get(rel_clip)
         if not ruta_dest:
@@ -392,7 +400,7 @@ def finalizar_edicion_crudos(
                 os.path.basename(ruta_anterior),
             )
 
-        if not esta_confinado_en_raiz(ruta_orig, dir_sin_editar) or not esta_confinado_en_raiz(ruta_dest, dir_ya_editados):
+        if not esta_confinado_en_raiz(ruta_orig, base_orig) or not esta_confinado_en_raiz(ruta_dest, dir_ya_editados):
             conflictos.append({"clip": rel_clip, "error": "Ruta no confinada en el pendrive"})
             continue
 
@@ -500,10 +508,10 @@ def deshacer_finalizar_edicion(
     conflictos = []
 
     for rel_clip in clips:
-        ruta_orig = os.path.join(dir_sin_editar, rel_clip.replace("/", os.sep))
+        base_orig, ruta_orig = _origen_clip(pendrive_raiz, rel_clip)
         ruta_dest = destinos_registrados.get(rel_clip) or os.path.join(dir_ya_editados, rel_clip.replace("/", os.sep))
 
-        if not esta_confinado_en_raiz(ruta_orig, dir_sin_editar) or not esta_confinado_en_raiz(ruta_dest, dir_ya_editados):
+        if not esta_confinado_en_raiz(ruta_orig, base_orig) or not esta_confinado_en_raiz(ruta_dest, dir_ya_editados):
             conflictos.append({"clip": rel_clip, "error": "Ruta no confinada en el pendrive"})
             continue
 
