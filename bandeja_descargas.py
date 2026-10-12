@@ -61,6 +61,16 @@ def crear_vigilante_capcut(config, db, ruta_bitacora):
             retomar_export_actual_sin_asignar(db, punto, config.carpeta_raiz_pendrive, ruta_bitacora)
         if punto:
             procesar_exports_pendientes_copia(punto, db, config.carpeta_raiz_pendrive, ruta_bitacora)
+            if config.envio_exports_capcut == "automatico":
+                from bandeja.edicion import copiar_export_sin_sesion_a_sin_publicar
+                for export in db.obtener_exports_pendientes(estado="sin_asignar"):
+                    if export.get("sesion_id") or export.get("envio_automatico_bloqueado"):
+                        continue
+                    try:
+                        copiar_export_sin_sesion_a_sin_publicar(export, punto, db, config.carpeta_raiz_pendrive, ruta_bitacora)
+                    except (OSError, ValueError) as error:
+                        if export.get("error") != str(error):
+                            db.actualizar_export_pendiente(export["id"], error=str(error))
 
     return VigilanteCapCut(config.obtener_carpeta_exportacion_capcut(),
                           extensiones_temporales=config.extensiones_temporales_capcut,

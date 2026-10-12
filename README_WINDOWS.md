@@ -69,6 +69,13 @@ Este script evaluará el sistema, rutas, nombres reservados, codificación y exc
 
 ## 7. Edición, CapCut y reproducción
 
+Para enviarlos por Wi-Fi, abrir **Sin publicar · Enviar al celular**, seleccionar
+videos y el receptor LocalSend, revisar y confirmar. Abrir LocalSend en el celular
+conectado a la misma red y aceptar la recepción. Si la búsqueda falla, se puede
+conectar por la IP y el puerto de LocalSend. Los recibidos pasan de
+`videos completos/videos sin publicar/` al nivel anterior con opción de Deshacer.
+Ver [Publicación y envío Wi-Fi](docs/publicacion-wifi.md).
+
 **Terminé de editar** permite mantener CapCut abierto cuando sus clips pueden
 leerse. Si Windows impide moverlos por estar en uso, crea copias verificadas en
 `videos ya editados` y conserva los originales. Deshacer conserva las copias en
@@ -83,7 +90,9 @@ se conserva y el panel informa el problema.
 
 El funcionamiento actual, las rutas finales y los controles de seguridad están
 documentados en [ESTADO_ACTUAL.md](ESTADO_ACTUAL.md). Las carpetas de salida usan
-nombre de edición, mes y año, con los videos directamente dentro.
+el formato vigente documentado allí, con los videos directamente dentro. Las
+nuevas carpetas de ya editados usan `videoyaeditado_<nombre>_semana_<del mes>_<mes>_<año>`;
+los nuevos completos pasan por `videos completos/videos sin publicar`.
 
 CapCut conserva su export original. La bandeja copia el nuevo export con el
 nombre de la sesión al pendrive vinculado y muestra el estado en **Videos
@@ -96,6 +105,6 @@ El visor de Edición conserva ahora sus identificadores entre sondeos y distingu
 errores HTTP de formatos no admitidos por el navegador. Después de actualizar,
 reiniciar la bandeja y recargar con `Ctrl+F5`.
 
-Última validación registrada: 286 pruebas, OK, 9 saltadas; AST con 0 infracciones.
+Los resultados más recientes están en ESTADO_ACTUAL.md; AST con 0 infracciones.
 Consultar los motivos de los saltos y los límites de la validación en la guía
 de estado. Nunca ejecutar pruebas contra carpetas reales del usuario.

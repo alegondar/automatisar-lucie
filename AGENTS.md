@@ -2,8 +2,15 @@
 
 Leer primero [ESTADO_ACTUAL.md](ESTADO_ACTUAL.md), [README.md](README.md)
 y, en Windows, [README_WINDOWS.md](README_WINDOWS.md).
+En Kali/Linux, leer también [README_KALI.md](README_KALI.md): rama de entrega,
+configuración por equipo, pruebas nativas pendientes y continuidad.
 La constitución del sistema son las siete Reglas de Oro de
 [openspec/config.yaml](openspec/config.yaml); siguen obligatorias.
+Para retomar el envío Wi-Fi y el futuro cliente Android, leer
+[docs/plan-receptor-android.md](docs/plan-receptor-android.md). Es un plan pendiente
+de conformidad del usuario; no implementar el APK por inferencia. El cierre del
+lote se revalidó tras el cambio previo del manifiesto; ver evidencia en
+ESTADO_ACTUAL.md. La entrega continúa en `actualizacion-completa-host`.
 
 - No borrar automáticamente ni sobrescribir material. La eliminación manual
   desde «Eliminar capítulos» del dashboard está autorizada exclusivamente con
@@ -24,9 +31,33 @@ La constitución del sistema son las siete Reglas de Oro de
   locales, exports, logs ni informes generados.
 
 La estructura final de salidas es `<categoria>/<personaje>/<nombre - día - semana del mes - mes - año>/`
-con videos directamente dentro, sin semana ni subcarpetas de capítulo.
+Excepción vigente para nuevas salidas en `videos ya editados` (2026-10-12):
+`<personaje>/videoyaeditado_<nombre del video>_semana_<del mes>_<mes>_<año>/`.
+Se elimina del nombre base el sufijo `videocompleto` o `video completo` si existe;
+se usan guiones bajos como separadores. Las salidas de `videos completos` y los
+capítulos conservan su formato vigente; no renombrar rutas históricas automáticamente.
+Los videos quedan directamente dentro de su carpeta de salida, sin niveles
+adicionales de semana ni subcarpetas de capítulo.
 CapCut conserva sus originales. Ver el mapa de módulos, API, estados, modo manual,
 reintentos, reversión y validaciones en `ESTADO_ACTUAL.md`.
+
+## Cola de publicación y Wi-Fi (2026-10-12)
+
+Los nuevos completos se guardan en `videos completos/videos sin publicar/`.
+Los asociados conservan personaje/edición; los exports sin sesión inequívoca
+se resguardan por nombre/versionado, sin adivinar una sesión. No reorganizar
+videos anteriores automáticamente. El modo manual y Deshacer siguen vigentes.
+El usuario autoriza usar una recepción Wi-Fi confirmada como señal de publicación:
+se quita solo el nivel `videos sin publicar`, después de aceptación e integridad,
+con simulación, confirmación, registro y reversión. Esto no comprueba publicaciones
+en Instagram. No borrar ni sobrescribir archivos, ni marcar publicados envíos
+rechazados, incompletos o con checksum fallido. Ver [Publicación y Wi-Fi](docs/publicacion-wifi.md).
+La galería lee exclusivamente esa cola, admite videos/fotos y separa Lucie,
+Roli, Mailen y Sin asignar. Usar carpeta conocida, sesión con ruta exacta o
+prefijo explícito del nombre (indicarlo como pista); no adivinar el personaje
+de nombres numéricos. El filtro no mueve ni renombra material. Cambiar de
+personaje/búsqueda limpia selección y revisión; seleccionar todos afecta solo
+los archivos visibles. Las vistas previas resuelven IDs del inventario vigente.
 
 ## Revisión de GitHub al iniciar cada sesión
 
@@ -96,7 +127,8 @@ Por ejemplo: `oloraculo - lunes - semana 2 - octubre - 2026`.
 La semana del mes se calcula por bloques de días: 1–7, 8–14, 15–21, 22–28 y 29–31.
 Se usa el reloj local, nombres españoles y una sola carpeta, sin niveles de semana.
 El dashboard aplica el formato al iniciar capítulos y simular nuevas escenas;
-las salidas de edición también usan el nombre de video, día, semana del mes, mes y año.
+Las salidas de completos usan también ese formato; las nuevas carpetas de
+`videos ya editados` usan la excepción `videoyaeditado_...` indicada arriba.
 Esta regla sustituye el anterior sufijo de solo mes y año. Las carpetas y rutas
 históricas no se renombran ni migran automáticamente. Reintentos y deshacer usan
 las rutas registradas. La nueva excepción de limpieza solo retira directorios

@@ -94,6 +94,10 @@ Dado el valor irreemplazable de las creaciones y grabaciones, toda la plataforma
 
 ### En Linux (Kali / Debian / Ubuntu)
 
+Para descargar esta entrega de `actualizacion-completa-host` y continuar en Kali,
+seguir [README_KALI.md](README_KALI.md). Incluye configuración independiente,
+pruebas temporales y alcance de la compatibilidad revisada.
+
 1. Abrir una terminal en el repositorio:
    ```bash
    python3 bandeja_descargas.py
@@ -121,7 +125,7 @@ Dado el valor irreemplazable de las creaciones y grabaciones, toda la plataforma
 Toda la suite está diseñada para ser completamente hermética (independiente del entorno, de montajes físicos y de puertos fijos):
 
 ```bash
-env HOME=/tmp/homefalso python3 -m unittest discover -s . -p "test_*.py"
+python3 -m unittest discover -s . -p "test_*.py"
 ```
 
 ### Auditoría AST Anti-Borrado (Regla de Oro #1 y #7)
@@ -156,22 +160,37 @@ python3 instalar_hooks.py
 
 ## Organización de videos editados y completos
 
+**Sin publicar · Enviar al celular** integra un emisor Wi-Fi compatible con LocalSend.
+Los nuevos completos quedan en `videos completos/videos sin publicar/`; después
+de recibirlos en el dispositivo elegido, pasan al nivel anterior con registro y
+Deshacer. Los originales de CapCut se conservan. Ver [Uso, conexión y reglas de
+publicación](docs/publicacion-wifi.md).
+
+Las nuevas carpetas de **videos ya editados** usan
+`videoyaeditado_<nombre>_semana_<del mes>_<mes>_<año>`, dentro del personaje.
+Por ejemplo: `videoyaeditado_lucieinvitacafe_semana_2_octubre_2026`.
+Se quita el sufijo generado `videocompleto` del nombre base. Esta excepción
+solo cambia los nuevos destinos de crudos editados; las rutas registradas
+anteriormente siguen disponibles para reintentos y deshacer.
+
 Para próximas sesiones y mantenimiento, consultar [Estado actual del sistema](ESTADO_ACTUAL.md)
 y [Guía para agentes](AGENTS.md). La constitución permanece en [openspec/config.yaml](openspec/config.yaml).
 
-Al pasar un clip a `videos ya editados` o copiar un export a `videos completos`,
-se crea una única carpeta con el nombre de la edición dentro de su personaje.
-Los videos quedan directamente dentro de ella, sin subcarpetas:
+Al pasar un clip a `videos ya editados` o copiar un export asociado a una sesión,
+se crea una carpeta de salida dentro de su personaje. Los archivos quedan
+directamente dentro de ella, sin subcarpetas de semana o capítulo:
 
 ```text
-videos ya editados/lucie/Mi video - octubre - 2026/Toma 1.mp4
-videos ya editados/lucie/Mi video - octubre - 2026/Toma 2.mp4
-videos completos/lucie/Mi video - octubre - 2026/Mi video.mp4
+videos ya editados/lucie/videoyaeditado_Mi_video_semana_2_octubre_2026/Toma 1.mp4
+videos ya editados/lucie/videoyaeditado_Mi_video_semana_2_octubre_2026/Toma 2.mp4
+videos completos/videos sin publicar/lucie/Mi video - lunes - semana 2 - octubre - 2026/Mi video.mp4
 ```
 
 La fecha corresponde al momento del traslado o copia, según el reloj local del
-equipo. La carpeta usa el nombre de la edición sin extensión, el mes en español
-y el año; no incluye semana. Los clips de una misma edición se agrupan en ella.
+equipo, con semana del mes por bloques de días. Los clips de una misma edición
+se agrupan en ella. Los completos sin sesión inequívoca se resguardan directamente
+en Sin publicar por nombre/versionado; no se inventa su asociación. Al confirmar
+la recepción en el celular se retira únicamente el nivel `videos sin publicar`.
 
 ### Exports de CapCut y videos completados
 

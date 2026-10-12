@@ -1,8 +1,46 @@
-# Estado actual del sistema — 2026-10-11
+# Estado actual del sistema — 2026-10-12
 
 Esta guía describe el comportamiento implementado y complementa las siete
 Reglas de Oro de `openspec/config.yaml`. Para edición y CapCut, prevalece sobre
 las rutas y decisiones anteriores de los documentos históricos de OpenSpec.
+
+## Próxima sesión: envío Wi-Fi y receptor Android
+
+Leer [Plan de diagnóstico y cliente Android](docs/plan-receptor-android.md).
+El usuario pidió planificación y conformidad antes de implementar el APK.
+La captura muestra receptor ocupado y cero recibidos; falta identificar la
+causa mediante diagnóstico y certificar el envío con el teléfono real.
+El plan propone verificar primero el dashboard y luego un receptor propio
+compatible con LocalSend v2. No hay APK implementado ni aprobación de este plan.
+
+El cierre anterior quedó detenido: la suite dio **361 pruebas OK, 10 saltadas**, en
+**56.844 segundos**, pero el
+manifiesto real cambió **271 → 273** líneas y se detuvo la validación/publicación.
+Log: `%TEMP%/tests_entrega_windows_kali_final.log`. No se atribuyó ese cambio
+a las pruebas ni a la bandeja sin evidencia. Ese control se repitió y pasó;
+ver la revalidación siguiente. Linux y el envío al teléfono real siguen pendientes.
+
+## Entrega revalidada para GitHub y Kali (2026-10-12)
+
+La rama de esta entrega es **`actualizacion-completa-host`**, con los cambios
+de nombres, cola Sin publicar, galería por personaje, emisor Wi-Fi y documentación
+de continuidad. No se integró ni modificó master. El commit y push fueron
+autorizados expresamente por el usuario; no hace falta volver a pedirlos para
+este mismo lote. El APK Android sigue siendo un plan, sin implementación.
+
+Revalidación Windows/Python 3.13: **361 pruebas, OK, 10 saltadas**, en
+**61.461 segundos**. Manifiesto real solo contado antes/después: **276 / 276**
+líneas; el control que detenía el cierre quedó satisfecho. Log externo al repo:
+`%TEMP%/tests_publicacion_github_final.log`. Las omisiones conservan los motivos
+documentados: cinco requieren Linux y cinco privilegios para symlinks.
+AST: **0 infracciones en 24 archivos operativos**; sintaxis de ambos scripts JS,
+`node test_publicacion_ui.js` y auditorías de repo/historial correctas.
+
+Los tests de `test_traslado_atomico.py` comprueban traslado y colisión nativos
+en Windows y el contrato `renameat2(RENAME_NOREPLACE)` mediante mocks. No equivalen
+a ejecutar Kali. Para continuar allí, leer README_KALI.md y ejecutar la suite
+nativa con temporales y recuento del manifiesto. Bases, configuraciones locales,
+material, logs, APKs y claves de firma no forman parte del commit.
 
 ## Actualización completa del dashboard (2026-10-11)
 
@@ -26,20 +64,38 @@ la bandeja real para probar ni se validó Linux en este equipo.
 
 ## Estructura del material
 
+La nueva cola es `videos completos/videos sin publicar/`: se guardan allí los
+exports nuevos y los pendientes sin sesión inequívoca. Los vinculados conservan
+personaje/edición; los no vinculados se guardan por nombre con sufijo de versión
+si es necesario. La recepción confirmada mediante LocalSend desde el dashboard
+es la señal autorizada para retirar ese nivel y conservar el video en
+`videos completos/`, con registro, actualización de rutas y Deshacer.
+No se afirma publicación en Instagram ni se reorganizan completos históricos.
+Ver [Publicación y Wi-Fi](docs/publicacion-wifi.md).
+
+Cambio de nombres autorizado para **nuevas carpetas de videos ya editados**:
+`videos ya editados/<personaje>/videoyaeditado_<nombre>_semana_<del mes>_<mes>_<año>/`.
+Por ejemplo: `videoyaeditado_lucieinvitacafe_semana_2_octubre_2026`.
+El nombre base no conserva el sufijo generado `videocompleto`; sus espacios se
+separan con guiones bajos. Las carpetas de videos completos y capítulos mantienen
+su formato vigente. Rutas existentes no se renombran: el manifiesto las conserva
+para reintentos y deshacer, aunque cambie el mes o la regla de nombres.
+
 ```text
 LucieSinReglas/
   videos sin editar/<personaje>/<capitulo>/<clip.mp4>
-  videos ya editados/<personaje>/<Mi video - octubre - 2026>/<clip.mp4>
-  videos completos/<personaje>/<Mi video - octubre - 2026>/<Mi video.mp4>
+  videos ya editados/<personaje>/videoyaeditado_<nombre>_semana_2_octubre_2026/<clip.mp4>
+  videos completos/videos sin publicar/<personaje>/<nombre - lunes - semana 2 - octubre - 2026>/<video.mp4>
+  videos completos/<personaje>/<nombre - lunes - semana 2 - octubre - 2026>/<video.mp4>
   .lucie/manifiesto.jsonl
   _revertidos/
 ```
 
-El personaje sigue siendo el nivel contenedor. La carpeta de salida contiene
-el nombre de la edición sin extensión, el mes en español y el año de la operación,
-según el reloj local. No contiene semana ni otra carpeta de capítulo: todos los
-clips de una edición quedan directamente dentro de su carpeta. La petición final
-sustituye la primera implementación con semana y carpetas anidadas.
+El personaje sigue siendo el nivel contenedor para exports asociados. Se usa
+el reloj local y la semana del mes por bloques de días. Todos los clips de una
+edición quedan directamente dentro de su carpeta, sin niveles adicionales de
+semana ni subcarpetas de capítulo. Los completos sin sesión se resguardan
+directamente en la cola. Al publicar se retira solo el nivel `videos sin publicar`.
 
 Los archivos anteriores no se migran ni se reorganizan automáticamente. Los
 destinos ocupados se rechazan. Las rutas efectivas del manifiesto permiten
@@ -160,6 +216,9 @@ si están libres; no elimina carpetas vacías.
 | `bandeja/vigilante.py` | Mapa de descargas y registro persistente de identificadores del visor |
 | `bandeja/servidor.py` | API, CSRF, confinamiento y streaming con rangos |
 | `bandeja/web/panel.js` | Edición, Videos completados, reproductores y errores de carga |
+| `bandeja/publicacion.py` | Cola sin publicar, planes de envío, historial y reversión |
+| `bandeja/localsend.py` | Descubrimiento y emisor LocalSend v2 con integridad y aceptación |
+| `bandeja/web/wifi.js` | Selección de videos y celular, revisión, progreso e historial |
 
 `GET /api/edicion/secciones` incluye `videos_completados` y
 `sesiones_para_export`, incluso sin pendrive conectado.
@@ -178,6 +237,58 @@ no descartados y confinados a la carpeta configurada de CapCut.
 La base SQLite y la configuración local pertenecen a cada equipo. Nunca se
 suben ni se sincronizan entre Linux y Windows.
 
+## Validación de publicación y Wi-Fi (2026-10-12)
+
+Windows/Python 3.13: **353 pruebas, OK, 10 saltadas**, en **55.477 segundos**.
+Las diez omisiones conservan los motivos existentes: cinco requieren Linux y
+cinco privilegios para enlaces simbólicos. Manifiesto real solo contado antes
+y después: **263 / 263** líneas. Log: `%TEMP%/tests_publicacion_wifi_final.log`.
+
+Los nuevos tests ejercitan transferencia HTTP LocalSend a un receptor falso
+en loopback, SHA-256, rechazo, aceptación parcial, desconexión, cancelación,
+integridad, identidad del pendrive, colisiones, confirmación y token de un uso,
+historial recuperable, rutas SQLite y Deshacer. Se comprobaron también el
+resguardo automático sin sesión, el modo manual, el bloqueo ante otro envío
+y los contadores de capítulos de la nueva cola sin compartir bases entre equipos.
+La API conserva CSRF. Las aserciones y la guardia hermética se mantuvieron.
+
+JavaScript: sintaxis de ambos scripts correcta y ejecución con DOM/API
+simulados para selección, receptor, revisión, confirmación, progreso, historial
+y reversión. AST: **0 infracciones** en **24 archivos operativos**. Auditoría de
+archivos rastreados/historial y auditoría explícita de los cinco archivos nuevos:
+sin infracciones. No se inició la bandeja real, no se transfirió material real
+ni se validaron el teléfono físico, multicast real o Linux desde este equipo.
+
+## Galería de publicación por personaje (2026-10-12)
+
+La sección ofrece tarjetas con fotograma inicial/reproductor para videos e
+imagen para fotos, nombre, tamaño y carpeta visible. Un selector separa Lucie,
+Roli, Mailen y Sin asignar; la búsqueda filtra por archivo o carpeta. Se reconoce
+el personaje por carpeta, sesión que registre la ruta exacta o prefijo explícito
+del nombre, indicando esa última pista. Los nombres numéricos sin identificación
+se mantienen en Sin asignar. No se mueve ni renombra material al filtrar.
+
+La lista y sus vistas previas excluyen CapCut, crudos, ya editados y completos
+fuera de la cola. `publicacion:<id>` en `/api/media` resuelve exclusivamente el
+inventario vigente, admite rangos HTTP y deja de resolver después de publicar.
+También pueden enviarse y revertirse imágenes de la cola. Cambiar de filtro
+limpia selección/plan, «Seleccionar los visibles» afecta únicamente ese filtro
+y actualizar elimina selecciones que hayan salido de la vista.
+
+Validación final Windows/Python 3.13: **357 pruebas, OK, 10 saltadas**, en
+**57.654 segundos**; mismos motivos de omisión documentados arriba. Manifiesto
+real solo contado: **270 / 270** líneas. Log:
+`%TEMP%/tests_galeria_publicacion_final.log`. `node test_publicacion_ui.js`
+comprueba grupos, imágenes/videos, filtros, selección visible, invalidación,
+envío e historial con DOM/API simulados. Sintaxis JS y auditoría AST correctas.
+
+Se inspeccionó el diseño con Chrome headless y datos temporales. Una segunda
+prueba con reloj real y video WebM sintetizado en un canvas confirmó decodificación
+nativa (`readyState=4`) y fotograma visible en la tarjeta. La primera captura con
+reloj virtual no generó fotogramas del fixture; se repitió sin acelerar el reloj.
+No se inició la bandeja real ni se usaron videos del usuario; tampoco se validaron
+Linux, la transferencia al teléfono físico ni los códecs del material real.
+
 ## Causas corregidas
 
 | Causa | Corrección y evidencia |
@@ -195,6 +306,15 @@ fallo de red y formato no decodificable. No se añadió transcodificación: un c
 que el navegador no admita puede seguir sin reproducirse.
 
 ## Validación registrada y límites
+
+Nombre específico de carpetas ya editadas: Windows/Python 3.13, **334 pruebas,
+OK, 10 saltadas**, en 47.073 segundos; manifiesto **250 / 250** líneas.
+Log `%TEMP%/tests_nombre_ya_editado.log`. Se verificaron semanas del mes,
+separadores, eliminación del sufijo de video completo, destinos ocupados,
+reintentos y reversión con rutas históricas. AST y auditoría correctos.
+No se renombran carpetas reales automáticamente. En esa validación los exports
+sin sesión permanecían pendientes; la posterior cola de publicación autoriza
+resguardarlos sin asociación ficticia dentro de Videos sin publicar.
 
 Repaso de CapCut, cierre, copia y reversión: Windows/Python 3.13, **333 pruebas,
 OK, 10 saltadas**, en 50.333 segundos; manifiesto **248 / 248** líneas.
@@ -315,7 +435,8 @@ Por ejemplo: `oloraculo - lunes - semana 2 - octubre - 2026`.
 La semana del mes se calcula por bloques de días: 1–7, 8–14, 15–21, 22–28 y 29–31.
 Se usa el reloj local, nombres españoles y una sola carpeta, sin niveles de semana.
 El dashboard aplica el formato al iniciar capítulos y simular nuevas escenas;
-las salidas de edición también usan el nombre de video, día, semana del mes, mes y año.
+Las salidas de completos usan también ese formato; las nuevas carpetas de
+`videos ya editados` usan la excepción `videoyaeditado_...` indicada arriba.
 Esta regla sustituye el anterior sufijo de solo mes y año. Las carpetas y rutas
 históricas no se renombran ni migran automáticamente. Reintentos y deshacer usan
 las rutas registradas. La nueva excepción de limpieza solo retira directorios

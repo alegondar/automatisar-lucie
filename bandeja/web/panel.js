@@ -323,9 +323,13 @@
       document.getElementById('sec-eliminacion').style.display = (pestana === 'eliminacion') ? 'block' : 'none';
       document.getElementById('sec-edicion').style.display = (pestana === 'edicion') ? 'block' : 'none';
       document.getElementById('sec-completados').style.display = (pestana === 'completados') ? 'block' : 'none';
+      const publicacion = document.getElementById('sec-publicacion');
+      if (publicacion) publicacion.style.display = (pestana === 'publicacion') ? 'block' : 'none';
       document.getElementById('sec-historial').style.display = (pestana === 'historial') ? 'block' : 'none';
 
-      if (pestana === 'eliminacion') {
+      if (pestana === 'publicacion') {
+        if (window.cargarPublicacionWifi) window.cargarPublicacionWifi();
+      } else if (pestana === 'eliminacion') {
         cargarEliminacion();
       } else if (pestana === 'historial') {
         cargarHistorial();
@@ -343,7 +347,9 @@
     }
 
     async function recargarVistaActual() {
-      if (pestanaActual === 'eliminacion') {
+      if (pestanaActual === 'publicacion') {
+        if (window.cargarPublicacionWifi) await window.cargarPublicacionWifi();
+      } else if (pestanaActual === 'eliminacion') {
         await cargarEliminacion();
       } else if (pestanaActual === 'historial') {
         await cargarHistorial();
@@ -3998,6 +4004,7 @@
                 ${sesionesActivas.map(s => `<option value="${s.id}">${escapeHTML(s.nombre)} (${escapeHTML(s.capitulo)})</option>`).join('')}
               </select>` : ''}
               ${!copiado ? `<button class="btn-sm" ${exp.archivo_reemplazado ? 'disabled' : ''} onclick="asignarExportASesion(${exp.id}, '${selectId}', ${exp.sesion_id || 'null'})" style="background:var(--accent); color:#000; font-weight:600;">Enviar al pendrive</button>
+              ${!exp.sesion_id && !exp.archivo_reemplazado ? `<button class="btn-sm" onclick="guardarExportSinPublicar(${exp.id})">Guardar en Sin publicar</button>` : ''}
               <button class="btn-sm btn-secundario" onclick="descartarExportCapCut(${exp.id})">Descartar de la lista</button>` : ''}
               ${copiado && exp.ruta_destino ? `<button class="btn-sm btn-secundario" data-ruta="${escapeHTML(exp.ruta_destino)}" onclick="deshacerCopiaCompleto(this.dataset.ruta)">Deshacer envío</button>` : ''}
             </div>
@@ -4006,6 +4013,15 @@
       });
       html += '</div>';
       cont.innerHTML = html;
+    }
+
+    async function guardarExportSinPublicar(exportId) {
+      if (!confirm('¿Guardar este export en Videos sin publicar, conservando el original de CapCut?')) return;
+      try {
+        const datos = await apiFetch('/api/publicacion/resguardar', {method: 'POST', body: JSON.stringify({export_id: exportId})});
+        mostrarAvisoEdicion('Video guardado en Sin publicar: ' + escapeHTML(datos.destino));
+        await cargarVistaEdicion();
+      } catch (error) { mostrarAvisoEdicion(escapeHTML(error.message)); }
     }
 
     async function asignarExportASesion(exportId, selectElemId, sesionAsociada = null) {

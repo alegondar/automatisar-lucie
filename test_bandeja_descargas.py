@@ -6218,7 +6218,7 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
             self.assertEqual(status_term, 200)
             self.assertTrue(res_term.get("exito"))
             dest_esperado = os.path.join(self.raiz_pen, "videos ya editados", "lucie",
-                                         "capitulo_01videocompleto - domingo - semana 2 - octubre - 2026", "toma_01.mp4")
+                                         "videoyaeditado_capitulo_01_semana_2_octubre_2026", "toma_01.mp4")
             self.assertTrue(os.path.isfile(dest_esperado))
             self.assertFalse(os.path.isfile(self.clip_path))
 
@@ -6229,6 +6229,58 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
             self.assertTrue(res_desh.get("exito"))
             self.assertTrue(os.path.isfile(self.clip_path))
             self.assertFalse(os.path.isfile(dest_esperado))
+
+    def test_publicacion_wifi_api_lista_plan_y_csrf(self):
+        from unittest.mock import patch
+        carpeta = os.path.join(self.raiz_pen, "videos completos", "videos sin publicar")
+        os.makedirs(carpeta, exist_ok=True)
+        video = os.path.join(carpeta, "wifi-api.mp4")
+        with open(video, "xb") as archivo:
+            archivo.write(b"video para wifi temporal")
+        pen = {"conectado": True, "id": "pen-wifi-prueba", "punto_montaje": self.pendrive_dir}
+        dispositivo = {"ip": "127.0.0.1", "port": 53317, "protocol": "http", "alias": "Celular temporal", "fingerprint": "prueba"}
+        with patch("bandeja.publicacion.detectar_pendrive", return_value=pen), patch("bandeja.localsend.ClienteLocalSend.descubrir", return_value=[dispositivo]):
+            status, listado, _ = self._get("/api/publicacion/lista")
+            self.assertEqual(status, 200)
+            self.assertEqual(listado["archivos"][0]["nombre"], "wifi-api.mp4")
+            status, _ = self._post("/api/publicacion/buscar", {}, csrf="incorrecto")
+            self.assertEqual(status, 403)
+            status, descubiertos = self._post("/api/publicacion/buscar", {})
+            self.assertEqual(status, 200)
+            status, plan = self._post("/api/publicacion/simular", {"seleccion": [listado["archivos"][0]["id"]],
+                "dispositivo_id": descubiertos["dispositivos"][0]["id"]})
+            self.assertEqual(status, 200)
+            self.assertTrue(os.path.isfile(video))
+            self.assertFalse(os.path.exists(plan["archivos"][0]["destino"]))
+            status, _ = self._post("/api/publicacion/enviar", {"token": plan["token"], "confirmacion": False})
+            self.assertEqual(status, 409)
+        status, _, contenido = self._get("/wifi.js")
+        self.assertEqual(status, 200)
+        self.assertIn(b"LocalSend", contenido)
+
+    def test_publicacion_preview_solo_desde_cola_con_rangos(self):
+        from unittest.mock import patch
+        carpeta = os.path.join(self.raiz_pen, "videos completos", "videos sin publicar", "roli", "Capitulo")
+        os.makedirs(carpeta)
+        contenido = b"video completo de roli para vista previa temporal"
+        ruta = os.path.join(carpeta, "roli.mp4")
+        with open(ruta, "xb") as f:
+            f.write(contenido)
+        pen = {"conectado": True, "id": "pen-wifi-prueba", "punto_montaje": self.pendrive_dir}
+        with patch("bandeja.publicacion.detectar_pendrive", return_value=pen):
+            status, listado, _ = self._get("/api/publicacion/lista")
+            self.assertEqual(status, 200)
+            entrada = listado["archivos"][0]
+            self.assertEqual(entrada["personaje"], "roli")
+            status, _, datos = self._get("/api/media?id=" + entrada["id_media"], {"Range": "bytes=0-9"})
+            self.assertEqual(status, 206)
+            self.assertEqual(datos, contenido[:10])
+            status, _, _ = self._get("/api/media?id=publicacion:../videos%20sin%20editar/toma_01.mp4")
+            self.assertEqual(status, 404)
+            fuera = os.path.join(self.raiz_pen, "videos completos", "roli-publicado.mp4")
+            os.rename(ruta, fuera)
+            status, _, _ = self._get("/api/media?id=" + entrada["id_media"])
+            self.assertEqual(status, 404)
 
     def test_export_capcut_vista_previa_envio_y_deshacer(self):
         from bandeja.edicion import crear_sesion, vincular_nuevo_export
@@ -6260,7 +6312,7 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
             status, datos = self._post("/api/capcut/enviar-export", {"export_id": export_id})
             self.assertEqual(status, 200, datos)
             destino = datos["resultado_copia"]["destino"]
-            self.assertEqual(destino, os.path.join(self.raiz_pen, "videos completos", "lucie",
+            self.assertEqual(destino, os.path.join(self.raiz_pen, "videos completos", "videos sin publicar", "lucie",
                                                  "Mi video - domingo - semana 2 - octubre - 2026", "Mi video.mp4"))
             with open(destino, "rb") as archivo:
                 self.assertEqual(archivo.read(), contenido)

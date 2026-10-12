@@ -176,6 +176,11 @@ class GestorBaseDatosBandeja:
                 esquema = esquema.rsplit(')', 1)[0] + ', UNIQUE(ruta_origen, tamano, mtime))'
                 cur.execute(esquema)
                 cur.execute("INSERT INTO exports_pendientes SELECT * FROM exports_pendientes_historial_ruta")
+            columnas_export = {r[1] for r in con.execute("PRAGMA table_info(exports_pendientes)")}
+            if "ruta_destino" not in columnas_export:
+                cur.execute("ALTER TABLE exports_pendientes ADD COLUMN ruta_destino TEXT")
+            if "envio_automatico_bloqueado" not in columnas_export:
+                cur.execute("ALTER TABLE exports_pendientes ADD COLUMN envio_automatico_bloqueado INTEGER NOT NULL DEFAULT 0")
             con.commit()
 
     def registrar_o_actualizar(self, hash_val: str, ruta_actual: str, estado: str,

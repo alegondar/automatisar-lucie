@@ -56,11 +56,60 @@
     <button class="nav-btn" id="nav-btn-eliminacion" type="button">Eliminar capítulos</button>
     <button class="nav-btn" id="nav-btn-edicion" onclick="mostrarPestana('edicion', event)">Edición</button>
     <button class="nav-btn" id="nav-btn-completados" onclick="mostrarPestana('completados', event)">Videos completados</button>
+    <button class="nav-btn" id="nav-btn-publicacion" onclick="mostrarPestana('publicacion', event)">Sin publicar · Enviar al celular</button>
     <button class="nav-btn" id="nav-btn-historial" onclick="mostrarPestana('historial', event)">Historial</button>
     <button class="nav-btn" onclick="recargarVistaActual()">Refrescar</button>
   </nav>
 
   <main>
+    <section id="sec-publicacion" style="display:none;">
+      <div class="card">
+        <h2>Videos y fotos sin publicar</h2>
+        <p>Elegí los videos nuevos y envialos al celular por Wi-Fi. Al confirmar su recepción,
+          pasan de «videos completos/videos sin publicar» a «videos completos».
+          Usamos el envío como tu señal de publicación; no verificamos Instagram.</p>
+        <p id="wifi-carpeta" style="overflow-wrap:anywhere;"></p>
+        <div class="wifi-filtros">
+          <label for="wifi-personaje">Personaje</label>
+          <select id="wifi-personaje">
+            <option value="todos">Todos, separados por personaje</option>
+            <option value="lucie">Lucie</option>
+            <option value="roli">Roli</option>
+            <option value="mailen">Mailen</option>
+            <option value="sin_asignar">Sin asignar</option>
+          </select>
+          <label for="wifi-filtro">Buscar</label>
+          <input id="wifi-filtro" type="search" placeholder="Nombre del archivo o carpeta">
+        </div>
+        <p class="wifi-ayuda">Se muestra únicamente la carpeta Sin publicar del pendrive.
+          Los nombres numéricos sin personaje conocido quedan separados en «Sin asignar».</p>
+        <button class="btn-sm" id="wifi-actualizar">Actualizar videos</button>
+        <button class="btn-sm btn-secundario" id="wifi-todos">Seleccionar los visibles</button>
+        <button class="btn-sm btn-secundario" id="wifi-ninguno">Quitar selección</button>
+        <p id="wifi-conteo" role="status" aria-live="polite"></p>
+        <div id="wifi-videos" style="margin:16px 0;"></div>
+      </div>
+      <div class="card">
+        <h2>Celular en la misma red Wi-Fi</h2>
+        <p>Abrí LocalSend en el celular y mantenelo visible. Después buscá tu dispositivo y aceptá el envío allí.</p>
+        <button class="btn-sm" id="wifi-buscar">Buscar celulares</button>
+        <select id="wifi-dispositivo" aria-label="Celular receptor"><option value="">Elegí el celular</option></select>
+        <details style="margin-top:12px;"><summary>No aparece mi celular</summary>
+          <p>Ingresá la IP local que muestra el celular y el puerto configurado en LocalSend.</p>
+          <label>IP del celular <input id="wifi-ip" placeholder="192.168.1.20" autocomplete="off"></label>
+          <label>Puerto <input id="wifi-puerto" type="number" value="53317" min="1" max="65535"></label>
+          <button class="btn-sm" id="wifi-conectar">Conectar por IP</button>
+        </details>
+        <label style="display:block;margin:12px 0;">PIN de LocalSend (si lo pide el celular)
+          <input id="wifi-pin" type="password" autocomplete="off"></label>
+        <button class="btn-sm" id="wifi-preparar">Revisar envío</button>
+        <div id="wifi-plan" style="display:none;margin-top:16px;"></div>
+        <div id="wifi-estado" role="status" aria-live="polite" style="margin-top:16px;"></div>
+        <progress id="wifi-progreso" value="0" max="100" style="display:none;width:100%;"></progress>
+        <button class="btn-sm btn-secundario" id="wifi-cancelar" style="display:none;">Cancelar envío</button>
+      </div>
+      <div class="card"><h2>Enviados al celular</h2><div id="wifi-historial"></div></div>
+    </section>
     <section id="sec-eliminacion" style="display:none;">
       <div class="eliminacion-cabecera">
         <div><h2>Eliminar carpetas y archivos del proyecto</h2>
@@ -619,6 +668,7 @@
     const REFRESCO_PANEL_SEGUNDOS = __REFRESCO__;
   </script>
   <script src="/panel.js"></script>
+  <script src="/wifi.js"></script>
   <div id="toast-llegada" class="toast-llegada"></div>
 </body>
 </html>

@@ -13,6 +13,7 @@ Capa de abstracción del sistema operativo para la bandeja de descargas:
 """
 
 import concurrent.futures
+import ctypes
 import glob
 import logging
 import os
@@ -22,6 +23,22 @@ import subprocess
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("bandeja.plataforma")
+
+
+def mover_sin_sobrescribir(origen, destino):
+    """Renombrado atómico que falla si el destino existe, también en Linux."""
+    if os.name == "nt":
+        os.rename(origen, destino)
+        return
+    biblioteca = ctypes.CDLL(None, use_errno=True)
+    funcion = getattr(biblioteca, "renameat2", None)
+    if funcion is None:
+        raise OSError("El sistema no ofrece renombrado atómico sin sobrescritura.")
+    funcion.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    funcion.restype = ctypes.c_int
+    if funcion(-100, os.fsencode(origen), -100, os.fsencode(destino), 1) != 0:
+        codigo = ctypes.get_errno()
+        raise OSError(codigo, os.strerror(codigo), destino)
 
 
 def abrir_carpeta_windows(ruta: str) -> bool:

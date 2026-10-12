@@ -54,6 +54,7 @@ from bandeja.pendrive import (
 )
 from bandeja.vigilante import VigilanteBandeja
 from bandeja.eliminacion import GestorEliminacionPendrive
+from bandeja.publicacion import GestorPublicacion
 from bandeja.edicion import (
     obtener_secciones_edicion,
     obtener_sesiones_con_crudos_pendientes,
@@ -239,6 +240,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._servir_html_spa(solo_cabeceras=True)
         elif ruta == "/panel.js":
             self._servir_estatico("panel.js", "application/javascript; charset=utf-8", solo_cabeceras=True)
+        elif ruta == "/wifi.js":
+            self._servir_estatico("wifi.js", "application/javascript; charset=utf-8", solo_cabeceras=True)
         elif ruta == "/panel.css":
             self._servir_estatico("panel.css", "text/css; charset=utf-8", solo_cabeceras=True)
         elif ruta == "/api/estado-version":
@@ -269,6 +272,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._servir_html_spa()
         elif ruta == "/panel.js":
             self._servir_estatico("panel.js", "application/javascript; charset=utf-8")
+        elif ruta == "/wifi.js":
+            self._servir_estatico("wifi.js", "application/javascript; charset=utf-8")
         elif ruta == "/panel.css":
             self._servir_estatico("panel.css", "text/css; charset=utf-8")
         elif ruta == "/api/media":
@@ -331,6 +336,13 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._handle_edicion_secciones()
         elif ruta == "/api/capcut/exports":
             self._handle_capcut_exports()
+        elif ruta == "/api/publicacion/lista":
+            self._enviar_json(self.publicacion.listar())
+        elif ruta == "/api/publicacion/estado":
+            try:
+                self._enviar_json(self.publicacion.estado(parse_qs(parsed.query).get("id", [""])[0]))
+            except ValueError as e:
+                self._enviar_error(HTTPStatus.NOT_FOUND, str(e))
         else:
             self._enviar_error(HTTPStatus.NOT_FOUND, "Ruta no encontrada.")
 
@@ -446,6 +458,13 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             return
 
         ruta = None
+        raiz_publicacion = None
+        if str(media_id).startswith("publicacion:"):
+            try:
+                ruta, raiz_publicacion = self.publicacion.resolver_media(str(media_id)[12:])
+            except (OSError, ValueError) as e:
+                self._enviar_error(HTTPStatus.NOT_FOUND, str(e), solo_cabeceras=solo_cabeceras)
+                return
         if str(media_id).startswith("capcut:") and self.db:
             export_id = str(media_id)[7:]
             export = next((e for e in self.db.obtener_exports_pendientes()
@@ -464,7 +483,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             ruta = ruta or self.vigilante.resolver_ruta_media(str(media_id))
 
         # Si no se encuentra en vigilante, intentar resolver en el pendrive vinculado
-        raiz_pen_detectada = None
+        raiz_pen_detectada = raiz_publicacion
         punto_pen_detectado = None
         try:
             info_pen = detectar_pendrive(self.config)
@@ -659,7 +678,11 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._enviar_error(HTTPStatus.BAD_REQUEST, "Cuerpo JSON inválido o malformado.")
             return
 
-        if ruta == "/api/pendrive/eliminacion-simular":
+        if ruta in ("/api/publicacion/buscar", "/api/publicacion/conectar", "/api/publicacion/simular",
+                    "/api/publicacion/enviar", "/api/publicacion/cancelar", "/api/publicacion/deshacer",
+                    "/api/publicacion/resguardar"):
+            self._handle_publicacion(ruta, body)
+        elif ruta == "/api/pendrive/eliminacion-simular":
             self._handle_eliminacion(body, simular=True)
         elif ruta == "/api/pendrive/eliminar":
             self._handle_eliminacion(body)
@@ -725,6 +748,37 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._handle_capcut_escanear(body)
         else:
             self._enviar_error(HTTPStatus.NOT_FOUND, "Endpoint POST no encontrado.")
+
+    def _handle_publicacion(self, ruta, body):
+        try:
+            if not isinstance(body, dict):
+                raise ValueError("El cuerpo debe ser un objeto JSON.")
+            if ruta.endswith("/buscar"):
+                resultado = {"dispositivos": self.publicacion.buscar_dispositivos()}
+            elif ruta.endswith("/conectar"):
+                resultado = {"dispositivo": self.publicacion.agregar_dispositivo(body.get("ip"), body.get("puerto", 53317))}
+            elif ruta.endswith("/simular"):
+                resultado = self.publicacion.simular(body.get("seleccion"), body.get("dispositivo_id"))
+            elif ruta.endswith("/enviar"):
+                resultado = self.publicacion.iniciar_envio(body.get("token"), body.get("confirmacion"), body.get("pin", ""))
+            elif ruta.endswith("/cancelar"):
+                resultado = self.publicacion.cancelar(body.get("id"))
+            elif ruta.endswith("/deshacer"):
+                resultado = self.publicacion.deshacer(body.get("id_operacion"))
+            else:
+                from bandeja.edicion import copiar_export_sin_sesion_a_sin_publicar
+                export = next((e for e in self.db.obtener_exports_pendientes() if e["id"] == body.get("export_id")), None)
+                if not export or export.get("sesion_id") or export["estado"] not in ("sin_asignar", "copiado"):
+                    raise ValueError("Export sin sesión no encontrado.")
+                pen = detectar_pendrive(self.config)
+                if not pen or not pen.get("conectado"):
+                    raise ValueError("No hay pendrive vinculado conectado.")
+                destino = copiar_export_sin_sesion_a_sin_publicar(export, pen.get("punto_montaje") or pen.get("ruta_montaje"),
+                    self.db, self.config.carpeta_raiz_pendrive, self.movimientos.ruta_bitacora)
+                resultado = {"exito": True, "destino": destino}
+            self._enviar_json(resultado)
+        except (OSError, ValueError) as e:
+            self._enviar_error(HTTPStatus.CONFLICT, str(e))
 
     def _handle_eliminacion(self, body=None, simular=False):
         try:
@@ -1463,7 +1517,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         except (ValueError, OSError) as e:
             self._enviar_error(HTTPStatus.CONFLICT, str(e))
             return
-        self.db.actualizar_export_pendiente(int(export_id), sesion_id=int(sesion_id), estado="pendiente_copia", error=None)
+        self.db.actualizar_export_pendiente(int(export_id), sesion_id=int(sesion_id), estado="pendiente_copia", error=None, envio_automatico_bloqueado=0)
         self.db.actualizar_sesion_edicion(int(sesion_id), export_asociado=target_exp["ruta_origen"])
 
         info_pen = detectar_pendrive(self.config)
@@ -1541,7 +1595,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
     def _servir_estatico(self, nombre_archivo: str, content_type: str, solo_cabeceras: bool = False):
         # Lista blanca fija e inmutable
-        if nombre_archivo not in ("panel.js", "panel.css"):
+        if nombre_archivo not in ("panel.js", "panel.css", "wifi.js"):
             self._enviar_error(HTTPStatus.NOT_FOUND, "Archivo estático no permitido.", solo_cabeceras=solo_cabeceras)
             return
 
@@ -1630,6 +1684,7 @@ def crear_servidor(config: ConfiguracionBandeja, db: GestorBaseDatosBandeja,
     CustomHandler.miniaturas = miniaturas
     CustomHandler.token_csrf = token
     CustomHandler.eliminacion = GestorEliminacionPendrive(config)
+    CustomHandler.publicacion = GestorPublicacion(config, db)
 
     servidor = ServidorBandejaHTTPServer((config.host_servidor, config.puerto_servidor), CustomHandler)
     servidor.daemon_threads = True
