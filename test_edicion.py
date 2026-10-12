@@ -23,6 +23,9 @@ from bandeja.edicion import (
     nombre_carpeta_video,
     obtener_secciones_edicion,
     crear_sesion,
+    elegir_sesion_export_automatico,
+    retomar_export_actual_sin_asignar,
+    obtener_carpeta_edicion,
     sumar_videos_sesion,
     cancelar_sesion,
     finalizar_edicion_crudos,
@@ -132,6 +135,143 @@ class TestEdicionCapCut(unittest.TestCase):
         self.assertTrue(deshacer_finalizar_edicion(*args)["exito"])
         with open(audio, "rb") as f:
             self.assertEqual(f.read(), b"audio original")
+
+    def test_carpeta_edicion_prioriza_video_y_rechaza_escape(self):
+        self._crear_clip_crudo("roli", "capítulo (2)", "uno.mp4")
+        sesion = crear_sesion(self.db, ["audios/roli/capítulo (2)/voz.mp3", "roli/capítulo (2)/uno.mp4"], "roli", "capítulo (2)")
+        carpeta = obtener_carpeta_edicion(sesion, self.pendrive_montaje)
+        self.assertEqual(carpeta, os.path.join(self.pendrive_raiz, "videos sin editar", "roli", "capítulo (2)"))
+        for clip in ("../afuera/video.mp4", "roli/otro/video.mp4", "C:/carpeta/video.mp4"):
+            with self.subTest(clip=clip), self.assertRaises(ValueError):
+                obtener_carpeta_edicion({**sesion, "clips": [clip]}, self.pendrive_montaje)
+
+    def test_apertura_explorador_solo_windows_con_carpeta_temporal(self):
+        from bandeja.plataforma import abrir_carpeta_windows
+        with patch("bandeja.plataforma.os.startfile", create=True) as abrir:
+            with patch("bandeja.plataforma.os.name", "nt"):
+                self.assertTrue(abrir_carpeta_windows(self.tmp_dir))
+            abrir.assert_called_once_with(os.path.abspath(self.tmp_dir), "explore")
+            with patch("bandeja.plataforma.os.name", "posix"):
+                self.assertFalse(abrir_carpeta_windows(self.tmp_dir))
+            abrir.assert_called_once()
+
+    def test_exports_reutilizan_ruta_sin_perder_historia(self):
+        from bandeja.edicion import verificar_version_export
+        ruta = os.path.join(self.tmp_dir, "1010(7).mp4")
+        with open(ruta, "xb") as f:
+            f.write(b"antiguo")
+        info = {"ruta_absoluta": ruta, "nombre": "1010(7).mp4", "tamano": 7, "mtime": os.stat(ruta).st_mtime}
+        viejo = vincular_nuevo_export(info, None, self.db)["export_id"]
+        self.db.actualizar_export_pendiente(viejo, estado="descartado")
+        with open(ruta, "wb") as f:
+            f.write(b"nuevo export de roli")
+        info.update(tamano=os.stat(ruta).st_size, mtime=os.stat(ruta).st_mtime)
+        nuevo = vincular_nuevo_export(info, None, self.db)["export_id"]
+        self.assertNotEqual(viejo, nuevo)
+        self.assertEqual(vincular_nuevo_export(info, None, self.db)["export_id"], nuevo)
+        registros = {e["id"]: e for e in self.db.obtener_exports_pendientes()}
+        self.assertEqual(registros[viejo]["estado"], "descartado")
+        with self.assertRaises(ValueError):
+            verificar_version_export(registros[viejo])
+        verificar_version_export(registros[nuevo])
+
+    def test_migracion_exports_conserva_tabla_anterior_e_identificadores(self):
+        import sqlite3
+        from contextlib import closing
+        ruta_db = os.path.join(self.tmp_dir, "anterior.sqlite")
+        with closing(sqlite3.connect(ruta_db)) as con:
+            con.execute('CREATE TABLE exports_pendientes (id INTEGER PRIMARY KEY AUTOINCREMENT, ruta_origen TEXT UNIQUE NOT NULL, nombre TEXT NOT NULL, tamano INTEGER NOT NULL, mtime REAL NOT NULL, sha256 TEXT, sesion_id INTEGER, estado TEXT NOT NULL, fecha_deteccion TEXT NOT NULL, fecha_copia TEXT, error TEXT)')
+            con.execute("INSERT INTO exports_pendientes VALUES (42, 'export.mp4', 'export.mp4', 7, 1.0, 'hash anterior', NULL, 'copiado', 'fecha', NULL, NULL)")
+            con.commit()
+        db = GestorBaseDatosBandeja(ruta_db)
+        self.assertEqual(db.obtener_exports_pendientes()[0]["id"], 42)
+        nuevo = db.registrar_export_pendiente('export.mp4', 'export.mp4', 9, 2.0)
+        self.assertGreater(nuevo, 42)
+        with closing(sqlite3.connect(ruta_db)) as con:
+            self.assertEqual(con.execute('SELECT sha256 FROM exports_pendientes_historial_ruta WHERE id=42').fetchone()[0], 'hash anterior')
+        self.assertEqual(len(GestorBaseDatosBandeja(ruta_db).obtener_exports_pendientes()), 2)
+
+    def test_prioridad_export_en_edicion_sobre_editadas_y_ambiguedad(self):
+        editada = {"id": 1, "estado": "editado"}
+        activa = {"id": 2, "estado": "en_edicion"}
+        self.assertEqual(elegir_sesion_export_automatico([editada, activa]), activa)
+        self.assertIsNone(elegir_sesion_export_automatico([activa, {**activa, "id": 3}, editada]))
+        self.assertEqual(elegir_sesion_export_automatico([editada]), editada)
+        self.assertIsNone(elegir_sesion_export_automatico([editada, {**editada, "id": 4}]))
+
+    def test_export_actual_pendiente_se_envia_a_activa_con_historia_intacta(self):
+        vieja = crear_sesion(self.db, ["lucie/antiguo/uno.mp4"], "lucie", "antiguo")
+        self.db.actualizar_sesion_edicion(vieja["id"], estado="editado")
+        activa = crear_sesion(self.db, ["lucie/cafe/uno.mp4"], "lucie", "cafe", "Cafe")
+        inicio = datetime.datetime.fromisoformat(self.db.obtener_sesion_por_id(activa["id"])["fecha_creacion"]).timestamp()
+        for nombre, ts in (("historico.mp4", inicio - 20), ("luciecafe.mp4", inicio + 20)):
+            ruta = os.path.join(self.tmp_dir, nombre)
+            with open(ruta, "xb") as f:
+                f.write(b"export de prueba")
+            os.utime(ruta, (ts, ts))
+            st = os.stat(ruta)
+            self.db.registrar_export_pendiente(ruta, nombre, st.st_size, st.st_mtime)
+        resultado = retomar_export_actual_sin_asignar(self.db, self.pendrive_montaje, self.carpeta_raiz, self.bitacora_path)
+        self.assertEqual(resultado["modo"], "copia_automatica")
+        self.assertEqual(resultado["sesion_id"], activa["id"])
+        historico = next(e for e in self.db.obtener_exports_pendientes() if e["nombre"] == "historico.mp4")
+        self.assertIsNone(historico["sesion_id"])
+        self.assertEqual(historico["estado"], "sin_asignar")
+        self.assertIsNone(self.db.obtener_sesion_por_id(vieja["id"])["export_asociado"])
+        self.assertIsNone(retomar_export_actual_sin_asignar(self.db, self.pendrive_montaje, self.carpeta_raiz, self.bitacora_path))
+
+    @unittest.skipUnless(os.name == "nt", "Requiere bloqueo nativo de renombrado de Windows")
+    def test_finalizar_con_clip_abierto_copia_y_deshace_sin_cerrar_lector(self):
+        origen = self._crear_clip_crudo("lucie", "cafe", "clip.mp4", b"video original")
+        sesion = crear_sesion(self.db, ["lucie/cafe/clip.mp4"], "lucie", "cafe", "Cafe")
+        args = (self.db, sesion["id"], self.pendrive_montaje, self.carpeta_raiz, self.bitacora_path)
+        with open(origen, "rb") as lector_capcut:
+            resultado = finalizar_edicion_crudos(*args)
+            self.assertTrue(resultado["exito"], resultado)
+            self.assertTrue(resultado["movidos"][0]["original_preservado"])
+            destino = resultado["movidos"][0]["destino"]
+            self.assertEqual(calcular_sha256(origen), calcular_sha256(destino))
+            self.assertEqual(lector_capcut.read(), b"video original")
+            self.assertEqual(obtener_secciones_edicion(self.pendrive_montaje, self.db)["para_editar"], [])
+            self.assertEqual(finalizar_edicion_crudos(*args)["movidos"], [])
+            revertido = deshacer_finalizar_edicion(*args)
+            self.assertTrue(revertido["exito"], revertido)
+            self.assertTrue(os.path.isfile(revertido["revertidos"][0]["a"]))
+            self.assertTrue(os.path.isfile(origen))
+            self.assertFalse(os.path.exists(destino))
+        self.assertEqual(self.db.obtener_sesion_por_id(sesion["id"])["estado"], "en_edicion")
+
+    def test_copia_crudo_corrupta_preserva_origen_y_copia_para_revision(self):
+        from bandeja.edicion import _copiar_crudo_bloqueado
+        origen = self._crear_clip_crudo("lucie", "cafe", "clip.mp4", b"original intacto")
+        destino = os.path.join(self.pendrive_raiz, "videos ya editados", "clip.mp4")
+        os.makedirs(os.path.dirname(destino), exist_ok=True)
+        with patch("bandeja.edicion.shutil.copyfileobj", side_effect=lambda entrada, salida, largo: salida.write(b"copia corrupta")):
+            with self.assertRaises(ValueError):
+                _copiar_crudo_bloqueado(origen, destino, calcular_sha256(origen), self.pendrive_raiz)
+        self.assertFalse(os.path.exists(destino))
+        with open(origen, "rb") as archivo:
+            self.assertEqual(archivo.read(), b"original intacto")
+        revision = os.path.join(self.pendrive_raiz, "_a_revisar", "copias_fallidas")
+        self.assertEqual(len(os.listdir(revision)), 1)
+        with open(os.path.join(revision, os.listdir(revision)[0]), "rb") as archivo:
+            self.assertEqual(archivo.read(), b"copia corrupta")
+
+    def test_export_enviado_no_oculta_crudos_pendientes_ni_pierde_estado(self):
+        self._crear_clip_crudo("lucie", "cafe", "clip.mp4")
+        sesion = crear_sesion(self.db, ["lucie/cafe/clip.mp4"], "lucie", "cafe", "Cafe")
+        export = os.path.join(self.tmp_dir, "export.mp4")
+        with open(export, "xb") as archivo:
+            archivo.write(b"export final")
+        copiar_export_a_videos_completos(export, sesion, self.pendrive_montaje, self.db, self.carpeta_raiz, self.bitacora_path)
+        datos = obtener_secciones_edicion(self.pendrive_montaje, self.db)
+        self.assertEqual(datos["en_edicion"][0]["id"], sesion["id"])
+        args = (self.db, sesion["id"], self.pendrive_montaje, self.carpeta_raiz, self.bitacora_path)
+        self.assertTrue(finalizar_edicion_crudos(*args)["exito"])
+        self.assertEqual(self.db.obtener_sesion_por_id(sesion["id"])["estado"], "completado")
+        self.assertEqual(obtener_secciones_edicion(self.pendrive_montaje, self.db)["en_edicion"], [])
+        self.assertTrue(deshacer_finalizar_edicion(*args)["exito"])
+        self.assertEqual(obtener_secciones_edicion(self.pendrive_montaje, self.db)["en_edicion"][0]["id"], sesion["id"])
 
     def test_calculo_nombre_defecto(self):
         """Verifica la lógica de nombrado para capítulos y clips individuales."""
@@ -462,7 +602,7 @@ class TestEdicionCapCut(unittest.TestCase):
         export_file = os.path.join(capcut_dir, "0818(18).mp4")
         with open(export_file, "xb") as archivo:
             archivo.write(b"video_export_offline")
-        export_info = {**export_info, "ruta_absoluta": export_file, "nombre": "0818(18).mp4"}
+        export_info = {**export_info, "ruta_absoluta": export_file, "nombre": "0818(18).mp4", "mtime": os.stat(export_file).st_mtime}
         res1 = vincular_nuevo_export(
             export_info=export_info,
             pendrive_montaje=None,

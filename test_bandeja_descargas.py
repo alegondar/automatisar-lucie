@@ -619,6 +619,26 @@ class TestServidorHTTPYSeguridad(unittest.TestCase):
             parsed_json = {}
         return res.status, parsed_json, raw
 
+    def test_crear_sesion_abre_carpeta_validada_sin_abrir_explorador_real(self):
+        montaje = os.path.join(self.tmp_dir, "pen_apertura")
+        carpeta = os.path.join(montaje, "LucieSinReglas", "videos sin editar", "lucie", "cap apertura")
+        os.makedirs(carpeta, exist_ok=True)
+        with open(os.path.join(carpeta, "clip.mp4"), "xb") as f:
+            f.write(b"video temporal")
+        payload = {"clips": ["lucie/cap apertura/clip.mp4"], "personaje": "lucie",
+                   "capitulo": "cap apertura", "nombre_sesion": "Apertura", "abrir_carpeta": True}
+        headers = {"Content-Type": "application/json", "X-CSRF-Token": self.token_csrf}
+        with patch("bandeja.servidor.detectar_pendrive", return_value={"conectado": True, "punto_montaje": montaje}), patch("bandeja.servidor.abrir_carpeta_windows", return_value=True) as abrir:
+            status, data, _ = self._request("POST", "/api/edicion/crear-sesion", headers, json.dumps(payload))
+            self.assertEqual(status, 200)
+            self.assertTrue(data["exito"])
+            self.assertTrue(data["carpeta_abierta"])
+            abrir.assert_called_once_with(carpeta)
+            _, fallo, _ = self._request("POST", "/api/edicion/crear-sesion", headers, json.dumps({**payload, "clips": ["../afuera/clip.mp4"]}))
+            self.assertTrue(fallo["exito"])
+            self.assertIn("error_abrir_carpeta", fallo)
+            abrir.assert_called_once()
+
     def test_get_spa_html(self):
         status, _, raw = self._request("GET", "/")
         self.assertEqual(status, 200)
@@ -6220,7 +6240,7 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
         with open(origen, "xb") as archivo:
             archivo.write(contenido)
         sesion = crear_sesion(self.db, ["lucie/capitulo_01/toma_01.mp4"], "lucie", "capitulo_01", "Mi video")
-        registrado = vincular_nuevo_export({"ruta_absoluta": origen, "nombre": "0818(15).mp4", "tamano": len(contenido), "mtime": 1},
+        registrado = vincular_nuevo_export({"ruta_absoluta": origen, "nombre": "0818(15).mp4", "tamano": len(contenido), "mtime": os.stat(origen).st_mtime},
                                           None, self.db, ruta_bitacora=self.bitacora, copiar_automaticamente=False)
         export_id = registrado["export_id"]
         with patch("bandeja.servidor.detectar_pendrive", return_value=None):

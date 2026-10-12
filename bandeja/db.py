@@ -149,7 +149,7 @@ class GestorBaseDatosBandeja:
             cur.execute("""
             CREATE TABLE IF NOT EXISTS exports_pendientes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ruta_origen TEXT UNIQUE NOT NULL,
+                ruta_origen TEXT NOT NULL,
                 nombre TEXT NOT NULL,
                 tamano INTEGER NOT NULL,
                 mtime REAL NOT NULL,
@@ -159,10 +159,23 @@ class GestorBaseDatosBandeja:
                 fecha_deteccion TEXT NOT NULL,
                 fecha_copia TEXT,
                 error TEXT,
-                FOREIGN KEY(sesion_id) REFERENCES sesiones_edicion(id)
+                FOREIGN KEY(sesion_id) REFERENCES sesiones_edicion(id),
+                UNIQUE(ruta_origen, tamano, mtime)
             );
             """)
 
+            # Migración conservadora: guardar intacta la tabla anterior y crear
+            # una tabla de versiones, conservando IDs y asociaciones existentes.
+            indices = cur.execute("PRAGMA index_list(exports_pendientes)").fetchall()
+            por_ruta = any(i[2] and [r[2] for r in con.execute('PRAGMA index_info("' + i[1] + '")')] == ["ruta_origen"] for i in indices)
+            if por_ruta:
+                cur.execute("BEGIN IMMEDIATE")
+                cur.execute("ALTER TABLE exports_pendientes RENAME TO exports_pendientes_historial_ruta")
+                esquema = con.execute("SELECT sql FROM sqlite_master WHERE name = 'exports_pendientes_historial_ruta'").fetchone()[0]
+                esquema = esquema.replace('"exports_pendientes_historial_ruta"', 'exports_pendientes', 1).replace('ruta_origen TEXT UNIQUE NOT NULL', 'ruta_origen TEXT NOT NULL')
+                esquema = esquema.rsplit(')', 1)[0] + ', UNIQUE(ruta_origen, tamano, mtime))'
+                cur.execute(esquema)
+                cur.execute("INSERT INTO exports_pendientes SELECT * FROM exports_pendientes_historial_ruta")
             con.commit()
 
     def registrar_o_actualizar(self, hash_val: str, ruta_actual: str, estado: str,
@@ -827,10 +840,10 @@ class GestorBaseDatosBandeja:
             cur.execute("""
             INSERT INTO exports_pendientes (
                 ruta_origen, nombre, tamano, mtime, sha256, sesion_id, estado, fecha_deteccion
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(ruta_origen) DO NOTHING
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(ruta_origen, tamano, mtime) DO NOTHING
             """, (ruta_origen, nombre, tamano, mtime, sha256, sesion_id, estado, fecha_ahora))
             con.commit()
-            cur.execute("SELECT id FROM exports_pendientes WHERE ruta_origen = ?", (ruta_origen,))
+            cur.execute("SELECT id FROM exports_pendientes WHERE ruta_origen = ? AND tamano = ? AND mtime = ?", (ruta_origen, tamano, mtime))
             return cur.fetchone()[0]
 
     def obtener_exports_pendientes(self, estado: Optional[str] = None) -> List[Dict[str, Any]]:

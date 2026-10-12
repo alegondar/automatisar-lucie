@@ -6,7 +6,7 @@ bandeja/capcut.py
 Vigilante pasivo y no destructivo para la carpeta de exportación de CapCut.
 Cumple estrictamente las 7 Reglas de Oro del proyecto:
 - Monitoreo pasivo (solo lectura, nunca altera, renombra ni borra archivos en CapCut).
-- Fotografía inicial en arranque: registra e ignora permanentemente archivos preexistentes.
+- Fotografía inicial en arranque: ignora versiones históricas mientras no cambien.
 - Escaneo recursivo hasta profundidad 3 (detecta exports sueltos y en subcarpetas).
 - Filtrado de extensiones temporales parametrizadas (.tmp, .part, .crdownload, etc.).
 - Ventana de estabilidad de tamaño (mínimo N sondeos con tamaño idéntico).
@@ -45,6 +45,7 @@ class VigilanteCapCut:
         intervalo_sondeo: float = 2.0,
         callback_nuevo_export: Optional[Callable[[Dict[str, Any]], None]] = None,
         callback_sondeo: Optional[Callable[[], None]] = None,
+        exports_registrados: Optional[List[Dict[str, Any]]] = None,
     ):
         if not ruta_capcut or ruta_capcut == "auto":
             self.ruta_capcut = os.path.abspath(obtener_ruta_exportacion_capcut())
@@ -60,20 +61,28 @@ class VigilanteCapCut:
         self.callback_nuevo_export = callback_nuevo_export
         self.callback_sondeo = callback_sondeo
 
-        self._preexistentes: Set[str] = set()
-        self._exports_detectados: Set[str] = set()
+        self._preexistentes = {}
+        self._exports_detectados = {}
+        self._registrados = {}
+        for export in exports_registrados or []:
+            ruta = os.path.normcase(os.path.abspath(export["ruta_origen"]))
+            self._registrados.setdefault(ruta, set()).add((export["tamano"], export["mtime"]))
         self._conteo_estabilidad: Dict[str, int] = {}
         self._ultimo_tamano: Dict[str, int] = {}
         self._fotografia_tomada: bool = False
 
         self._detener = threading.Event()
         self._hilo: Optional[threading.Thread] = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def _firma(st):
+        return (st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino)
 
     def tomar_fotografia_inicial(self) -> int:
         """
         Escanea la carpeta de CapCut y registra todos los archivos preexistentes
-        para ignorarlos de forma definitiva. Retorna la cantidad de archivos registrados.
+        para ignorar esas versiones sin cambios. Retorna la cantidad registrada.
         """
         with self._lock:
             self._preexistentes.clear()
@@ -91,7 +100,15 @@ class VigilanteCapCut:
                 for arch in archivos:
                     ruta_arch = os.path.join(raiz, arch)
                     norm = os.path.normcase(os.path.abspath(ruta_arch))
-                    self._preexistentes.add(norm)
+                    try:
+                        st = os.stat(ruta_arch)
+                    except OSError:
+                        continue
+                    # Una ruta registrada cuyo contenido cambió durante la parada
+                    # se procesa como nueva versión; el resto histórico se ignora.
+                    if norm in self._registrados and (st.st_size, st.st_mtime) not in self._registrados[norm]:
+                        continue
+                    self._preexistentes[norm] = self._firma(st)
                     conteo += 1
 
             self._fotografia_tomada = True
@@ -129,8 +146,6 @@ class VigilanteCapCut:
                     # 1. Ignorar preexistentes y ya detectados
                     if os.path.islink(ruta_arch):
                         continue
-                    if norm in self._preexistentes or norm in self._exports_detectados:
-                        continue
 
                     # 2. Ignorar temporales y ocultos
                     arch_lower = arch.lower()
@@ -153,13 +168,16 @@ class VigilanteCapCut:
 
                     if tamano_actual <= 0:
                         continue
+                    firma = self._firma(st)
+                    if self._preexistentes.get(norm) == firma or self._exports_detectados.get(norm) == firma:
+                        continue
 
                     # 5. Ventana de estabilidad
                     tamano_anterior = self._ultimo_tamano.get(norm)
-                    if tamano_anterior is not None and tamano_anterior == tamano_actual:
+                    if tamano_anterior is not None and tamano_anterior == firma:
                         self._conteo_estabilidad[norm] = self._conteo_estabilidad.get(norm, 1) + 1
                     else:
-                        self._ultimo_tamano[norm] = tamano_actual
+                        self._ultimo_tamano[norm] = firma
                         self._conteo_estabilidad[norm] = 1
 
                     if self._conteo_estabilidad[norm] < self.sondeos_estabilidad:
@@ -172,7 +190,7 @@ class VigilanteCapCut:
                         continue
 
                     # Archivo listo
-                    self._exports_detectados.add(norm)
+                    self._exports_detectados[norm] = firma
                     carpeta_rel = "" if rel == "." else rel
                     info = {
                         "ruta_absoluta": ruta_arch,
@@ -191,6 +209,7 @@ class VigilanteCapCut:
                     try:
                         self.callback_nuevo_export(info)
                     except Exception as e:
+                        self._exports_detectados.pop(os.path.normcase(os.path.abspath(info["ruta_absoluta"])), None)
                         logger.error(f"[CapCut] Error en callback_nuevo_export: {e}")
 
             if self.callback_sondeo:

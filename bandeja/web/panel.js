@@ -3739,7 +3739,8 @@
         clips: sesionModalClips.map(c => c.ruta_relativa),
         personaje: primerClip.personaje,
         capitulo: primerClip.capitulo,
-        nombre_sesion: nombreInput
+        nombre_sesion: nombreInput,
+        abrir_carpeta: true
       };
 
       try {
@@ -3756,6 +3757,9 @@
           cerrarModalCrearSesion();
           clipsSeleccionadosParaEditar.clear();
           mostrarAvisoEdicion(`✅ Sesión iniciada: <strong>${escapeHTML(nombreInput)}</strong> con ${sesionModalClips.length} clip(s).`);
+          if (data.error_abrir_carpeta) {
+            mostrarAvisoEdicion(`Sesión iniciada. No se pudo abrir la carpeta: ${escapeHTML(data.error_abrir_carpeta)}`);
+          }
           await cargarVistaEdicion();
         } else {
           alert("Error al crear sesión: " + (data.error || "Desconocido"));
@@ -3789,14 +3793,14 @@
           <div style="background:var(--card-alt); border:1px solid var(--border); border-radius:6px; padding:14px;">
             <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
               <div>
-                <span class="badge" style="background:#0284c7; color:#fff; font-weight:600; margin-right:8px;">EN EDICIÓN</span>
+                <span class="badge" style="background:#0284c7; color:#fff; font-weight:600; margin-right:8px;">${s.video_completo_ruta ? 'EXPORT ENVIADO · CRUDOS PENDIENTES' : 'EN EDICIÓN'}</span>
                 <strong style="font-size:1.05rem;">${escapeHTML(s.nombre)}</strong>
                 <span style="color:var(--text-muted); font-size:0.85rem; margin-left:8px;">(${escapeHTML(s.personaje)} / ${escapeHTML(s.capitulo)})</span>
               </div>
               <div style="display:flex; gap:8px;">
-                <button class="btn-sm btn-secundario" onclick="sumarVideosSesion(${s.id})">Sumar video</button>
+                ${!s.video_completo_ruta ? `<button class="btn-sm btn-secundario" onclick="sumarVideosSesion(${s.id})">Sumar video</button>` : ''}
                 <button class="btn-sm" onclick="terminarEdicionSesion(${s.id})" style="background:#10b981; color:#000; font-weight:600; padding:6px 14px;">Terminé de editar</button>
-                <button class="btn-sm btn-secundario" onclick="cancelarSesionEdicion(${s.id})" style="color:var(--danger);">Cancelar</button>
+                ${!s.video_completo_ruta ? `<button class="btn-sm btn-secundario" onclick="cancelarSesionEdicion(${s.id})" style="color:var(--danger);">Cancelar</button>` : ''}
               </div>
             </div>
             <div style="margin-top:10px; font-size:0.85rem; color:var(--text-muted);">
@@ -3842,7 +3846,7 @@
     }
 
     async function terminarEdicionSesion(sesionId) {
-      if (!confirm("¿Confirmás que terminaste de editar? Los clips crudos se trasladarán a 'videos ya editados'.")) return;
+      if (!confirm("¿Confirmás que terminaste de editar? Los clips quedarán en 'videos ya editados'. Si CapCut los mantiene abiertos, se copiarán con verificación de integridad y se conservarán los originales.")) return;
 
       try {
         const res = await fetch('/api/edicion/terminar', {
@@ -3857,7 +3861,7 @@
         if (data.exito) {
           const movidosCount = (data.movidos || []).length;
           mostrarAvisoEdicion(
-            `✅ ${movidosCount} clip(s) crudos trasladados a 'videos ya editados'.`,
+            `✅ ${movidosCount} clip(s) organizados en 'videos ya editados'. ${(data.movidos || []).some(c => c.original_preservado) ? 'Se conservaron los originales que CapCut mantiene abiertos.' : ''}`,
             `<button class="btn-sm" onclick="deshacerTerminarEdicion(${sesionId})" style="background:#f59e0b; color:#000; font-weight:600;">Deshacer</button>`
           );
           await cargarVistaEdicion();
@@ -3866,7 +3870,7 @@
           const estado = data.fase === 'validacion_previa'
             ? 'No se trasladó ningún archivo: la comprobación previa encontró un problema.'
             : `Se trasladaron ${(data.movidos || []).length} clips; la sesión sigue abierta.`;
-          alert(`${estado}\n${detalle || data.error || 'No se pudo completar la edición.'}\nRestaurá los archivos faltantes a su ruta original y reintentá. Los traslados anteriores registrados se conservan.`);
+          alert(`${estado}\n${detalle || data.error || 'No se pudo completar la edición.'}\nLos archivos anteriores se conservan. Revisá el problema indicado y reintentá; no hace falta restaurar archivos si el aviso indica que están en uso.`);
           await cargarVistaEdicion();
         }
       } catch (err) {
@@ -3976,7 +3980,7 @@
         const tamStr = (exp.tamano / (1024 * 1024)).toFixed(1) + ' MB';
         const selectId = `sel-sesion-export-${exp.id}`;
         const copiado = exp.estado === 'copiado';
-        const estado = copiado ? 'ENVIADO AL PENDRIVE' : exp.error ? 'ERROR DE ENVÍO' : exp.sesion_id ? 'PENDIENTE DE ENVÍO' : 'ELEGIR EDICIÓN';
+        const estado = copiado ? 'ENVIADO AL PENDRIVE' : exp.archivo_reemplazado ? 'EXPORT REEMPLAZADO EN CAPCUT' : exp.error ? 'ERROR DE ENVÍO' : exp.sesion_id ? 'PENDIENTE DE ENVÍO' : 'ELEGIR EDICIÓN';
         html += `
           <div style="background:var(--card-alt); border:1px solid var(--border); border-radius:6px; padding:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
             <div>
@@ -3984,16 +3988,16 @@
               <strong>${escapeHTML(exp.nombre_video || exp.nombre)}</strong>
               <span style="color:var(--text-muted); font-size:0.85rem; margin-left:6px;">(${tamStr})</span>
               <p style="color:var(--text-muted);">Export de CapCut: ${escapeHTML(exp.nombre)}</p>
-              <video controls preload="none" style="width:280px; max-width:100%; max-height:220px;" src="/api/media?id=capcut%3A${exp.id}"></video>
+              ${exp.archivo_reemplazado ? '<p>CapCut reemplazó el archivo original. Elegí el nuevo export de la lista.</p>' : `<video controls preload="none" style="width:280px; max-width:100%; max-height:220px;" src="/api/media?id=capcut%3A${exp.id}"></video>`}
               ${exp.ruta_destino ? `<p style="overflow-wrap:anywhere;">Destino: ${escapeHTML(exp.ruta_destino)}</p>` : ''}
               ${exp.error ? `<p class="error-box">${escapeHTML(exp.error)}</p>` : ''}
             </div>
             <div style="display:flex; gap:8px; align-items:center;">
-              ${!copiado && !exp.sesion_id ? `<select id="${selectId}" style="padding:4px 8px; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text); font-size:0.85rem;">
+              ${!copiado && !exp.archivo_reemplazado && !exp.sesion_id ? `<select id="${selectId}" style="padding:4px 8px; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text); font-size:0.85rem;">
                 <option value="">Seleccionar sesión...</option>
                 ${sesionesActivas.map(s => `<option value="${s.id}">${escapeHTML(s.nombre)} (${escapeHTML(s.capitulo)})</option>`).join('')}
               </select>` : ''}
-              ${!copiado ? `<button class="btn-sm" onclick="asignarExportASesion(${exp.id}, '${selectId}', ${exp.sesion_id || 'null'})" style="background:var(--accent); color:#000; font-weight:600;">Enviar al pendrive</button>
+              ${!copiado ? `<button class="btn-sm" ${exp.archivo_reemplazado ? 'disabled' : ''} onclick="asignarExportASesion(${exp.id}, '${selectId}', ${exp.sesion_id || 'null'})" style="background:var(--accent); color:#000; font-weight:600;">Enviar al pendrive</button>
               <button class="btn-sm btn-secundario" onclick="descartarExportCapCut(${exp.id})">Descartar de la lista</button>` : ''}
               ${copiado && exp.ruta_destino ? `<button class="btn-sm btn-secundario" data-ruta="${escapeHTML(exp.ruta_destino)}" onclick="deshacerCopiaCompleto(this.dataset.ruta)">Deshacer envío</button>` : ''}
             </div>

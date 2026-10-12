@@ -69,6 +69,18 @@ Este script evaluará el sistema, rutas, nombres reservados, codificación y exc
 
 ## 7. Edición, CapCut y reproducción
 
+**Terminé de editar** permite mantener CapCut abierto cuando sus clips pueden
+leerse. Si Windows impide moverlos por estar en uso, crea copias verificadas en
+`videos ya editados` y conserva los originales. Deshacer conserva las copias en
+`_revertidos`, sin pisar esos originales. Si un bloqueo impide incluso leer el
+archivo, se informa el conflicto y la sesión sigue abierta.
+
+Al confirmar **Crear nueva sesión** en Edición, se abre automáticamente el
+Explorador de Windows en la carpeta del capítulo seleccionado del pendrive
+vinculado. Si solo se seleccionaron audios, se abre su carpeta de audios.
+La apertura no mueve archivos. Si falla o se desconectó el pendrive, la sesión
+se conserva y el panel informa el problema.
+
 El funcionamiento actual, las rutas finales y los controles de seguridad están
 documentados en [ESTADO_ACTUAL.md](ESTADO_ACTUAL.md). Las carpetas de salida usan
 nombre de edición, mes y año, con los videos directamente dentro.

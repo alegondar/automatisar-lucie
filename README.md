@@ -184,7 +184,10 @@ no se importan automáticamente.
 
 La pestaña **Videos completados** muestra el export original con reproductor,
 el nombre de la edición, los pendientes, errores y la ruta enviada al pendrive.
-Si varias sesiones esperan exports, permite elegir la edición antes de enviar.
+Una única sesión **En edición** tiene prioridad para el envío automático aunque
+haya sesiones antiguas editadas pendientes. Si hay varias sesiones en edición,
+permite elegir antes de enviar. Si no hay ninguna en edición, solo asocia
+automáticamente cuando queda una única sesión editada esperando export.
 Los envíos autorizados pendientes se retoman al reconectar el pendrive, aunque
 no aparezca un nuevo export. «Deshacer envío» conserva el video en `_revertidos`
 y requiere un nuevo envío explícito para volver a copiarlo.

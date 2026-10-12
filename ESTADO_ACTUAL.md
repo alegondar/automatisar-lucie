@@ -48,7 +48,31 @@ registrada en SQLite evita volver a copiar una misma sesión en otro mes.
 
 ## Flujo de edición y CapCut
 
+Cuando CapCut reutiliza un nombre de export, el vigilante detecta cambios en
+tamaño, fechas e identidad del archivo y reinicia su estabilidad. La misma ruta
+puede tener distintas versiones registradas por tamaño y mtime, sin sustituir
+estados, asociaciones o hashes anteriores. La migración conserva íntegra la
+tabla anterior como `exports_pendientes_historial_ruta`, además de copiar los
+IDs a la tabla de versiones. Si una ruta ya registrada cambió mientras la
+bandeja estaba cerrada, su nueva versión se detecta después del reinicio;
+otros archivos históricos desconocidos siguen excluidos por la fotografía inicial.
+El panel marca originales reemplazados y no permite enviarlos ni reproducir
+otra versión mediante su ID histórico. Los reintentos también verifican la versión.
+La asociación automática prioriza una única sesión `en_edicion` pendiente
+sobre sesiones `editado` antiguas. Si hay varias `en_edicion`, exige elección
+manual. Sin sesiones en edición, permite asociación automática solo si queda
+una única sesión editada pendiente. El sondeo en modo automático puede retomar
+un export `sin_asignar` si es el único vigente generado desde el inicio de la
+única sesión en edición; no asocia históricos ni elige entre varios exports.
+
 1. En **Edición**, seleccionar crudos y crear una sesión con su nombre.
+   En Windows, confirmar la creación abre el Explorador en la carpeta del
+   capítulo seleccionado (videos, o audios si la sesión solo tiene MP3).
+   La petición de creación incluye `abrir_carpeta=true`; el servidor calcula
+   la carpeta desde la sesión y el pendrive vinculado, verifica confinamiento
+   y rechaza rutas a través de enlaces/junctions. No admite una ruta libre
+   del navegador. Un error de apertura no deshace la sesión creada y se informa
+   en `error_abrir_carpeta`. Otros sistemas no lanzan el Explorador.
    La lista **Para editar** agrupa por personaje y capítulo con un tilde para
    seleccionar o desmarcar el capítulo completo, incluidos archivos ocultos
    por la búsqueda. Crear una sesión exige seleccionar un solo personaje y
@@ -60,6 +84,18 @@ registrada en SQLite evita volver a copiar una misma sesión en otro mes.
    con los IDs históricos de video.
 2. «Terminé de editar» agrupa los crudos en `videos ya editados`. La sesión
    puede recibir el export tanto en estado `en_edicion` como `editado`.
+   Si Windows impide renombrar un clip abierto (WinError 32/33), se crea una
+   copia exclusiva `.part`, se sincroniza y se verifican los hashes de copia y
+   original antes de publicar el destino. El original queda conservado y se
+   registra `original_preservado` en manifiesto y bitácora. No reaparece como
+   crudo pendiente después de cerrar la sesión. Deshacer preserva esa copia en
+   `_revertidos` si el original aún existe y coincide; si cambió, rechaza la
+   reversión sin sobrescribir. Las copias fallidas quedan en `_a_revisar` con
+   registro. Un bloqueo que también impida leer no puede evitarse: se informa
+   el conflicto y no se cierra la sesión. No se elimina el original al cerrar CapCut.
+   Un export enviado antes del cierre no oculta la sesión: permanece visible
+   como **Export enviado · Crudos pendientes** hasta finalizar el tratamiento
+   de los crudos. Al cerrar se conserva su estado completado y destino final.
    Para incorporar un clip faltante a una sesión en curso, seleccionarlo en
    **Para editar** y pulsar **Sumar video** en la sesión deseada. Se revisa la
    lista antes de confirmar. Se conservan nombre, clips anteriores y ubicación
@@ -89,8 +125,9 @@ registrada en SQLite evita volver a copiar una misma sesión en otro mes.
    y `.mov`, también en subcarpetas hasta profundidad 3. Acepta nombres numéricos
    como `0818(15).mp4`. Ignora archivos preexistentes en su fotografía inicial,
    temporales y enlaces simbólicos; exige estabilidad y disponibilidad del archivo.
-4. Si exactamente una sesión espera un export, lo asocia a ella. Si hay varias
-   o ninguna, deja la elección al usuario; no adivina por fecha.
+4. Si una sola sesión en edición espera un export, la prioriza frente a sesiones
+   editadas antiguas. Con varias en edición exige elección. Si no hay ninguna
+   en edición, asocia solo si hay una única editada pendiente; no adivina entre varias.
 5. En modo automático copia al pendrive vinculado con el nombre de la sesión,
    sin alterar el export original de CapCut. Comprueba exclusividad, colisiones
    e integridad SHA-256 y registra la operación. Un pendrive desconectado deja
@@ -158,6 +195,46 @@ fallo de red y formato no decodificable. No se añadió transcodificación: un c
 que el navegador no admita puede seguir sin reproducirse.
 
 ## Validación registrada y límites
+
+Repaso de CapCut, cierre, copia y reversión: Windows/Python 3.13, **333 pruebas,
+OK, 10 saltadas**, en 50.333 segundos; manifiesto **248 / 248** líneas.
+Log `%TEMP%/tests_capcut_bloqueos_revision.log`. Una prueba Windows nativa
+mantiene un lector abierto mientras finaliza por copia, reintenta y deshace;
+comprueba hashes y conservación de original/copia. Otras regresiones verifican
+preservación de copias corruptas, visibilidad de crudos tras enviar el export,
+estado completado al cerrar y reintento del callback del vigilante si falla.
+Se ejecutó toda la suite y las auditorías AST, JS y repositorio/historial.
+No se inició la aplicación real ni se manipuló material real para probar.
+Linux no se ejecutó; sus traslados habituales siguen usando el flujo anterior.
+
+Prioridad de la única sesión en edición para exports: Windows/Python 3.13,
+**329 pruebas, OK, 10 saltadas**, en 50.191 segundos; manifiesto **248 / 248**
+líneas. Log `%TEMP%/tests_capcut_prioridad.log`. Regresiones verifican prioridad
+sobre editadas antiguas, rechazo de varias activas y recuperación de un único
+export vigente reciente sin modificar asociaciones históricas. Sintaxis JS,
+AST y auditoría correctos. No se inició la bandeja real ni se envió el export
+real durante las pruebas; la regla se aplica al reiniciar la aplicación.
+
+Versiones de exports reutilizados de CapCut: Windows/Python 3.13, **327 pruebas,
+OK, 10 saltadas**, en 48.377 segundos; manifiesto **248 / 248** líneas.
+Log `%TEMP%/tests_capcut_versiones_final.log`. Las regresiones temporales
+comprueban reemplazos de históricos y exports detectados, estabilidad de la
+nueva versión, recuperación de una ruta registrada tras reinicio y migración
+con IDs/historial intactos. Se conservan las aserciones HTTP de rangos y
+confinamiento; sus fixtures usan el mtime real del archivo temporal.
+Sintaxis JS, AST y auditoría correctos. No se migró la base real ni se copió
+material real durante la validación; se aplica la migración al reiniciar la
+aplicación. La inspección diagnóstica real solo leyó metadatos y registros.
+
+Apertura de carpeta al crear sesión en Windows/Python 3.13: **323 pruebas,
+OK, 10 saltadas**, en 48.153 segundos; manifiesto **246 / 246** líneas.
+Log `%TEMP%/tests_abrir_carpeta_edicion_final.log`. Las pruebas usan carpetas
+temporales y sustituyen la apertura del Explorador por un mock; validan HTTP,
+carpeta correcta, rechazo de escapes y aislamiento de otros sistemas. Sintaxis
+JS, AST y auditoría del repositorio correctos. La primera suite tuvo un error
+intermitente de conexión WinError 10053 en una prueba de capítulos existente;
+esa prueba puntual y la repetición completa pasaron sin cambiar sus aserciones.
+No se abrió el Explorador real ni se inició la bandeja real para validar.
 
 Selección por capítulo y MP3 en edición: Windows/Python 3.13, **311 pruebas,
 OK, 10 saltadas**, en 47.769 segundos. Manifiesto real: **159 / 159** líneas;

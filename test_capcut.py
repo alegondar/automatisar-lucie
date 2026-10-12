@@ -44,6 +44,37 @@ class TestVigilanteCapCut(unittest.TestCase):
             f.write(contenido)
         return ruta_abs
 
+    def test_reexport_mismo_nombre_detectado_con_estabilidad(self):
+        ruta = self._crear_archivo("1010(7).mp4", b"historico")
+        vigilante = VigilanteCapCut(self.tmp_dir, sondeos_estabilidad=2)
+        vigilante.tomar_fotografia_inicial()
+        self.assertEqual(vigilante.escanear(), [])
+        self._crear_archivo("1010(7).mp4", b"nuevo export de roli")
+        self.assertEqual(vigilante.escanear(), [])
+        self.assertEqual(len(vigilante.escanear()), 1)
+        self.assertEqual(vigilante.escanear(), [])
+        self._crear_archivo("1010(7).mp4", b"tercer export reemplazado")
+        self.assertEqual(vigilante.escanear(), [])
+        self.assertEqual(len(vigilante.escanear()), 1)
+
+    def test_reexport_registrado_mientras_estaba_apagado(self):
+        ruta = self._crear_archivo("1010(7).mp4", b"export actual")
+        vigilante = VigilanteCapCut(self.tmp_dir, sondeos_estabilidad=1,
+            exports_registrados=[{"ruta_origen": ruta, "tamano": 9999, "mtime": 1.0}])
+        self.assertEqual(vigilante.escanear(), [])
+        self.assertEqual(len(vigilante.escanear()), 1)
+
+    def test_callback_fallido_se_reintenta_sin_perder_el_export(self):
+        from unittest.mock import Mock
+        callback = Mock(side_effect=[RuntimeError("base temporalmente ocupada"), None])
+        vigilante = VigilanteCapCut(self.tmp_dir, sondeos_estabilidad=1, callback_nuevo_export=callback)
+        vigilante.tomar_fotografia_inicial()
+        self._crear_archivo("nuevo.mp4")
+        self.assertEqual(len(vigilante.escanear()), 1)
+        self.assertEqual(len(vigilante.escanear()), 1)
+        self.assertEqual(callback.call_count, 2)
+        self.assertEqual(vigilante.escanear(), [])
+
     def test_fotografia_inicial_ignora_archivos_preexistentes(self):
         """Verifica que los archivos presentes al arrancar son ignorados permanentemente."""
         # Crear archivos históricos simulando ~45 exports viejos

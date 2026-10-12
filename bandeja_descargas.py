@@ -56,12 +56,16 @@ def crear_vigilante_capcut(config, db, ruta_bitacora):
 
     def procesar_pendientes():
         punto = punto_montaje()
+        if config.envio_exports_capcut == "automatico":
+            from bandeja.edicion import retomar_export_actual_sin_asignar
+            retomar_export_actual_sin_asignar(db, punto, config.carpeta_raiz_pendrive, ruta_bitacora)
         if punto:
             procesar_exports_pendientes_copia(punto, db, config.carpeta_raiz_pendrive, ruta_bitacora)
 
     return VigilanteCapCut(config.obtener_carpeta_exportacion_capcut(),
                           extensiones_temporales=config.extensiones_temporales_capcut,
-                          callback_nuevo_export=nuevo_export, callback_sondeo=procesar_pendientes)
+                          callback_nuevo_export=nuevo_export, callback_sondeo=procesar_pendientes,
+                          exports_registrados=db.obtener_exports_pendientes())
 
 
 def main():

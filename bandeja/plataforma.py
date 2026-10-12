@@ -24,6 +24,16 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("bandeja.plataforma")
 
 
+def abrir_carpeta_windows(ruta: str) -> bool:
+    """Abre una carpeta validada en el Explorador; otros SO no lanzan procesos."""
+    if os.name != "nt":
+        return False
+    if not os.path.isdir(ruta):
+        raise ValueError("La carpeta de edición ya no está disponible.")
+    os.startfile(os.path.abspath(ruta), "explore")
+    return True
+
+
 def obtener_ruta_descargas_windows() -> str:
     """
     Resuelve la carpeta de descargas real del usuario en Windows mediante SHGetKnownFolderPath (FOLDERID_Downloads).

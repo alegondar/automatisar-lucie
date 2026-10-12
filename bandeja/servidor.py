@@ -26,7 +26,7 @@ from urllib.parse import parse_qs, urlparse
 
 logger = logging.getLogger("bandeja_descargas")
 
-from bandeja.plataforma import esta_confinado_en_raiz, validar_longitud_ruta
+from bandeja.plataforma import esta_confinado_en_raiz, validar_longitud_ruta, abrir_carpeta_windows
 from bandeja.config import (
     ConfiguracionBandeja,
     ErrorSeguridadBandeja,
@@ -56,7 +56,10 @@ from bandeja.vigilante import VigilanteBandeja
 from bandeja.eliminacion import GestorEliminacionPendrive
 from bandeja.edicion import (
     obtener_secciones_edicion,
+    obtener_sesiones_con_crudos_pendientes,
     crear_sesion,
+    verificar_version_export,
+    obtener_carpeta_edicion,
     sumar_videos_sesion,
     cancelar_sesion,
     finalizar_edicion_crudos,
@@ -450,6 +453,11 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             if export:
                 if not esta_confinado_en_raiz(export["ruta_origen"], self.config.obtener_carpeta_exportacion_capcut()):
                     self._enviar_error(HTTPStatus.FORBIDDEN, "Export fuera de la carpeta de CapCut.", solo_cabeceras=solo_cabeceras)
+                    return
+                try:
+                    verificar_version_export(export)
+                except (ValueError, OSError) as e:
+                    self._enviar_error(HTTPStatus.CONFLICT, str(e), solo_cabeceras=solo_cabeceras)
                     return
                 ruta = export["ruta_origen"]
         if self.vigilante:
@@ -1303,7 +1311,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
                     "conectado": False,
                     "mensaje": "No hay pendrive vinculado conectado.",
                     "para_editar": [],
-                    "en_edicion": self.db.obtener_sesiones_edicion(estado="en_edicion") if self.db else [],
+                    "en_edicion": obtener_sesiones_con_crudos_pendientes(self.db) if self.db else [],
                     "conteos_capitulo": {},
                     "exports_sin_asignar": self.db.obtener_exports_pendientes(estado="sin_asignar") if self.db else [],
                     "videos_completados": obtener_videos_completados(self.db) if self.db else [],
@@ -1339,7 +1347,17 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
         try:
             sesion = crear_sesion(self.db, clips, personaje, capitulo, nombre_sesion)
-            self._enviar_json({"exito": True, "sesion": sesion})
+            apertura = {}
+            if body.get("abrir_carpeta") is True:
+                try:
+                    info = detectar_pendrive(self.config)
+                    if not info or not info.get("conectado"):
+                        raise ValueError("No hay pendrive vinculado conectado.")
+                    ruta = obtener_carpeta_edicion(sesion, info.get("punto_montaje") or info.get("ruta_montaje"), self.config.carpeta_raiz_pendrive)
+                    apertura = {"carpeta_edicion": ruta, "carpeta_abierta": abrir_carpeta_windows(ruta)}
+                except (OSError, ValueError) as e:
+                    apertura = {"carpeta_abierta": False, "error_abrir_carpeta": str(e)}
+            self._enviar_json({"exito": True, "sesion": sesion, **apertura})
         except Exception as e:
             self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al crear sesión: {e}")
 
@@ -1440,6 +1458,11 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._enviar_error(HTTPStatus.NOT_FOUND, "Sesión no encontrada.")
             return
 
+        try:
+            verificar_version_export(target_exp)
+        except (ValueError, OSError) as e:
+            self._enviar_error(HTTPStatus.CONFLICT, str(e))
+            return
         self.db.actualizar_export_pendiente(int(export_id), sesion_id=int(sesion_id), estado="pendiente_copia", error=None)
         self.db.actualizar_sesion_edicion(int(sesion_id), export_asociado=target_exp["ruta_origen"])
 
