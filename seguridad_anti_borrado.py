@@ -8,6 +8,8 @@ cumplir la Regla de Oro #1 y #7 del proyecto:
 PROHIBICIÓN DE BORRADO AUTOMÁTICO Y PISADO CIEGO.
 Solo se admiten os.unlink(ruta) y os.rmdir(ruta) en el método manual confirmado
 GestorEliminacionPendrive.ejecutar (bandeja/eliminacion.py).
+También se permite únicamente os.rmdir(ruta) en la limpieza autorizada de
+carpetas vacías después de un envío exitoso (bandeja/pendrive.py).
 
 Detecta y prohíbe las siguientes 11 primitivas:
 1. os.remove
@@ -181,6 +183,17 @@ def analizar_ast_codigo(codigo_fuente: str, nombre_archivo: str = "<codigo>") ->
                                     and isinstance(llamada.args[0], ast.Name)
                                     and llamada.args[0].id == "ruta"):
                                 permitidas.add((llamada.lineno, llamada.col_offset))
+        return [v for v in analizador.infracciones if (v.linea, v.columna) not in permitidas]
+    if ruta_norm.endswith("/bandeja/pendrive.py") or ruta_norm == "bandeja/pendrive.py":
+        permitidas = set()
+        for funcion in arbol.body:
+            if isinstance(funcion, ast.FunctionDef) and funcion.name == "_limpiar_carpetas_vacias_enviadas":
+                for llamada in ast.walk(funcion):
+                    if (isinstance(llamada, ast.Call) and isinstance(llamada.func, ast.Attribute)
+                            and isinstance(llamada.func.value, ast.Name) and llamada.func.value.id == "os"
+                            and llamada.func.attr == "rmdir" and len(llamada.args) == 1 and not llamada.keywords
+                            and isinstance(llamada.args[0], ast.Name) and llamada.args[0].id == "ruta"):
+                        permitidas.add((llamada.lineno, llamada.col_offset))
         return [v for v in analizador.infracciones if (v.linea, v.columna) not in permitidas]
     return analizador.infracciones
 

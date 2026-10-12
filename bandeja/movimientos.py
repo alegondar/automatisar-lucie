@@ -220,6 +220,8 @@ class GestorMovimientosBandeja:
         """
         pers = unicodedata.normalize("NFC", (personaje or "lucie").strip().lower())
         escena_raw = unicodedata.normalize("NFC", (nombre_escena or "").strip().lower())
+        # La fecha documenta la carpeta, no modifica la base de los archivos.
+        escena_raw = re.sub(r" - (lunes|martes|miércoles|jueves|viernes|sábado|domingo) - semana [1-5] - [a-z]+ - [0-9]{4}$", "", escena_raw)
         escena_compacta = re.sub(r'[\s]+', '', escena_raw)
 
         pers_canonico = pers
@@ -314,7 +316,8 @@ class GestorMovimientosBandeja:
 
     def simular_movimiento_lote(self, archivos: List[Dict[str, Any]], personaje: str,
                                 nombre_escena: str, es_existente_descargas: bool = False,
-                                destinos_reservados: Optional[Set[str]] = None) -> Dict[str, Any]:
+                                destinos_reservados: Optional[Set[str]] = None,
+                                documentar_fecha: bool = False) -> Dict[str, Any]:
         """Calcula el origen y destino exactos para cada archivo del lote antes de mover con renombrado."""
         valido, motivo = ValidadorEscenas.validar_nombre_escena(
             nombre_escena, self.ruta_destino_base, self.ruta_descargas,
@@ -323,6 +326,17 @@ class GestorMovimientosBandeja:
         if not valido:
             raise ErrorValidacionEscena(motivo)
 
+        if documentar_fecha and not es_existente_descargas:
+            existente = os.path.join(self.ruta_destino_base, personaje, nombre_escena)
+            foco = self.db.obtener_capitulo_en_foco()
+            conocido = foco and foco.get("personaje") == personaje and foco.get("nombre") == nombre_escena
+            if not os.path.isdir(existente) and not conocido:
+                from bandeja.clasificacion import nombre_carpeta_documentado
+                nombre_escena = nombre_carpeta_documentado(nombre_escena)
+                valido, motivo = ValidadorEscenas.validar_nombre_escena(
+                    nombre_escena, self.ruta_destino_base, self.ruta_descargas, personaje=personaje)
+                if not valido:
+                    raise ErrorValidacionEscena(motivo)
         base = self.calcular_base_escena(personaje, nombre_escena)
 
         if es_existente_descargas:

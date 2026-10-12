@@ -867,6 +867,10 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             return
 
         try:
+            from bandeja.clasificacion import nombre_carpeta_documentado
+            existente = os.path.join(self.config.ruta_destino_base, personaje, nombre)
+            if not os.path.isdir(existente):
+                nombre = nombre_carpeta_documentado(nombre)
             info_carpeta = self.movimientos.asegurar_carpeta_capitulo(personaje, nombre)
             cap = self.db.empezar_capitulo(
                 personaje, nombre,
@@ -1149,7 +1153,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
                         personaje=personaje,
                         nombre_escena=nombre_escena,
                         es_existente_descargas=es_descargas,
-                        destinos_reservados=destinos_reservados
+                        destinos_reservados=destinos_reservados,
+                        documentar_fecha=True
                     )
                     for mov in sim_individual.get("movimientos", []):
                         destinos_reservados.add(mov["destino"])
@@ -1157,7 +1162,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
                     simulaciones_lotes.append({
                         "lote_id": lote_id,
                         "personaje": personaje,
-                        "escena": nombre_escena,
+                        "escena": sim_individual["escena"],
                         "es_existente_descargas": es_descargas,
                         "simulacion": sim_individual
                     })
@@ -1197,7 +1202,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
                 archivos=archivos,
                 personaje=personaje,
                 nombre_escena=nombre_escena,
-                es_existente_descargas=es_existente_descargas
+                es_existente_descargas=es_existente_descargas,
+                documentar_fecha=True
             )
             self._enviar_json(simulacion)
         except ErrorValidacionEscena as e:

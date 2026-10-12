@@ -1439,6 +1439,71 @@ def ejecutar_envio_pendrive(simulacion_o_capitulos: Any,
         return _ejecutar_envio_pendrive_interno(simulacion_o_capitulos, config, db, movimientos)
 
 
+def _limpiar_carpetas_vacias_enviadas(base_origen, archivos_transferidos):
+    """Excepción autorizada: rmdir de carpetas vacías de capítulos enviados.
+
+    Nunca elimina archivos, la sala de espera, personajes, áreas de respaldo
+    ni capítulos ajenos. Un contenido nuevo o un error conserva la carpeta.
+    """
+    base = os.path.abspath(base_origen)
+    eliminadas = []
+    capitulos = set()
+    for registro in archivos_transferidos:
+        origen = registro.get("ruta_origen_espera")
+        if not isinstance(origen, str):
+            continue
+        capitulo = os.path.join(base, registro["personaje"], registro["capitulo"])
+        if (esta_confinado_en_raiz(origen, capitulo)
+                and os.path.abspath(origen) != os.path.abspath(capitulo)):
+            capitulos.add(capitulo)
+    for capitulo in sorted(capitulos):
+        relativa = os.path.relpath(capitulo, base)
+        partes = relativa.split(os.sep)
+        if len(partes) != 2 or any(p in ("", ".", "..") or p.startswith(("_", ".")) for p in partes):
+            continue
+        if not esta_confinado_en_raiz(capitulo, base):
+            continue
+        # No atravesar enlaces ni junctions, incluidos los padres de la raíz.
+        actual = capitulo
+        segura = True
+        while True:
+            if os.path.islink(actual) or (hasattr(os.path, "isjunction") and os.path.isjunction(actual)):
+                segura = False
+                break
+            padre = os.path.dirname(actual)
+            if padre == actual:
+                break
+            actual = padre
+        if not segura:
+            continue
+        candidatas = []
+        for ruta, dirs, files in os.walk(capitulo, topdown=True, followlinks=False):
+            dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(ruta, d))
+                       and not (hasattr(os.path, "isjunction") and os.path.isjunction(os.path.join(ruta, d)))]
+            if esta_confinado_en_raiz(ruta, capitulo):
+                candidatas.append(ruta)
+        for ruta in sorted(candidatas, key=lambda p: len(os.path.normpath(p).split(os.sep)), reverse=True):
+            actual = ruta
+            segura = True
+            while True:
+                if os.path.islink(actual) or (hasattr(os.path, "isjunction") and os.path.isjunction(actual)):
+                    segura = False
+                    break
+                padre = os.path.dirname(actual)
+                if padre == actual:
+                    break
+                actual = padre
+            if not segura or not esta_confinado_en_raiz(ruta, capitulo):
+                continue
+            try:
+                # El sistema operativo comprueba atomicamente que esté vacía.
+                os.rmdir(ruta)
+                eliminadas.append(ruta)
+            except OSError:
+                pass
+    return eliminadas
+
+
 def _ejecutar_envio_pendrive_interno(simulacion_o_capitulos: Any,
                                      config: Optional[ConfiguracionBandeja] = None,
                                      db: Optional[GestorBaseDatosBandeja] = None,
@@ -1619,6 +1684,7 @@ def _ejecutar_envio_pendrive_interno(simulacion_o_capitulos: Any,
     os.makedirs(os.path.dirname(os.path.abspath(ruta_bitacora)), exist_ok=True)
     evento_bitacora = {
         "evento": "envio_pendrive",
+        "limpieza_carpetas_vacias": "solo capitulos enviados, despues de verificar y registrar",
         "id_operacion": id_envio,
         "fecha": fecha_iso,
         "pendrive_id": pendrive_id,
@@ -1632,8 +1698,12 @@ def _ejecutar_envio_pendrive_interno(simulacion_o_capitulos: Any,
         f_bit.write(json.dumps(evento_bitacora, ensure_ascii=False) + "\n")
         f_bit.flush()
 
+    # Solo después de las copias verificadas y de ambos registros exitosos.
+    carpetas_vacias_eliminadas = _limpiar_carpetas_vacias_enviadas(base_origen, archivos_transferidos)
+
     return {
         "exito": True,
+        "carpetas_vacias_eliminadas": carpetas_vacias_eliminadas,
         "id_envio": id_envio,
         "fecha": fecha_iso,
         "pendrive_id": pendrive_id,

@@ -665,7 +665,9 @@ class TestEjecucionEnvioPendrive(unittest.TestCase):
         self.assertFalse(os.path.exists(dest_vid + ".part"))
         self.assertFalse(os.path.exists(dest_fot + ".part"))
 
-        # 3. Origen en sala de espera ya no debe existir
+        # 3. Origen y carpetas vacías del capítulo se retiran tras registrar el envío.
+        self.assertFalse(os.path.exists(self.cap_dir))
+        self.assertIn(self.cap_dir, res["carpetas_vacias_eliminadas"])
         self.assertFalse(os.path.exists(self.vid_path))
         self.assertFalse(os.path.exists(self.fot_path))
 
@@ -849,6 +851,8 @@ class TestDeshacerEnvioPendrive(unittest.TestCase):
 
     def test_deshacer_rechazado_si_origen_sala_espera_ocupado(self):
         """Si la ruta de destino original en la sala de espera fue ocupada por otro archivo, el deshacer se NIEGA."""
+        # El envío retira la carpeta vacía; un nuevo productor puede recrearla.
+        os.makedirs(os.path.dirname(self.vid_path), exist_ok=True)
         # Colocar un nuevo archivo en la misma ruta original
         with open(self.vid_path, "wb") as f:
             f.write(b"NUEVO ARCHIVO LLEGADO RECIENTEMENTE A SALA DE ESPERA")

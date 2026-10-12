@@ -37,6 +37,21 @@ def clasificar_familia_medio(extension: str) -> str:
     return "videos"
 
 
+def nombre_carpeta_documentado(nombre, fecha=None):
+    """Fecha local; semanas del mes: 1-7, 8-14, 15-21, 22-28, 29-31."""
+    import datetime
+    fecha = fecha or datetime.datetime.now()
+    dias = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+    meses = ("enero", "febrero", "marzo", "abril", "mayo", "junio",
+             "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre")
+    nombre = str(nombre).strip()
+    # Una carpeta ya documentada mantiene su identidad al reabrirla.
+    if re.search(r" - (lunes|martes|miércoles|jueves|viernes|sábado|domingo) - semana [1-5] - [a-z]+ - [0-9]{4}$", nombre):
+        return nombre
+    semana = (fecha.day - 1) // 7 + 1
+    return f"{nombre} - {dias[fecha.weekday()]} - semana {semana} - {meses[fecha.month - 1]} - {fecha.year}"
+
+
 class FiltroListaBlanca:
     """Aplica la lista blanca estricta para determinar candidatos, escenas y no reconocidos."""
 

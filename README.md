@@ -31,7 +31,7 @@ Dado el valor irreemplazable de las creaciones y grabaciones, toda la plataforma
 6. **Bitácora Append-Only y Operaciones Reversibles:**  
    Cada eliminación manual se registra en `.lucie/eliminaciones.jsonl` y es irreversible, sin opción de deshacer. Cada movimiento queda documentado en bitácoras cronológicas `.jsonl`. El sistema cuenta con mecanismos de deshacer (`/api/deshacer`) capaces de retornar los archivos a su ubicación original sin colisiones.
 7. **Verificación Estática Continua (AST):**  
-   Un analizador sintáctico automatizado ([`seguridad_anti_borrado.py`](seguridad_anti_borrado.py)) audita el árbol de sintaxis abstracta de cada archivo operativo, prohibiendo el borrado automático y el pisado. Solo admite las dos primitivas del método manual `GestorEliminacionPendrive.ejecutar`; las pruebas verifican su confinamiento y confirmación.
+   Un analizador sintáctico automatizado ([`seguridad_anti_borrado.py`](seguridad_anti_borrado.py)) audita el árbol de sintaxis abstracta de cada archivo operativo, prohibiendo el borrado automático y el pisado. Admite las dos primitivas del método manual `GestorEliminacionPendrive.ejecutar` y únicamente `os.rmdir(ruta)` en `_limpiar_carpetas_vacias_enviadas` después de un envío exitoso; las pruebas verifican el confinamiento de ambas excepciones.
 
 ---
 
@@ -205,3 +205,29 @@ El uso, las garantías del borrado manual y las limitaciones conocidas están
 documentados en [Dashboard: eliminación y MP3](docs/dashboard-eliminacion-y-mp3.md).
 
 Los `.mp3` se detectan como multimedia. Con alias conocido o capítulo en foco se incorporan a lotes; los demás aparecen en «Sin identificar» y pueden adoptarse con «Del proyecto». Se trasladan a `audios/` conservando su nombre, sin sobrescribir, y se envían al pendrive bajo `audios/<personaje>/<capítulo>/`.
+
+## Carpetas vacías después del envío (2026-10-12)
+
+Excepción expresamente autorizada: después de verificar todas las copias y escribir
+los registros del envío, se retiran mediante `os.rmdir` las subcarpetas vacías y
+la carpeta de los capítulos enviados en la sala de espera. No se eliminan
+archivos, raíz de espera, personajes, respaldos `_enviados`, capítulos ajenos
+ni enlaces/junctions. Si hay contenido nuevo o un error, la carpeta se conserva.
+Un envío fallido no inicia esta limpieza. El resultado API informa las carpetas
+retiradas. Deshacer recrea los directorios necesarios para restaurar los archivos.
+No se aplica una limpieza retroactiva al material real.
+
+
+## Nombres documentados de carpetas nuevas (2026-10-12)
+
+La instrucción vigente para carpetas nuevas es:
+`<nombre del video o capítulo> - <día de la semana> - semana <del mes> - <mes> - <año>`.
+Por ejemplo: `oloraculo - lunes - semana 2 - octubre - 2026`.
+La semana del mes se calcula por bloques de días: 1–7, 8–14, 15–21, 22–28 y 29–31.
+Se usa el reloj local, nombres españoles y una sola carpeta, sin niveles de semana.
+El dashboard aplica el formato al iniciar capítulos y simular nuevas escenas;
+las salidas de edición también usan el nombre de video, día, semana del mes, mes y año.
+Esta regla sustituye el anterior sufijo de solo mes y año. Las carpetas y rutas
+históricas no se renombran ni migran automáticamente. Reintentos y deshacer usan
+las rutas registradas. La nueva excepción de limpieza solo retira directorios
+vacíos de capítulos enviados; los originales siguen conservados en `_enviados`.

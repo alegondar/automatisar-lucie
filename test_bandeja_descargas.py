@@ -67,6 +67,8 @@ def crear_symlink_o_saltar(test, destino, enlace, *, directorio=False):
         raise
 
 
+from bandeja.clasificacion import nombre_carpeta_documentado
+
 class TestListaBlancaYBandeja(unittest.TestCase):
     """Pruebas del filtro de lista blanca y clasificación de archivos."""
 
@@ -861,8 +863,8 @@ class TestServidorHTTPYSeguridad(unittest.TestCase):
         self.assertTrue(res_mover["exito"])
         self.assertEqual(res_mover["total_movidos"], 2)
         self.assertEqual(res_mover["personaje"], "lucie")
-        self.assertEqual(res_mover["escena"], "escena_banner")
-        self.assertEqual(res_mover["mensaje_aviso"], "Se movieron 2 archivos a lucie/escena_banner")
+        self.assertEqual(res_mover["escena"], nombre_carpeta_documentado("escena_banner"))
+        self.assertEqual(res_mover["mensaje_aviso"], f"Se movieron 2 archivos a lucie/{nombre_carpeta_documentado('escena_banner')}")
         id_op = res_mover["id_operacion"]
 
         # Confirmar que los archivos ya no están en origen y están en destino
@@ -1246,8 +1248,8 @@ class TestCapituloActivoYReconocimientoNombres(unittest.TestCase):
             id_op_b = data_mov["resultados"][1]["id_operacion"]
             self.assertNotEqual(id_op_a, id_op_b, "Cada lote debe conservar su propio id_operacion")
 
-            dest_a = os.path.join(self.destino, "lucie", "escena_lucie", "videos", "lucieescena_lucie1.mp4")
-            dest_b = os.path.join(self.destino, "roli", "escena_roli", "fotos", "roliescena_roli1.jpg")
+            dest_a = os.path.join(self.destino, "lucie", nombre_carpeta_documentado("escena_lucie"), "videos", "lucieescena_lucie1.mp4")
+            dest_b = os.path.join(self.destino, "roli", nombre_carpeta_documentado("escena_roli"), "fotos", "roliescena_roli1.jpg")
             self.assertTrue(os.path.exists(dest_a))
             self.assertTrue(os.path.exists(dest_b))
             self.assertFalse(os.path.exists(arch_a))
@@ -6196,7 +6198,7 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
             self.assertEqual(status_term, 200)
             self.assertTrue(res_term.get("exito"))
             dest_esperado = os.path.join(self.raiz_pen, "videos ya editados", "lucie",
-                                         "capitulo_01videocompleto - octubre - 2026", "toma_01.mp4")
+                                         "capitulo_01videocompleto - domingo - semana 2 - octubre - 2026", "toma_01.mp4")
             self.assertTrue(os.path.isfile(dest_esperado))
             self.assertFalse(os.path.isfile(self.clip_path))
 
@@ -6239,7 +6241,7 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
             self.assertEqual(status, 200, datos)
             destino = datos["resultado_copia"]["destino"]
             self.assertEqual(destino, os.path.join(self.raiz_pen, "videos completos", "lucie",
-                                                 "Mi video - octubre - 2026", "Mi video.mp4"))
+                                                 "Mi video - domingo - semana 2 - octubre - 2026", "Mi video.mp4"))
             with open(destino, "rb") as archivo:
                 self.assertEqual(archivo.read(), contenido)
             status, datos, _ = self._get("/api/capcut/exports")

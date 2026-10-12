@@ -228,3 +228,18 @@ vinculado, si existe; detenerse si cambia. Guardar logs en el directorio tempora
 del sistema. Usar solo `tempfile` para fixtures; no iniciar la aplicación real
 para verificar cambios. Tras actualizar la aplicación, el usuario debe
 reiniciarla y recargar el navegador con `Ctrl+F5`.
+
+
+## Nombres documentados de carpetas nuevas (2026-10-12)
+
+La instrucción vigente para carpetas nuevas es:
+`<nombre del video o capítulo> - <día de la semana> - semana <del mes> - <mes> - <año>`.
+Por ejemplo: `oloraculo - lunes - semana 2 - octubre - 2026`.
+La semana del mes se calcula por bloques de días: 1–7, 8–14, 15–21, 22–28 y 29–31.
+Se usa el reloj local, nombres españoles y una sola carpeta, sin niveles de semana.
+El dashboard aplica el formato al iniciar capítulos y simular nuevas escenas;
+las salidas de edición también usan el nombre de video, día, semana del mes, mes y año.
+Esta regla sustituye el anterior sufijo de solo mes y año. Las carpetas y rutas
+históricas no se renombran ni migran automáticamente. Reintentos y deshacer usan
+las rutas registradas. La nueva excepción de limpieza solo retira directorios
+vacíos de capítulos enviados; los originales siguen conservados en `_enviados`.

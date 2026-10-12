@@ -32,14 +32,11 @@ logger = logging.getLogger("bandeja_edicion")
 
 
 def nombre_carpeta_video(nombre: str, fecha: Optional[datetime.datetime] = None) -> str:
-    """Nombre del video, mes en espanol y anio del traslado."""
+    """Nombre del video, día, semana del mes, mes español y año del traslado."""
     fecha = fecha or datetime.datetime.now()
-    meses = (
-        "enero", "febrero", "marzo", "abril", "mayo", "junio",
-        "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
-    )
+    from bandeja.clasificacion import nombre_carpeta_documentado
     base = os.path.splitext(os.path.basename(nombre))[0]
-    return f"{base} - {meses[fecha.month - 1]} - {fecha.year}"
+    return nombre_carpeta_documentado(base, fecha)
 
 
 def _destinos_editados_sesion(pendrive_raiz: str, identificador: str) -> Dict[str, str]:
@@ -575,7 +572,7 @@ def copiar_export_a_videos_completos(
 ) -> Dict[str, Any]:
     """
     Copia de forma segura el video final exportado por CapCut a:
-    <pendrive>/<carpeta_raiz>/videos completos/<personaje>/<video - mes - año>/<nombre_final>
+    <pendrive>/<carpeta_raiz>/videos completos/<personaje>/<video - día - semana del mes - mes - año>/<nombre_final>
     Protocolo de seguridad:
     1. Comprueba espacio suficiente en pendrive.
     2. Comprueba que destino no exista (evita pisado ciego).
