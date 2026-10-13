@@ -2,7 +2,9 @@
 
 Estado: **implementación autorizada por el usuario y realizada en
 `feat/lucie-recibir`**. APK inicial compilado y probado en emulador, pendiente
-de instalación y validación en el Motorola físico. Ver [Android](../android/README.md).
+de archivos/galería en el Motorola físico. La instalación 0.2.0, HTTPS y
+descubrimiento Wi-Fi en Moto G54 5G / Android 15 ya se comprobaron.
+Ver [Android](../android/README.md).
 Leer AGENTS.md, ESTADO_ACTUAL.md y README_KALI.md antes de continuar.
 
 ## Qué está comprobado y qué falta
@@ -137,5 +139,6 @@ Fuentes primarias:
 - Prueba instrumentada con los dos puertos de LocalSend ocupados: Lucie abre y
   responde; ocho tests Android total OK. Flujo Artemis HTTPS/emulador OK.
 - Moto G54 5G / Android 15 identificado, 0.1.0 instalada previamente con conflicto.
-  0.2.0 y descubrimiento en Wi-Fi física requieren reconectar el teléfono; no
-  declarar hardware validado con resultados del emulador.
+  0.2.0 instalada conservando datos; pantalla/HTTPS/descubrimiento Wi-Fi real y
+  endpoint de búsqueda HTTP 200 comprobados. No se usó material real como fixture.
+  Archivos y galería del teléfono físico siguen pendientes de una selección del usuario.

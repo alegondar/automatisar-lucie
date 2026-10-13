@@ -24,12 +24,21 @@ homónimo, PIN/rechazo, hash, huella y archivado/Deshacer. Logs externos en
 Suite Kali/Python 3.13.12: **368 tests OK, cinco saltos Windows**, en 50.931 s.
 Manifiesto real contado antes/después: **no disponible / no disponible**; no son
 recuentos cero. Log externo: `/tmp/tests_puertos_suite_final.log`.
-AST: 0 infracciones en 24 módulos; test JS/UI OK. **Falta instalar 0.2.0 en el
-Motorola y verificar la Wi-Fi física:** al iniciar esta corrección el teléfono no
-estaba conectado a ADB. La instalación de 0.1.0 no demuestra la validación de esta
-versión. No iniciar los vigilantes reales para comprobarla ni afirmar que se
-resolvió una posible limitación de red sin una conexión real. Windows nativo de
-este lote también sigue pendiente.
+AST: 0 infracciones en 24 módulos; test JS/UI OK. **0.2.0 instalada por USB en
+Moto G54 5G / Android 15**, conservando los datos de la app. Artemis comprobó la
+pantalla real con «Listo para recibir por Wi-Fi». La PC se conectó por HTTPS a
+53318 y el descubrimiento automático encontró el Motorola en la red real.
+`POST /api/publicacion/buscar` devolvió HTTP 200 y Lucie Recibir mediante un servidor
+API aislado con configuración temporal, sin iniciar la bandeja real ni sus
+vigilantes. Se verificaron identidad y metadatos; no se enviaron archivos al
+MediaStore del teléfono como fixture. El proceso de LocalSend puede ejecutarse
+mientras Lucie responde en su puerto propio; la ocupación simultánea de TCP/UDP
+53317 está además cubierta por la prueba nativa en emulador.
+
+Quedan pendientes archivos/galería y casos de desconexión/espacio lleno en el
+Motorola físico, y Windows nativo. Para usarlo, reiniciar la bandeja normalmente
+y recargar el dashboard con Ctrl+F5. Publicado en `feat/lucie-recibir`, implementación
+`990f32e`; código, configuración reproducible y documentación, sin APKs/datos locales.
 
 ## Validación de la entrega en Kali (2026-10-12)
 

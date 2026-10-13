@@ -22,5 +22,6 @@ No tocar Descargas/CapCut/pendrive. La única lectura real es contar manifiesto.
 - Nueva UI y revisión Artemis: terminado.
 - Build/lint, cuatro JVM/cuatro nativas, suite Kali 368/5 y AST 0: terminado.
 - Manifest antes/después no disponible/no disponible; material real intacto.
-- 0.2.0 en Motorola/Wi-Fi física: pendiente, teléfono desconectado.
-- Publicación del lote: autorizada, se ejecuta al cierre de auditorías.
+- 0.2.0 instalada en Motorola; pantalla, HTTPS, descubrimiento y API: terminado.
+- Archivos/galería Motorola: pendiente de selección del usuario.
+- Publicación del lote: autorizada y realizada, implementación 990f32e.

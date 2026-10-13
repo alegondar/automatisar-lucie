@@ -53,3 +53,12 @@ PIN/archivado/deshacer OK. Suite Kali final: 368 OK, cinco saltos, 50.931 s;
 manifiesto antes/después no disponible, AST 0. Motorola no conectado; requiere
 reinstalar 0.2.0 y verificar Wi-Fi real. Commit/push anterior autorizado sigue
 pendiente de ejecutar en este mismo lote, condicionado a auditorías finales.
+
+### Cierre con hardware real
+
+El Motorola se reconectó: instalada 0.2.0 con datos conservados. Artemis verificó
+pantalla y receptor listo. HTTPS 53318 y búsqueda automática Wi-Fi encontrados;
+API aislada /api/publicacion/buscar devolvió HTTP 200 con Lucie. No se mandaron
+fixtures a la galería del teléfono ni se inició la bandeja real. Código publicado
+990f32e en feat/lucie-recibir; registro de evidencia en documentación. Quedan
+archivos/galería físicos y Windows nativo, sin confundirlos con emulador.

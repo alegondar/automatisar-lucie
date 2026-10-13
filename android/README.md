@@ -2,8 +2,9 @@
 
 Cliente nativo Kotlin para recibir desde **Sin publicar · Enviar al celular**.
 Android 10 o posterior (API 29), con la pantalla visible durante el envío.
-No requiere instalar LocalSend. Es una primera versión de prueba; el Motorola
-físico y su red Wi-Fi siguen pendientes de validación.
+No requiere instalar LocalSend. La versión 0.2.0 se instaló en Moto G54 5G /
+Android 15 y fue detectada por la Wi-Fi real. Los archivos y la galería del
+Motorola siguen pendientes de una recepción elegida por el usuario.
 
 ## Instalar y recibir
 
@@ -129,7 +130,8 @@ tras ACK y Deshacer en un pendrive simulado temporal.
 
 Compilación/lint, 4 pruebas JVM, 4 instrumentadas y flujo Artemis ejecutados en
 Kali con emulador Android 17. No equivale a ejecución en Android 10 ni en Motorola.
-Falta comprobar Android/modelo reales, Wi-Fi/multicast, galería, archivo grande,
+Moto G54 5G / Android 15: instalación, pantalla, HTTPS y descubrimiento Wi-Fi
+comprobados en 0.2.0. Falta comprobar galería, archivo grande,
 desconexión y espacio insuficiente en hardware físico; también la comparación
 con el cliente oficial LocalSend y la suite nativa Windows de este lote.
 
