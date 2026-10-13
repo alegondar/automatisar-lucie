@@ -198,7 +198,7 @@
   async function buscar() {
     invalidarPlan();
     el('wifi-buscar').disabled = true;
-    estado('Buscando LocalSend en la red Wi-Fi. Mantené la app abierta en el celular…');
+    estado('Buscando Lucie Recibir o LocalSend en la red Wi-Fi. Mantené la app abierta en el celular…');
     try {
       const datos = await peticion('buscar');
       dispositivos.clear();
@@ -246,6 +246,10 @@
       }
       const aviso = document.createElement('p');
       aviso.textContent = plan.aviso;
+      if (plan.dispositivo.protocol === 'https' && plan.dispositivo.fingerprint) {
+        aviso.textContent += ' · Huella HTTPS del receptor: ' + plan.dispositivo.fingerprint + '. Comparala con Lucie Recibir antes del primer envío.';
+        aviso.style.overflowWrap = 'anywhere';
+      }
       const confirmar = document.createElement('button');
       confirmar.className = 'btn-sm';
       confirmar.textContent = 'Confirmar y enviar al celular';
@@ -273,7 +277,7 @@
       el('wifi-cancelar').style.display = 'inline-block';
       el('wifi-progreso').style.display = 'block';
       dibujarArchivos();
-      estado('Aceptá la recepción en LocalSend en el celular.');
+      estado('Aceptá la recepción en Lucie Recibir o LocalSend en el celular.');
       await seguir();
     } catch (error) { estado(error.message); el('wifi-preparar').disabled = false; }
   }
@@ -283,8 +287,12 @@
     try {
       const datos = await apiFetch('/api/publicacion/estado?id=' + encodeURIComponent(trabajo));
       el('wifi-progreso').value = Math.min(100, datos.total_bytes ? datos.bytes_enviados * 100 / datos.total_bytes : 0);
+      let diagnostico = datos.etapa ? ' · Etapa: ' + datos.etapa : '';
+      if (datos.codigo_http) diagnostico += ' · HTTP ' + datos.codigo_http;
+      if (datos.cancelacion_confirmada === false) diagnostico += ' · El celular no confirmó la cancelación: revisá su recepción antes de reintentar.';
+      if (datos.codigo_http === 409 && datos.etapa === 'preparacion') diagnostico += ' · Revisá o cancelá la recepción pendiente desde el celular; no se cancelará una sesión ajena.';
       estado(datos.mensaje + (datos.error ? ': ' + datos.error : '') +
-        ' · Recibidos: ' + (datos.recibidos || []).length + ' · Archivados: ' + datos.publicados.length);
+        ' · Recibidos: ' + (datos.recibidos || []).length + ' · Archivados: ' + datos.publicados.length + diagnostico);
       if (datos.estado === 'en_curso') {
         timer = setTimeout(seguir, 1000);
       } else {

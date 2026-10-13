@@ -34,6 +34,8 @@ class ReceptorTemporal:
         self.aprobacion.set()
         self.cortar_upload = False
         self.aceptar_ids = None
+        self.cancelaciones = []
+        self.codigo_cancelacion = 200
         receptor = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -46,7 +48,10 @@ class ReceptorTemporal:
                 self.send_header("Content-Length", str(len(cuerpo)))
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
-                self.wfile.write(cuerpo)
+                try:
+                    self.wfile.write(cuerpo)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
 
             def do_GET(self):
                 self.responder(200, {"alias": "Celular temporal", "version": "2.0", "fingerprint": "celular-prueba"})
@@ -73,7 +78,8 @@ class ReceptorTemporal:
                         receptor.archivos[identificador] = cuerpo
                     self.responder(receptor.recepcion if valido else 422)
                 elif ruta.path == "/api/localsend/v2/cancel":
-                    self.responder(200)
+                    receptor.cancelaciones.append(parse_qs(ruta.query).get("sessionId", [None])[0])
+                    self.responder(receptor.codigo_cancelacion)
                 else:
                     self.responder(404)
 
@@ -130,6 +136,59 @@ class TestPublicacionWifi(unittest.TestCase):
                 return resultado
             time.sleep(0.01)
         self.fail("La transferencia temporal no terminó.")
+
+    def test_ocupado_antes_de_preparar_no_cancela_sesion_ajena(self):
+        self.receptor.preparacion = 409
+        resultado = self.esperar(self.gestor.iniciar_envio(self.plan()["token"], True)["id"])
+        self.assertEqual(resultado["codigo_http"], 409)
+        self.assertEqual(resultado["etapa"], "preparacion")
+        self.assertIsNone(resultado["cancelacion_confirmada"])
+        self.assertEqual(self.receptor.cancelaciones, [])
+        self.assertEqual(resultado["recibidos"], [])
+        self.assertEqual(resultado["publicados"], [])
+        self.assertTrue(os.path.isfile(self.video))
+
+    def test_204_preparacion_no_cuenta_como_recibido(self):
+        self.receptor.preparacion = 204
+        resultado = self.esperar(self.gestor.iniciar_envio(self.plan()["token"], True)["id"])
+        self.assertEqual(resultado["codigo_http"], 204)
+        self.assertEqual(resultado["recibidos"], [])
+        self.assertEqual(resultado["publicados"], [])
+        self.assertTrue(os.path.isfile(self.video))
+
+    def test_error_upload_cancela_solo_sesion_propia_y_permite_segundo_envio(self):
+        self.receptor.recepcion = 409
+        resultado = self.esperar(self.gestor.iniciar_envio(self.plan()["token"], True)["id"])
+        self.assertEqual(resultado["codigo_http"], 409)
+        self.assertTrue(resultado["cancelacion_confirmada"])
+        self.assertEqual(self.receptor.cancelaciones, ["recepcion-temporal"])
+        self.assertEqual(resultado["publicados"], [])
+        self.receptor.recepcion = 200
+        resultado = self.esperar(self.gestor.iniciar_envio(self.plan()["token"], True)["id"])
+        self.assertEqual(resultado["estado"], "completado")
+
+    def test_cancelacion_no_confirmada_visible_no_publica(self):
+        self.receptor.recepcion = 422
+        self.receptor.codigo_cancelacion = 500
+        resultado = self.esperar(self.gestor.iniciar_envio(self.plan()["token"], True)["id"])
+        self.assertFalse(resultado["cancelacion_confirmada"])
+        self.assertEqual(resultado["publicados"], [])
+        self.assertTrue(os.path.isfile(self.video))
+
+    def test_cancelar_espera_interrumpe_conexion_sin_aceptacion(self):
+        self.receptor.aprobacion.clear()
+        trabajo = self.gestor.iniciar_envio(self.plan()["token"], True)
+        self.assertTrue(self.receptor.solicitud.wait(3))
+        inicio = time.monotonic()
+        try:
+            self.gestor.cancelar(trabajo["id"])
+            resultado = self.esperar(trabajo["id"])
+            self.assertLess(time.monotonic() - inicio, 2)
+            self.assertEqual(resultado["estado"], "cancelado")
+            self.assertEqual(resultado["recibidos"], [])
+            self.assertEqual(resultado["publicados"], [])
+        finally:
+            self.receptor.aprobacion.set()
 
     def test_listar_simular_no_mueve_ni_crea_registros(self):
         plan = self.plan()
@@ -391,6 +450,63 @@ class TestPublicacionWifi(unittest.TestCase):
         self.assertIsNone(export["sesion_id"])
         self.assertEqual(calcular_sha256(origen), calcular_sha256(export["ruta_destino"]))
         self.assertTrue(os.path.isfile(origen))
+
+
+class TestDescubrimientoUdpLocalSend(unittest.TestCase):
+    def test_respuesta_multicast_receptor_https_sin_registro_http(self):
+        import socket
+        class UdpTemporal:
+            def __init__(self): self.pendiente = True; self.destinations = []; self.bound = None
+            def setsockopt(self, *args): pass
+            def bind(self, address): self.bound = address
+            def settimeout(self, *args): pass
+            def sendto(self, body, address): self.destinations.append(address)
+            def close(self): pass
+            def recvfrom(self, size):
+                if self.pendiente:
+                    self.pendiente = False
+                    return json.dumps({'version':'2.0','alias':'Lucie Recibir','fingerprint':'identidad-temporal',
+                                       'port':53318,'protocol':'https','announce':False}).encode(), ('127.0.0.1',53317)
+                time.sleep(.02)
+                raise socket.timeout()
+        original = socket.socket
+        udp = UdpTemporal()
+        cliente = ClienteLocalSend()
+        receptor = {'ip':'127.0.0.1','port':53318,'protocol':'https','alias':'Lucie Recibir','fingerprint':'verificada'}
+        with patch('bandeja.localsend.socket.socket', side_effect=lambda family, kind, proto=0, *a, **k:
+                   udp if kind == socket.SOCK_DGRAM else original(family,kind,proto,*a,**k)), \
+             patch.object(cliente,'probar',return_value=receptor) as verificar:
+            self.assertEqual(cliente.descubrir(.1),[receptor])
+            verificar.assert_called_once_with('127.0.0.1',53318,'https')
+            self.assertEqual(udp.bound, ('0.0.0.0', 0))
+            self.assertIn(('224.0.0.167', 53319), udp.destinations)
+            self.assertIn(('255.255.255.255', 53319), udp.destinations)
+
+    def test_dos_receptores_en_misma_ip_se_conservan_por_puerto(self):
+        import socket
+        class UdpTemporal:
+            def __init__(self): self.ports = iter([53318,53317])
+            def setsockopt(self,*args): pass
+            def bind(self,*args): pass
+            def settimeout(self,*args): pass
+            def sendto(self,*args): pass
+            def close(self): pass
+            def recvfrom(self,size):
+                try: port=next(self.ports)
+                except StopIteration:
+                    time.sleep(.02)
+                    raise socket.timeout()
+                return json.dumps({'version':'2.0','fingerprint':'fixture-'+str(port),
+                                   'port':port,'protocol':'https'}).encode(),('127.0.0.1',53319)
+        original=socket.socket;udp=UdpTemporal();cliente=ClienteLocalSend()
+        def verified(ip,port,protocol):
+            return {'ip':ip,'port':port,'protocol':protocol,'alias':'fixture-'+str(port),'fingerprint':'fixture'}
+        with patch('bandeja.localsend.socket.socket',side_effect=lambda family,kind,proto=0,*a,**k:
+                   udp if kind==socket.SOCK_DGRAM else original(family,kind,proto,*a,**k)), \
+             patch.object(cliente,'probar',side_effect=verified) as verify:
+            devices=cliente.descubrir(.1)
+            self.assertEqual({d['port'] for d in devices},{53317,53318})
+            self.assertEqual(verify.call_count,2)
 
 
 if __name__ == "__main__":

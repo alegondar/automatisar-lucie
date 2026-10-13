@@ -6,11 +6,13 @@ En Kali/Linux, leer también [README_KALI.md](README_KALI.md): rama de entrega,
 configuración por equipo, pruebas nativas pendientes y continuidad.
 La constitución del sistema son las siete Reglas de Oro de
 [openspec/config.yaml](openspec/config.yaml); siguen obligatorias.
-Para retomar el envío Wi-Fi y el futuro cliente Android, leer
-[docs/plan-receptor-android.md](docs/plan-receptor-android.md). Es un plan pendiente
-de conformidad del usuario; no implementar el APK por inferencia. El cierre del
-lote se revalidó tras el cambio previo del manifiesto; ver evidencia en
-ESTADO_ACTUAL.md. La entrega continúa en `actualizacion-completa-host`.
+Para retomar el envío Wi-Fi y Lucie Recibir para Android, leer
+[docs/plan-receptor-android.md](docs/plan-receptor-android.md) y
+[android/README.md](android/README.md). El usuario autorizó la implementación,
+el uso de Artemis y el commit/push de este lote. La continuación está en
+`feat/lucie-recibir`, desde `actualizacion-completa-host`; no volver a pedir
+conformidad para lo ya autorizado. Ver evidencia y límites de validación en
+ESTADO_ACTUAL.md. Los nuevos lotes siguen sujetos a la regla de publicación.
 
 - No borrar automáticamente ni sobrescribir material. La eliminación manual
   desde «Eliminar capítulos» del dashboard está autorizada exclusivamente con

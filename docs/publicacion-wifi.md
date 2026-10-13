@@ -26,14 +26,16 @@ Una copia deshecha no vuelve a enviarse automáticamente.
 2. Abrir **Sin publicar · Enviar al celular**. Elegir Lucie, Roli o Mailen,
    buscar por nombre/carpeta si es necesario y revisar la vista previa. Marcar
    archivos individualmente o pulsar **Seleccionar los visibles**.
-3. Abrir [LocalSend en el celular](https://localsend.org/download), en la misma
+3. Abrir [Lucie Recibir](../android/README.md) o
+   [LocalSend en el celular](https://localsend.org/download), en la misma
    red Wi-Fi que la PC. No hace falta instalar LocalSend en la PC: el emisor está
    integrado al dashboard y usa la biblioteca estándar de Python.
 4. Pulsar **Buscar celulares**, elegir el receptor y **Revisar envío**. Si no
-   aparece, ingresar su IP local y el puerto de LocalSend (53317 por defecto).
+   aparece, ingresar su IP local y el puerto del receptor (53318 para Lucie Recibir, 53317 para LocalSend).
 5. Revisar archivos, tamaños, receptor y destinos, y confirmar el envío. Si el
    receptor solicita PIN, ingresarlo antes de confirmar. Aceptar la recepción
-   en el celular y mantener LocalSend abierto hasta completar la transferencia.
+   en el celular y mantener el receptor abierto hasta completar la transferencia.
+   Con Lucie Recibir, comparar antes la huella HTTPS completa con el dashboard.
 6. Tras la respuesta satisfactoria del receptor y la verificación de integridad,
    los videos se trasladan al nivel anterior de `videos completos`, conservando
    su estructura relativa. El historial ofrece **Volver a Sin publicar**.
@@ -81,7 +83,8 @@ deja de resolver el archivo cuando sale de la cola.
   y se espera su respuesta satisfactoria. Rechazo, desconexión o error de checksum
   conservan el video en la cola. Si solo se aceptan algunos archivos, se archivan
   los recibidos y se informa el resultado parcial; el resto se conserva.
-- Una cancelación interrumpe los siguientes bloques/archivos. Si el celular ya
+- Una cancelación interrumpe la conexión incluso esperando aceptación y evita los
+  siguientes bloques/archivos. Si el celular ya
   confirmó un archivo completo, su recepción queda registrada. No se borra nada.
 - Envío y reversión usan el bloqueo exclusivo del pendrive. No se desconecta ni
   se elimina material mediante otra operación mientras se transfiere.
@@ -97,7 +100,10 @@ deja de resolver el archivo cuando sale de la cola.
   certificado elegido; en HTTP se vuelve a comprobar la identidad del receptor.
   No se persisten PIN ni tokens de transferencia en registros.
 
-La búsqueda necesita que la red permita multicast y las respuestas locales. Si
+La búsqueda escucha anuncios/respuestas UDP y registros HTTP temporales;
+Lucie Recibir usa descubrimiento UDP 53319, respuesta unicast al dashboard y
+HTTPS TCP 53318 para los archivos. LocalSend conserva 53317. No comparten escucha. Necesita que la
+red permita multicast y las respuestas locales. Si
 la red de invitados aísla los dispositivos o el firewall impide el descubrimiento,
 usar una red compartida y conexión por IP. No se garantiza descubrimiento en redes
 que bloqueen la comunicación entre dispositivos.
@@ -113,13 +119,32 @@ que bloqueen la comunicación entre dispositivos.
 - `POST /api/publicacion/buscar`, `/conectar`, `/simular`, `/enviar`, `/cancelar`,
   `/deshacer`, `/resguardar`, dentro de ese mismo prefijo.
 
-Las pruebas usan archivos temporales y un receptor HTTP falso, compatible con
-los mensajes LocalSend: se verifican bytes, hashes, aceptación y estados. La
-interoperabilidad con el teléfono físico requiere una recepción real elegida por
-el usuario. Linux no se declara validado desde esta máquina Windows.
-La suite completa final de la galería ejecutada fue de 357 pruebas, OK con 10
-omisiones por capacidades ausentes; el manifiesto real se mantuvo en 270 / 270 líneas.
-`node test_publicacion_ui.js` verifica filtros, selección visible y flujo de envío
-con DOM/API simulados. El fotograma nativo se comprobó en Chrome headless con un
-video WebM sintético temporal; no se probaron códecs de los videos reales.
-La evidencia y los motivos están en [ESTADO_ACTUAL.md](../ESTADO_ACTUAL.md).
+## Diagnóstico de receptor ocupado
+
+El error muestra etapa, HTTP y resultado de cancelar. **Preparación / 409**
+significa que el receptor ya reservó otro envío: aceptarlo, rechazarlo o cancelarlo
+**en el teléfono**. Sin sessionId propio no se cancela esa sesión por adivinación.
+Si falla después de obtener nuestro ID, el emisor intenta cancelar y distingue
+confirmación de error. HTTP 204 durante preparación no marca archivos recibidos.
+No se repite automáticamente un envío con recepción desconocida.
+
+Abrir Lucie Recibir permite revisar la solicitud pendiente y cancelarla de forma
+explícita. Mantenerlo visible; detenerlo o salir libera la reserva. No se atribuye
+el 409 de la captura histórica a una causa específica sin el teléfono original.
+Los logs del emisor incluyen operación, etapa, HTTP y duración, sin PIN ni tokens.
+
+## Evidencia por plataforma
+
+Kali/Python 3.13: suite de 367 pruebas, OK con cinco saltos por capacidades Windows.
+Las pruebas HTTP falsas conservan aserciones de bytes, hashes y estados. El APK
+propio además se probó por HTTPS en emulador Android 17 usando Artemis: video/foto,
+MediaStore, aceptación, cancelación, segundo envío, homónimos, PIN, huella falsa,
+hash corrupto y el gestor de archivado/Deshacer con temporales. Ver
+[compilación y pruebas Android](../android/README.md).
+
+`node test_publicacion_ui.js` verifica filtros, selección visible y flujo con
+DOM/API simulados. El fotograma nativo se comprobó anteriormente con un WebM
+sintético; no se certifican todos los códecs del material real. Este lote no se
+ha ejecutado en Windows, ni en el Motorola físico ni contra la app oficial
+LocalSend. Recibir en emulador mediante ADB no demuestra descubrimiento Wi-Fi.
+Resultados, recuentos y evidencia histórica en [ESTADO_ACTUAL.md](../ESTADO_ACTUAL.md).

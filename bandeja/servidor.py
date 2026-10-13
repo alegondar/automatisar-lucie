@@ -756,7 +756,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             if ruta.endswith("/buscar"):
                 resultado = {"dispositivos": self.publicacion.buscar_dispositivos()}
             elif ruta.endswith("/conectar"):
-                resultado = {"dispositivo": self.publicacion.agregar_dispositivo(body.get("ip"), body.get("puerto", 53317))}
+                resultado = {"dispositivo": self.publicacion.agregar_dispositivo(body.get("ip"), body.get("puerto", 53318))}
             elif ruta.endswith("/simular"):
                 resultado = self.publicacion.simular(body.get("seleccion"), body.get("dispositivo_id"))
             elif ruta.endswith("/enviar"):

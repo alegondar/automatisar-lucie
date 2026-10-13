@@ -94,7 +94,7 @@ Dado el valor irreemplazable de las creaciones y grabaciones, toda la plataforma
 
 ### En Linux (Kali / Debian / Ubuntu)
 
-Para descargar esta entrega de `actualizacion-completa-host` y continuar en Kali,
+Para descargar esta entrega de `feat/lucie-recibir` y continuar en Kali,
 seguir [README_KALI.md](README_KALI.md). Incluye configuración independiente,
 pruebas temporales y alcance de la compatibilidad revisada.
 
@@ -164,7 +164,10 @@ python3 instalar_hooks.py
 Los nuevos completos quedan en `videos completos/videos sin publicar/`; después
 de recibirlos en el dispositivo elegido, pasan al nivel anterior con registro y
 Deshacer. Los originales de CapCut se conservan. Ver [Uso, conexión y reglas de
-publicación](docs/publicacion-wifi.md).
+publicación](docs/publicacion-wifi.md). El receptor propio
+[Lucie Recibir para Android](android/README.md) permite aprobar y guardar los
+archivos sin instalar LocalSend; APK inicial probado en emulador, pendiente
+de verificar en el Motorola físico.
 
 Las nuevas carpetas de **videos ya editados** usan
 `videoyaeditado_<nombre>_semana_<del mes>_<mes>_<año>`, dentro del personaje.

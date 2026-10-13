@@ -15,7 +15,7 @@ import unicodedata
 import uuid
 
 from bandeja.config import calcular_sha256
-from bandeja.localsend import ClienteLocalSend
+from bandeja.localsend import ClienteLocalSend, PUERTO_LUCIE
 from bandeja.pendrive import detectar_pendrive, operacion_pendrive_exclusiva
 from bandeja.edicion import registrar_evento_manifiesto_edicion
 from bandeja.plataforma import mover_sin_sobrescribir
@@ -195,7 +195,7 @@ class GestorPublicacion:
     def buscar_dispositivos(self):
         return [self._guardar_dispositivo(d) for d in self.cliente.descubrir()]
 
-    def agregar_dispositivo(self, ip, puerto=53317):
+    def agregar_dispositivo(self, ip, puerto=PUERTO_LUCIE):
         return self._guardar_dispositivo(self.cliente.probar(ip, puerto))
 
     def simular(self, seleccion, dispositivo_id):
@@ -266,7 +266,7 @@ class GestorPublicacion:
             if not plan or plan["vence"] < time.monotonic():
                 raise ValueError("El plan venció o ya se utilizó. Prepará un nuevo envío.")
             identificador = str(uuid.uuid4())
-            self._trabajos[identificador] = {"id": identificador, "estado": "en_curso", "mensaje": "Preparando envío",
+            self._trabajos[identificador] = {"id": identificador, "estado": "en_curso", "fase": "preparando", "mensaje": "Preparando envío",
                                             "bytes_enviados": 0, "total_bytes": sum(a["tamano"] for a in plan["archivos"]),
                                             "publicados": [], "recibidos": [], "error": None}
             self._cancelaciones[identificador] = threading.Event()
@@ -299,6 +299,7 @@ class GestorPublicacion:
             with self._lock:
                 self._trabajos[identificador]["bytes_enviados"] += cantidad
                 self._trabajos[identificador]["mensaje"] = mensaje
+                self._trabajos[identificador]["fase"] = "esperando_aceptacion" if mensaje.startswith("Esperando") else "enviando"
 
         def recibido(archivo):
             self._validar_archivo(plan, archivo)
@@ -310,12 +311,14 @@ class GestorPublicacion:
             registrar_evento_manifiesto_edicion(raiz, {**evento, "tipo_evento": "recepcion_wifi_confirmada"})
             with self._lock:
                 self._trabajos[identificador]["recibidos"].append(archivo["nombre"])
+                self._trabajos[identificador]["fase"] = "recibido"
             os.makedirs(os.path.dirname(archivo["destino"]), exist_ok=True)
             mover_sin_sobrescribir(archivo["origen"], archivo["destino"])
             registrar_evento_manifiesto_edicion(raiz, {**evento, "tipo_evento": "publicado_por_envio_wifi"})
             self._actualizar_rutas(archivo["origen"], archivo["destino"])
             with self._lock:
                 self._trabajos[identificador]["publicados"].append(evento)
+                self._trabajos[identificador]["fase"] = "archivado"
 
         try:
             with operacion_pendrive_exclusiva():
@@ -329,11 +332,14 @@ class GestorPublicacion:
             with self._lock:
                 if len(self._trabajos[identificador]["publicados"]) != len(plan["archivos"]):
                     raise ValueError("No se confirmó la recepción y archivo de todos los videos.")
-                self._trabajos[identificador].update(estado="completado", mensaje="Recibido en el celular y archivado en Videos completos")
+                self._trabajos[identificador].update(estado="completado", fase="archivado", mensaje="Recibido en el celular y archivado en Videos completos")
         except Exception as error:
             with self._lock:
                 self._trabajos[identificador].update(estado="cancelado" if cancelacion.is_set() else "error",
-                                                    mensaje="El envío no se completó", error=str(error))
+                                                    mensaje="El envío no se completó", fase="cancelado" if cancelacion.is_set() else "error", error=str(error),
+                                                    etapa=getattr(error, "etapa", "archivo"),
+                                                    codigo_http=getattr(error, "codigo_http", None),
+                                                    cancelacion_confirmada=getattr(error, "cancelacion_confirmada", None))
 
     def deshacer(self, id_operacion):
         with operacion_pendrive_exclusiva():

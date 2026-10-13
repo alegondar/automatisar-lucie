@@ -18,3 +18,13 @@ plan_limpieza.json
 plan_limpieza.md
 findings.md
 
+
+# Android: configuración de equipo, compilaciones y firmas privadas
+android/.gradle/
+android/.kotlin/
+android/**/build/
+android/local.properties
+*.apk
+*.aab
+*.keystore
+*.jks

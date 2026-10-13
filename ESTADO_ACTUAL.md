@@ -1,24 +1,118 @@
 # Estado actual del sistema — 2026-10-12
 
+## Corrección de puertos y pantalla Android (2026-10-13)
+
+La versión 0.1.0 instalada en el Moto G54 5G / Android 15 mostraba fallo de
+apertura mientras LocalSend ocupaba 53317. La versión **0.2.0** separa HTTPS
+**TCP 53318** y descubrimiento **UDP 53319**. El dashboard usa 53318 por defecto,
+socket UDP temporal y búsquedas multicast/broadcast propias. La app responde por
+unicast al origen. LocalSend puede conservar TCP/UDP 53317. Los receptores de una
+misma IP se guardan por IP/puerto, evitando ocultar Lucie con LocalSend.
+
+La pantalla usa tarjetas de conexión, solicitud e historial, estado visible,
+identidad HTTPS desplegable y controles secundarios. Se mantienen aceptación,
+PIN, comprobaciones y resguardos; no se sustituyen por aceptación automática.
+
+Validación Android: build/lint, cuatro JVM y **cuatro instrumentadas OK**. La nueva
+prueba ocupa TCP/UDP 53317 y demuestra que Lucie escucha TCP 53318 y responde al
+puerto temporal del solicitante desde UDP 53319. Artemis comprobó la pantalla y
+el flujo HTTPS real del emulador con video/foto, cancelación, segundo envío,
+homónimo, PIN/rechazo, hash, huella y archivado/Deshacer. Logs externos en
+`/tmp/lucie_android_puertos_build.log`, `/tmp/lucie_android_puertos_native.log` y
+`/tmp/lucie_puertos_artemis.log`. Las pruebas no usan material real.
+
+Suite Kali/Python 3.13.12: **368 tests OK, cinco saltos Windows**, en 50.931 s.
+Manifiesto real contado antes/después: **no disponible / no disponible**; no son
+recuentos cero. Log externo: `/tmp/tests_puertos_suite_final.log`.
+AST: 0 infracciones en 24 módulos; test JS/UI OK. **Falta instalar 0.2.0 en el
+Motorola y verificar la Wi-Fi física:** al iniciar esta corrección el teléfono no
+estaba conectado a ADB. La instalación de 0.1.0 no demuestra la validación de esta
+versión. No iniciar los vigilantes reales para comprobarla ni afirmar que se
+resolvió una posible limitación de red sin una conexión real. Windows nativo de
+este lote también sigue pendiente.
+
+## Validación de la entrega en Kali (2026-10-12)
+
+Se descargó e integró `8cce55e` de `origin/actualizacion-completa-host`
+mediante fast-forward, conservando las mejoras anteriores y sin modificar
+`master`. Python 3.13.12 en Kali/Linux: **361 pruebas, OK, 5 saltadas**,
+en 48.369 segundos. Log externo: `/tmp/tests_host_publicacion_8cce55e.log`.
+Las pruebas usan temporales y la guardia hermética; no se inició la bandeja
+real para validarlas ni se enviaron archivos a un teléfono físico.
+
+`node --check` de `panel.js` y `wifi.js` y `node test_publicacion_ui.js`
+pasaron: grupos, imágenes/video, rutas, filtros, selección visible,
+invalidación, envío e historial, con nueve llamadas simuladas. AST:
+**0 infracciones en 24 archivos**. Auditoría de repositorio e historial:
+**0 infracciones**. Manifiesto real antes/después: **no disponible / no
+disponible**, no son recuentos cero. La configuración y SQLite de cada
+equipo permanecen locales. Para cargar el nuevo servidor y la interfaz,
+reiniciar la bandeja para uso real y recargar con Ctrl+F5.
+
 Esta guía describe el comportamiento implementado y complementa las siete
 Reglas de Oro de `openspec/config.yaml`. Para edición y CapCut, prevalece sobre
 las rutas y decisiones anteriores de los documentos históricos de OpenSpec.
 
-## Próxima sesión: envío Wi-Fi y receptor Android
+## Emisor corregido y Lucie Recibir Android (2026-10-12)
 
-Leer [Plan de diagnóstico y cliente Android](docs/plan-receptor-android.md).
-El usuario pidió planificación y conformidad antes de implementar el APK.
-La captura muestra receptor ocupado y cero recibidos; falta identificar la
-causa mediante diagnóstico y certificar el envío con el teléfono real.
-El plan propone verificar primero el dashboard y luego un receptor propio
-compatible con LocalSend v2. No hay APK implementado ni aprobación de este plan.
+El usuario autorizó implementar el plan, utilizar Artemis y hacer commit/push
+de este lote en **`feat/lucie-recibir`**, desde `8cce55e`, sin modificar master.
+Fetch no encontró novedades entrantes. Para actualizar otros equipos, usar esta
+rama y comprobar su referencia remota.
+Guía de instalación, módulos y pruebas: [Android](android/README.md).
+
+El emisor interrumpe conexiones al cancelar incluso esperando aceptación,
+comprueba la cancelación de su sessionId y expone etapa/HTTP/duración sin secretos.
+Un 409 previo al ID no cancela sesiones ajenas; una preparación 204 no confirma
+recepción. El dashboard informa fases y muestra la huella HTTPS para comparar.
+El descubrimiento escucha respuestas multicast UDP además de registros HTTP.
+No hay reenvío automático cuando el resultado de la recepción es incierto.
+
+APK Kotlin 0.1.0 para Android 10+, visible durante el envío: HTTPS con identidad
+estable AndroidKeyStore, aprobación/PIN, tokens y cancelación por propietario,
+video/foto/MP3, espacio, SHA-256, homónimos y MediaStore pendiente→visible.
+Cada recepción conserva además un resguardo privado sin limpieza automática:
+MediaStore puede expirar entradas pendientes, por lo que el resguardo independiente
+preserva los bytes. Se reserva espacio para ambas copias. La cola actual de
+publicación del dashboard sigue ofreciendo videos y fotos.
+
+Validación final **Kali/Linux, Python 3.13.12: 367 pruebas OK, cinco saltadas**,
+en **50.607 s**. Las cinco requieren capacidades Windows: exclusividad socket,
+bloqueo exclusivo, compartición de escritor, export en escritura y finalización
+con clip abierto. Se conservaron decoradores/motivos y aserciones. Manifiesto real
+antes/después: **no disponible / no disponible**; no son recuentos cero.
+La bandeja real del repositorio se detuvo ordenadamente antes de la suite;
+las pruebas usan la guardia hermética y temporales, sin material real.
+Log externo: `/tmp/tests_lucie_recibir_final.log`.
+
+Android: build, lint, firma APK y **cuatro JVM + tres instrumentadas OK**, emulador
+Android 17. Artemis oficial (revisión `351ca8422f7b5b54e80a9c1ce03a222e02415b6b`)
+observó la UI y aceptó/canceló solicitudes. Se transfirieron bytes reales por
+HTTPS y verificaron MediaStore visible, cancelación en preparación/upload,
+segundo envío, homónimos, PIN/rechazo, huella falsa, hash corrupto y resguardo
+privado. El gestor aislado envió video/foto, archivó tras ACK y deshizo conservando
+bytes. Script reproducible: `android/tests/verificar_receptor.py`, limitado a
+emuladores. Logs en `/tmp/lucie_android_resguardo_final.log` y
+`/tmp/lucie_artemis_apk_final.log`, fuera de Git.
+
+AST **0 infracciones / 24 módulos Python**; sintaxis JS y test UI (nueve llamadas)
+OK; auditoría rastreados/historial y archivos nuevos sin infracciones. El análisis
+AST no audita Kotlin: el código Android y las pruebas nativas se revisaron por
+separado. APK, builds, SDK local, logs y claves de firma no se versionan.
+
+**Pendiente:** Motorola físico (modelo/versión/conexión), Wi-Fi/multicast y galería
+reales, archivo grande, desconexión, espacio lleno, comparación con LocalSend
+oficial y suite Windows nativa de este lote. ADB al emulador no prueba Wi-Fi real.
+No se atribuye el 409 histórico a una causa específica sin evidencia del teléfono.
+Continuidad en [seguimiento del plan](docs/plan-receptor-android.md).
 
 El cierre anterior quedó detenido: la suite dio **361 pruebas OK, 10 saltadas**, en
 **56.844 segundos**, pero el
 manifiesto real cambió **271 → 273** líneas y se detuvo la validación/publicación.
 Log: `%TEMP%/tests_entrega_windows_kali_final.log`. No se atribuyó ese cambio
 a las pruebas ni a la bandeja sin evidencia. Ese control se repitió y pasó;
-ver la revalidación siguiente. Linux y el envío al teléfono real siguen pendientes.
+ver la revalidación siguiente. Esa entrega Windows no validaba Linux; la
+validación Kali está al inicio de esta guía. El teléfono físico sigue pendiente.
 
 ## Entrega revalidada para GitHub y Kali (2026-10-12)
 
@@ -26,7 +120,9 @@ La rama de esta entrega es **`actualizacion-completa-host`**, con los cambios
 de nombres, cola Sin publicar, galería por personaje, emisor Wi-Fi y documentación
 de continuidad. No se integró ni modificó master. El commit y push fueron
 autorizados expresamente por el usuario; no hace falta volver a pedirlos para
-este mismo lote. El APK Android sigue siendo un plan, sin implementación.
+este mismo lote anterior. En esa entrega el APK Android era un plan; la
+continuación implementada se describe al inicio y cuenta con autorización
+propia del usuario para commit/push.
 
 Revalidación Windows/Python 3.13: **361 pruebas, OK, 10 saltadas**, en
 **61.461 segundos**. Manifiesto real solo contado antes/después: **276 / 276**

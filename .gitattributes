@@ -1,0 +1,2 @@
+# Gradle Windows: LF en Git, CRLF en el equipo al hacer checkout.
+android/gradlew.bat text eol=crlf

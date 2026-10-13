@@ -1,12 +1,13 @@
-# Plan pendiente: verificar envío y crear Lucie Recibir para Android
+# Seguimiento: emisor Wi-Fi y Lucie Recibir para Android
 
-Estado: **propuesto, pendiente de conformidad del usuario para implementar en
-la próxima sesión**. No hay APK ni cliente Android implementado en esta entrega.
+Estado: **implementación autorizada por el usuario y realizada en
+`feat/lucie-recibir`**. APK inicial compilado y probado en emulador, pendiente
+de instalación y validación en el Motorola físico. Ver [Android](../android/README.md).
 Leer AGENTS.md, ESTADO_ACTUAL.md y README_KALI.md antes de continuar.
 
 ## Qué está comprobado y qué falta
 
-El dashboard es el emisor; la aplicación LocalSend del celular es el receptor.
+El dashboard es el emisor; LocalSend o Lucie Recibir en el celular son receptores.
 Los archivos viajan por la red local al dispositivo elegido, no a un servicio
 de almacenamiento de LocalSend ni a Instagram. La captura muestra el error
 «celular ocupado con otro envío», con cero recibidos y cero archivados.
@@ -27,9 +28,9 @@ de 271 a 273 líneas y detuvo el cierre según AGENTS.md. Se repitió la comprob
 361 pruebas OK, 10 omisiones y manifiesto estable en 276 / 276 líneas. El control
 previo a la entrega quedó satisfecho; ver evidencia en ESTADO_ACTUAL.md.
 
-## Decisión propuesta
+## Decisión aprobada
 
-Primero corregir y demostrar el emisor. Después crear una aplicación Android
+Se autorizó corregir y demostrar el emisor y crear una aplicación Android
 propia llamada **Lucie Recibir**, compatible con los mensajes LocalSend v2.
 Así la interfaz y la gestión de estados serán nuestras, con un contrato conocido
 para probar el dashboard contra LocalSend y contra el cliente propio.
@@ -89,15 +90,52 @@ La app propia no evita por sí sola fallos del emisor: ambas partes deben valida
 La recepción seguirá siendo la señal de publicación elegida por el usuario;
 no se verificará que el video se haya subido a una red social.
 
-## Para iniciar la próxima sesión
+## Trabajo realizado y continuidad (2026-10-12)
 
-Leer este plan y confirmar la conformidad pendiente. Identificar modelo/versión
-de Android, disponibilidad de Android SDK/emulador y acceso al teléfono para
-pruebas. Revisar la entrega en `actualizacion-completa-host` y confirmar el
-estado de GitHub mediante fetch. Trabajar en una rama, conservar los cambios locales
-y no modificar master. Empezar por las etapas 1 y 2; después implementar el APK.
+- Emisor: diagnóstico por operación/etapa/HTTP/duración sin secretos, preparación
+  con aceptación de hasta 90 s, cancelación que interrumpe sockets incluso antes
+  de obtener el ID, resultado de cancelación comprobado y 204 de preparación
+  rechazado como recepción. HTTP 409 previo al ID no cancela sesiones ajenas.
+- Dashboard: fases de aceptación, envío, recepción, archivado y error; huella
+  HTTPS comparable con el teléfono y diagnóstico de cancelación no confirmada.
+- Android: Kotlin nativo, HTTPS con AndroidKeyStore, aprobación/PIN, estado único,
+  cancelación por propietario, MediaStore pendiente, SHA-256 y nombres sin
+  reemplazo. Resguardo privado persistente para conservar bytes aunque MediaStore
+  expire pendientes; sin limpieza automática, con espacio para las dos copias.
+  Multicast UDP más conexión por IP; visible durante la transferencia.
+- Evidencia: 27 tests Python de publicación/emisor/descubrimiento; build, lint,
+  cuatro tests JVM y tres instrumentados. Artemis observó la interfaz y aceptó
+  solicitudes del APK en emulador Android 17. Se verificaron bytes por HTTPS,
+  video/foto, cancelación antes de aceptar y durante upload, segundo envío,
+  homónimos, PIN/rechazo, hash corrupto, identidad TLS y archivado/Deshacer.
+  Suite Kali: 367 tests OK con cinco saltos. Resultados finales y manifiesto en
+  ESTADO_ACTUAL.md. Los scripts reproducibles están en `android/tests/`.
+- Pendiente: modelo y versión exactos del Motorola, instalación USB/APK, Wi-Fi
+  real y descubrimiento, galería, transferencia grande, desconexión/espacio lleno,
+  comparación con LocalSend oficial y Windows nativo. La reproducción aislada
+  de 409 no demuestra cuál fue la causa de la captura del teléfono original.
+- Publicación de este lote: el usuario autorizó expresamente commit/push en
+  `feat/lucie-recibir`. No volver a pedir esa autorización para este mismo lote.
+
+La siguiente sesión debe leer estas guías y revisar GitHub mediante fetch,
+conservar cambios locales y no tocar master. Continuar por la validación física;
+no volver a pedir conformidad para implementar lo ya autorizado. No usar material
+real como fixture ni iniciar los vigilantes reales para comprobar el APK.
 
 Fuentes primarias:
 [Protocolo LocalSend v2.2](https://github.com/localsend/protocol),
 [MediaStore](https://developer.android.com/training/data-storage/shared/media) y
 [permisos de red local Android](https://developer.android.com/privacy-and-security/local-network-permission).
+
+## Corrección 0.2.0 (2026-10-13)
+
+- Puerto HTTPS propio 53318, descubrimiento propio UDP 53319; el emisor no
+  escucha UDP 53317. Respuestas unicast al puerto temporal del dashboard,
+  búsqueda multicast/broadcast y conexión manual con 53318 predeterminado.
+- Dos apps en una IP se distinguen por puerto. LocalSend conserva 53317.
+- Pantalla organizada en tarjetas, identidad desplegable, aceptación y controles.
+- Prueba instrumentada con los dos puertos de LocalSend ocupados: Lucie abre y
+  responde; ocho tests Android total OK. Flujo Artemis HTTPS/emulador OK.
+- Moto G54 5G / Android 15 identificado, 0.1.0 instalada previamente con conflicto.
+  0.2.0 y descubrimiento en Wi-Fi física requieren reconectar el teléfono; no
+  declarar hardware validado con resultados del emulador.

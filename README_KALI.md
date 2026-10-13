@@ -1,6 +1,7 @@
 # Continuar el proyecto en Kali Linux
 
-La versión de esta entrega está en **`actualizacion-completa-host`**. No descargar
+La versión con Lucie Recibir está en **`feat/lucie-recibir`**, continuación de
+`actualizacion-completa-host`. No descargar
 `master` esperando encontrar estos cambios. Leer primero [AGENTS.md](AGENTS.md),
 [ESTADO_ACTUAL.md](ESTADO_ACTUAL.md) y [README.md](README.md).
 
@@ -9,7 +10,7 @@ La versión de esta entrega está en **`actualizacion-completa-host`**. No desca
 Para una instalación nueva, con acceso autenticado al repositorio privado:
 
 ```bash
-git clone --branch actualizacion-completa-host --single-branch https://github.com/alegondar/automatisar-lucie.git
+git clone --branch feat/lucie-recibir --single-branch https://github.com/alegondar/automatisar-lucie.git
 cd automatisar-lucie
 git status --short --branch
 ```
@@ -23,7 +24,10 @@ integración están descritas en AGENTS.md. Continuar en una rama de trabajo.
 
 El programa utiliza la biblioteca estándar de Python; no necesita pip ni LocalSend
 en la PC. Node solo se utiliza para comprobar JavaScript durante el desarrollo.
-El receptor del celular necesita LocalSend abierto en la misma red Wi-Fi.
+El receptor del celular puede ser [Lucie Recibir](android/README.md), Android 10
+o posterior, o LocalSend. Mantenerlo abierto en la misma red Wi-Fi. El APK propio
+se compila por separado; Android SDK y Artemis son herramientas de desarrollo,
+no dependencias del programa de PC.
 
 Cada equipo conserva su propia base SQLite y configuración local. No copiar
 desde Windows bases, logs, cachés ni `config_bandeja.local.json`. Si se configura
@@ -91,12 +95,14 @@ en Windows operando simultáneamente sobre ese mismo material.
 
 ## Punto de partida para la próxima sesión
 
-Revisar primero esta rama, guías, git status y novedades de GitHub. La entrega
-se probó en Windows/Python 3.13; **Kali no se ejecutó en esta PC**, que no tiene
-WSL ni un entorno Linux instalado. Falta ejecutar la suite nativa en Kali y
-registrar esa evidencia. Tampoco se declaró validado un envío al teléfono físico
-o todos los códecs del material del usuario. Ver el alcance y resultados de
-las verificaciones en ESTADO_ACTUAL.md y [Publicación Wi-Fi](docs/publicacion-wifi.md).
+Revisar primero rama, guías, git status y novedades de GitHub. La base
+`actualizacion-completa-host` ya se validó en Kali (361 tests); la continuación
+`feat/lucie-recibir` añade el emisor corregido y APK Android, con 367 tests Kali
+y pruebas nativas/emulador. El usuario autorizó publicar esta continuación;
+comprobar su referencia remota antes de actualizar otro equipo. Falta validar
+transferencias Wi-Fi en el Motorola físico y Windows
+nativo de este lote. Ver ESTADO_ACTUAL.md, [Publicación Wi-Fi](docs/publicacion-wifi.md)
+y [Android](android/README.md).
 
 Al terminar un nuevo lote de cambios, el agente debe preguntar por iniciativa
 propia si se hace commit y push; solo publicar con confirmación, según AGENTS.md.
