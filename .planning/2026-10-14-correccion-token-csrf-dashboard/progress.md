@@ -30,3 +30,18 @@ como fixture. Suite ampliada: 390 OK, cinco saltos Windows, 53.519 s; manifiesto
 290/290 estable. AST 0/26; JS/UI y auditorías rastreados/nuevos/historial OK.
 Bandeja detenida antes de suite y disponible para uso normal después. No se
 atribuyen tests Windows nativos a los mocks. Commit/push del lote autorizados.
+
+Publicado y verificado d5a8ee3 en origin/feat/lucie-recibir. Las auditorías
+posteriores de video y teléfono no requirieron cambios de código; el video
+estaba en lote 10 del foco y el Motorola fue encontrado mediante cliente nuevo
+sin IP indicada. Informes generados en caché/temporales, fuera de Git.
+Nueva petición: revisar compatibilidad Windows y publicar todo. Fetch correcto,
+HEAD/upstream 0/0 y sin cambios versionables pendientes al iniciar esta revisión.
+No hay Windows nativo ejecutado en este equipo; conservar distinción con mocks.
+
+Revisión adicional terminada: 55 tests OK/tres saltos Windows en 4.713 s;
+bandeja detenida antes de validar, manifiesto 294/294 estable. Ramas Windows
+simuladas, sin afirmar ejecución nativa. AST 0/26; JS/UI y auditorías OK.
+No se necesitan correcciones adicionales de código. Se documentan en Estado,
+guía Windows y Android las compatibilidades, límites y el descubrimiento real
+sin IP indicada. Se conserva autorización de publicación de este cierre.

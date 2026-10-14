@@ -10,10 +10,10 @@ conservando CSRF/Host, confirmaciones, selección y ausencia de reenvíos autom�
 - Regresión de token cambiado, fallo de renovación y sin reintentos; temporales: complete.
 - CSRF: auditorías y evidencia de entrega: complete.
 - Apertura de Chrome al iniciar Python y sin duplicarla desde BAT: complete.
-- Validación del lote ampliado: complete. Commit/push autorizados: en ejecución.
+- Validación del lote ampliado: complete. Commit/push: complete (d5a8ee3).
 
 ## Next Step
-Crear commit del lote revisado, subir y comprobar la referencia remota.
+Publicar la documentación del cierre autorizado y comprobar origin/feat/lucie-recibir.
 
 ## Decisiones
 La plantilla se lee al servirla; la corrección HTML/JS queda disponible sin
@@ -26,3 +26,8 @@ El usuario autorizó commit/push y pidió añadir Chrome automático al ejecutar
 bandeja_descargas.py. La autorización incluye este lote ampliado. Chrome debe
 abrirse también si la bandeja ya estaba activa, sin iniciar otros vigilantes;
 si falta Chrome o el servidor no está listo, informar sin bloquear la bandeja.
+
+## Revisión adicional solicitada
+- Compatibilidad Windows del lote completo: complete (revisión y mocks; nativo pendiente).
+- Evidencia de descubrimiento Wi-Fi sin IP y revisión final: complete.
+El usuario autoriza commit/push de toda esta revisión; no volver a preguntar.

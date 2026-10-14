@@ -1,5 +1,32 @@
 # Estado actual del sistema — 2026-10-12
 
+## Revisión Windows y descubrimiento independiente (2026-10-14)
+
+Los cambios de organización/publicación por personaje, renovación CSRF y Chrome
+automático ya están publicados en `feat/lucie-recibir` (`76bbfa7` y `d5a8ee3`).
+La revisión adicional no encontró una corrección de código necesaria para Windows:
+se conservan las rutas y renombrados Windows, detección de Chrome por ubicaciones
+habituales/registro/PATH, puertos temporales y funcionamiento del `.bat` sin
+apertura duplicada. El panel usa el mismo HTML/JS en ambos sistemas.
+
+Pruebas específicas ejecutadas en **Kali/Python 3.13.12: 55 tests OK, tres saltos
+Windows**, 4.713 s: compatibilidad, navegador, organización, descubrimiento y
+regresión CSRF con creación de capítulo en temporales. Los saltos requieren
+socket exclusivo y semántica de compartición/bloqueo de archivos de Windows.
+Las ramas Windows revisadas mediante mocks no equivalen a ejecución nativa.
+Manifiesto solo contado antes/después: **294 / 294**, estable. Log externo:
+`/tmp/tests_revision_windows_dashboard.log`. AST 0/26, JS/UI y auditorías correctas.
+La suite completa anterior permanece en 390 OK/cinco saltos, descrita abajo;
+no se repitió sin cambios de código. **Windows nativo sigue pendiente.**
+
+El Motorola se encontró mediante un **cliente nuevo sin IP indicada**, usando
+solo descubrimiento Wi-Fi; la API real de búsqueda devolvió HTTP 200 y el receptor.
+Antes el puerto del teléfono rechazaba conexiones; con el receptor activo,
+HTTPS y descubrimiento respondieron. La IP ingresada se usó únicamente en una
+comprobación diagnóstica separada, no como entrada de esa búsqueda independiente.
+Lucie Recibir debe permanecer abierta y visible: `onStop` detiene la escucha.
+No se enviaron archivos ni se modificó material durante esas comprobaciones.
+
 ## Chrome automático desde Python (2026-10-14)
 
 `python3 bandeja_descargas.py` abre Google Chrome cuando el dashboard local

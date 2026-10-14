@@ -34,6 +34,13 @@ La apertura automática también funciona al ejecutar Python directamente; respe
 abre su panel sin iniciar otros vigilantes. `--sin-navegador` permite iniciar
 sin Chrome. Si no se encuentra Chrome, se informa la URL y la bandeja continúa.
 
+La entrega vigente está en **`feat/lucie-recibir`**, incluyendo publicados por
+personaje, organización manual, renovación del token tras reiniciar y Chrome
+automático. La revisión de compatibilidad de 2026-10-14 pasó en Kali con ramas
+Windows simuladas; **la suite nativa de esta entrega en Windows sigue pendiente**.
+Ver resultados y límites en [ESTADO_ACTUAL.md](ESTADO_ACTUAL.md). Cada equipo
+conserva sus configuraciones y SQLite locales; no copiarlos entre sistemas.
+
 ---
 
 ## 3. Primer Uso y Configuración Local

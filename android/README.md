@@ -3,8 +3,12 @@
 Cliente nativo Kotlin para recibir desde **Sin publicar · Enviar al celular**.
 Android 10 o posterior (API 29), con la pantalla visible durante el envío.
 No requiere instalar LocalSend. La versión 0.2.0 se instaló en Moto G54 5G /
-Android 15 y fue detectada por la Wi-Fi real. Los archivos y la galería del
-Motorola siguen pendientes de una recepción elegida por el usuario.
+Android 15 y fue detectada por la Wi-Fi real. El usuario confirmó un envío de
+video al Motorola; la galería y los casos de archivo grande, desconexión y espacio
+insuficiente siguen pendientes
+de comprobación física específica. El 2026-10-14 se repitió el descubrimiento
+desde un cliente nuevo sin IP indicada y desde la API del dashboard, sin enviar
+archivos: ambos encontraron al Motorola. Mantener Lucie Recibir abierta y visible.
 
 ## Instalar y recibir
 
