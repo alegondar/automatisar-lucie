@@ -375,13 +375,29 @@
       setTimeout(() => { b.style.display = 'none'; }, 8000);
     }
 
-    async function apiFetch(url, options = {}) {
-      options.headers = options.headers || {};
-      if (options.method && options.method.toUpperCase() === 'POST') {
-        options.headers['Content-Type'] = 'application/json';
-        options.headers['X-CSRF-Token'] = CSRF_TOKEN;
+    async function fetchConCsrf(url, options = {}) {
+      if ((options.method || 'GET').toUpperCase() !== 'POST') return fetch(url, options);
+
+      // La bandeja cambia su token al reiniciarse; una pestaña abierta no lo sabe.
+      // Renovar antes de actuar evita reenviar una operación de resultado incierto.
+      const pagina = await fetch('/panel.html', {
+        cache: 'no-store', mode: 'same-origin', credentials: 'same-origin',
+        redirect: 'error', signal: options.signal
+      });
+      if (!pagina.ok) throw new Error('No se pudo actualizar la conexión. Recargá el dashboard y volvé a intentar.');
+      const html = new DOMParser().parseFromString(await pagina.text(), 'text/html');
+      const token = html.querySelector('meta[name="csrf-token"]')?.content?.trim();
+      if (!token || token === '__TOKEN_CSRF__') {
+        throw new Error('No se pudo actualizar la conexión. Recargá el dashboard y volvé a intentar.');
       }
-      const res = await fetch(url, options);
+      const headers = new Headers(options.headers);
+      headers.set('Content-Type', 'application/json');
+      headers.set('X-CSRF-Token', token);
+      return fetch(url, {...options, headers, mode: 'same-origin', redirect: 'error'});
+    }
+
+    async function apiFetch(url, options = {}) {
+      const res = await fetchConCsrf(url, options);
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.statusText }));
         const e = new Error(err.error || 'Error en la petición');
@@ -3750,12 +3766,8 @@
       };
 
       try {
-        const res = await fetch('/api/edicion/crear-sesion', {
+        const res = await fetchConCsrf('/api/edicion/crear-sesion', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': CSRF_TOKEN
-          },
           body: JSON.stringify(payload)
         });
         const data = await res.json();
@@ -3855,12 +3867,8 @@
       if (!confirm("¿Confirmás que terminaste de editar? Los clips quedarán en 'videos ya editados'. Si CapCut los mantiene abiertos, se copiarán con verificación de integridad y se conservarán los originales.")) return;
 
       try {
-        const res = await fetch('/api/edicion/terminar', {
+        const res = await fetchConCsrf('/api/edicion/terminar', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': CSRF_TOKEN
-          },
           body: JSON.stringify({ sesion_id: sesionId })
         });
         const data = await res.json();
@@ -3886,12 +3894,8 @@
 
     async function deshacerTerminarEdicion(sesionId) {
       try {
-        const res = await fetch('/api/edicion/deshacer-terminar', {
+        const res = await fetchConCsrf('/api/edicion/deshacer-terminar', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': CSRF_TOKEN
-          },
           body: JSON.stringify({ sesion_id: sesionId })
         });
         const data = await res.json();
@@ -3909,12 +3913,8 @@
     async function cancelarSesionEdicion(sesionId) {
       if (!confirm("¿Deseas cancelar esta sesión? Ningún archivo físico será modificado.")) return;
       try {
-        const res = await fetch('/api/edicion/cancelar-sesion', {
+        const res = await fetchConCsrf('/api/edicion/cancelar-sesion', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': CSRF_TOKEN
-          },
           body: JSON.stringify({ sesion_id: sesionId })
         });
         const data = await res.json();
@@ -4033,12 +4033,8 @@
       }
 
       try {
-        const res = await fetch('/api/capcut/asignar-export', {
+        const res = await fetchConCsrf('/api/capcut/asignar-export', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': CSRF_TOKEN
-          },
           body: JSON.stringify({ export_id: exportId, sesion_id: parseInt(sesionId) })
         });
         const data = await res.json();
@@ -4064,12 +4060,8 @@
     async function descartarExportCapCut(exportId) {
       if (!confirm("¿Deseas descartar este export de la bandeja? (No se borrará ningún archivo del disco).")) return;
       try {
-        const res = await fetch('/api/capcut/descartar-export', {
+        const res = await fetchConCsrf('/api/capcut/descartar-export', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': CSRF_TOKEN
-          },
           body: JSON.stringify({ export_id: exportId })
         });
         const data = await res.json();
@@ -4083,12 +4075,8 @@
 
     async function deshacerCopiaCompleto(videoCompletoRuta) {
       try {
-        const res = await fetch('/api/capcut/deshacer-completo', {
+        const res = await fetchConCsrf('/api/capcut/deshacer-completo', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': CSRF_TOKEN
-          },
           body: JSON.stringify({ video_completo_ruta: videoCompletoRuta })
         });
         const data = await res.json();
@@ -4105,12 +4093,8 @@
 
     async function escanearCapCutManual() {
       try {
-        const res = await fetch('/api/capcut/escanear', {
+        const res = await fetchConCsrf('/api/capcut/escanear', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': CSRF_TOKEN
-          },
           body: JSON.stringify({})
         });
         const data = await res.json();

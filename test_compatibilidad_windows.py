@@ -452,7 +452,7 @@ class TestServidorHTTPYExclusividad(unittest.TestCase):
         stdout_capturado = io.StringIO()
         stderr_capturado = io.StringIO()
         try:
-            with patch("sys.argv", ["bandeja_descargas.py", "--puerto", str(puerto)]):
+            with patch("sys.argv", ["bandeja_descargas.py", "--puerto", str(puerto), "--sin-navegador"]):
                 with patch("sys.stdout", stdout_capturado):
                     with patch("sys.stderr", stderr_capturado):
                         with self.assertRaises(SystemExit) as cm:
@@ -470,7 +470,7 @@ class TestServidorHTTPYExclusividad(unittest.TestCase):
         stdout_capturado = io.StringIO()
         stderr_capturado = io.StringIO()
         with patch("bandeja_descargas.crear_servidor", side_effect=OSError(10048, "Only one usage of each socket address is normally permitted")):
-            with patch("sys.argv", ["bandeja_descargas.py", "--puerto", "8766"]):
+            with patch("sys.argv", ["bandeja_descargas.py", "--puerto", "8766", "--sin-navegador"]):
                 with patch("sys.stdout", stdout_capturado):
                     with patch("sys.stderr", stderr_capturado):
                         with self.assertRaises(SystemExit) as cm:

@@ -41,19 +41,7 @@ exit /b 1
 
 :python_encontrado
 echo [*] Intérprete detectado: %PYTHON_CMD%
-set "CHROME_EXE="
-if exist "%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe" set "CHROME_EXE=%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"
-if exist "%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe" set "CHROME_EXE=%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"
-if exist "%ProgramFiles%\Google\Chrome\Application\chrome.exe" set "CHROME_EXE=%ProgramFiles%\Google\Chrome\Application\chrome.exe"
-
-echo [*] Abriendo el panel directamente en Google Chrome...
-if defined CHROME_EXE (
-    start "" "%CHROME_EXE%" "http://127.0.0.1:8766"
-) else (
-    rem Windows también puede localizar Chrome mediante su registro App Paths.
-    start "" chrome.exe "http://127.0.0.1:8766"
-    if errorlevel 1 echo [AVISO] No se pudo abrir Chrome. Verificá que esté instalado.
-)
+rem Python abre Chrome cuando el panel responde, respetando --puerto y --sin-navegador.
 
 echo [*] Ejecutando Bandeja de Descargas... Consola de logs activa:
 echo ----------------------------------------------------------------------------

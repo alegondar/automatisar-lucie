@@ -645,6 +645,48 @@ class TestServidorHTTPYSeguridad(unittest.TestCase):
         self.assertIn(b"Bandeja de Descargas", raw)
         self.assertIn(self.token_csrf.encode("utf-8"), raw)
 
+    def test_frontend_csrf_actual_crea_capitulo_una_vez_y_rechaza_token_anterior(self):
+        import subprocess
+        from html.parser import HTMLParser
+
+        class Metadatos(HTMLParser):
+            token = None
+
+            def handle_starttag(self, tag, attrs):
+                atributos = dict(attrs)
+                if tag == "meta" and atributos.get("name") == "csrf-token":
+                    self.token = atributos.get("content")
+
+        handler = self.servidor.RequestHandlerClass
+        anterior = handler.token_csrf
+        handler.token_csrf = "token_tras_reinicio_sintetico"
+        try:
+            status, _, html = self._request("GET", "/panel.html")
+            self.assertEqual(status, 200)
+            meta = Metadatos()
+            meta.feed(html.decode("utf-8"))
+            self.assertEqual(meta.token, handler.token_csrf)
+            self.assertNotIn(b"__TOKEN_CSRF__", html)
+            capitulos_antes = len(self.db.listar_capitulos_abiertos())
+            status, _, _ = self._request("POST", "/api/capitulos/empezar",
+                {"Content-Type": "application/json", "X-CSRF-Token": anterior},
+                json.dumps({"personaje": "roli", "nombre": "capitulo prueba"}))
+            self.assertEqual(status, 403)
+            self.assertEqual(len(self.db.listar_capitulos_abiertos()), capitulos_antes)
+            proc = subprocess.run(["node", "test_csrf_ui.js",
+                f"http://127.0.0.1:{self.config.puerto_servidor}"],
+                capture_output=True, text=True, timeout=30,
+                cwd=os.path.dirname(os.path.abspath(__file__)))
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("CSRF HTTP OK", proc.stdout)
+            self.assertEqual(len(self.db.listar_capitulos_abiertos()), capitulos_antes + 1)
+            foco = self.db.obtener_capitulo_en_foco()
+            self.assertEqual(foco["personaje"], "roli")
+            self.assertTrue(foco["nombre"].startswith("capitulo prueba - "))
+            self.assertTrue(os.path.isdir(os.path.join(self.destino, "roli", foco["nombre"])))
+        finally:
+            handler.token_csrf = anterior
+
     def test_get_endpoints_api(self):
         status, data, _ = self._request("GET", "/api/lotes")
         self.assertEqual(status, 200)

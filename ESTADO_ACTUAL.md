@@ -1,5 +1,47 @@
 # Estado actual del sistema — 2026-10-12
 
+## Chrome automático desde Python (2026-10-14)
+
+`python3 bandeja_descargas.py` abre Google Chrome cuando el dashboard local
+responde; respeta el puerto configurado o `--puerto`. Si ya había una bandeja,
+abre su panel sin iniciar otros vigilantes. Un servicio ajeno en ese puerto no
+se abre como dashboard. `--sin-navegador` permite iniciar sin apertura automática.
+Chrome se busca en PATH y, en Windows, en sus ubicaciones habituales y App Paths.
+Si falta o falla el lanzamiento, se informa y la bandeja continúa. El `.bat`
+delega esta apertura en Python, evitando dos pestañas y la URL fija previa.
+
+Ocho pruebas cubren Linux, resolución Windows mediante mocks, servidor temporal
+iniciando/listo, puerto ocupado por otro servicio, ausencia/error de Chrome,
+puerto efectivo, instancia existente y modo sin navegador. Ninguna abre un
+navegador real como fixture. Suite final del lote CSRF + Chrome en Kali/Python
+3.13.12: **390 tests OK, cinco saltos Windows**, 53.519 s; manifiesto contado
+**290 / 290**, estable. Log externo: `/tmp/tests_csrf_chrome_dashboard_final.log`.
+AST 0 infracciones/26 módulos; JS/UI y auditoría repo/historial correctas.
+Windows nativo de este lote no ejecutado. El usuario autorizó expresamente el
+commit y push de ambas mejoras en `feat/lucie-recibir`.
+
+## Token del dashboard después de reiniciar la bandeja (2026-10-14)
+
+Una pestaña abierta conservaba el token CSRF anterior al reinicio: los GET
+funcionaban, pero «Empezar capítulo» y otras acciones recibían 403. El panel
+obtiene ahora el token vigente de un metadato del HTML local sin caché antes de
+cada POST, también en los ocho flujos directos de Edición/CapCut. No se ejecuta
+el HTML obtenido ni se inserta en la página; las peticiones POST y de renovación
+usan el mismo origen y rechazan redirecciones. Si falla renovar, no se envía
+la acción. Nunca se reintenta automáticamente un POST fallido o incierto.
+La validación CSRF/Host del servidor se conserva.
+
+Kali/Python 3.13.12: **382 tests OK, cinco saltos Windows**, 51.684 s; manifiesto
+solo contado antes/después: **285 / 285**, estable. Log fuera de Git:
+`/tmp/tests_csrf_dashboard_final.log`. Regresión Node/HTTP en temporales:
+token anterior rechazado, token vigente crea un único capítulo; fallos de
+renovación, HTTP/red sin reenvíos y nombre del formulario conservado. AST 0/25,
+sintaxis JS, UI Wi-Fi y auditoría de repo/historial correctas. No se creó un
+capítulo real como fixture ni se ejecutó Windows nativo. Tras la suite se dejó
+la bandeja disponible para uso normal. **Recargar con Ctrl+F5** para cargar el
+panel corregido. El usuario autorizó commit/push junto con la apertura automática
+de Chrome, descrita arriba, en `feat/lucie-recibir`.
+
 ## Publicados separados por personaje (2026-10-14)
 
 El usuario confirmó un envío real al Motorola y pidió corregir la ubicación

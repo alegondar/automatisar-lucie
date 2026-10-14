@@ -107,6 +107,12 @@ pruebas temporales y alcance de la compatibilidad revisada.
    http://127.0.0.1:8766
    ```
 
+Al ejecutar `bandeja_descargas.py`, Google Chrome se abre automáticamente cuando
+el dashboard responde. Respeta `--puerto`; si la bandeja ya está activa, abre
+su panel sin iniciar otra instancia. Si Chrome no está instalado, se informa
+la dirección y el servidor sigue funcionando. Para iniciar sin navegador:
+`python3 bandeja_descargas.py --sin-navegador`.
+
 ### En Windows 10 / 11
 
 1. Hacer doble clic sobre el lanzador [`iniciar_bandeja.bat`](iniciar_bandeja.bat), o ejecutar en PowerShell:

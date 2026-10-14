@@ -21,6 +21,7 @@ import logging
 import os
 import secrets
 import sys
+import threading
 from typing import Dict, List, Optional, Set, Tuple, Any, Union
 
 from bandeja import *
@@ -28,6 +29,7 @@ from bandeja.servidor import HandlerServidorBandeja, crear_servidor, GeneradorMi
 from bandeja.capcut import VigilanteCapCut
 from bandeja.edicion import vincular_nuevo_export, procesar_exports_pendientes_copia
 from bandeja.pendrive import detectar_pendrive
+from bandeja.navegador import abrir_dashboard_chrome
 
 # Reconfiguración de consola para evitar fallos de codificación en Windows
 if hasattr(sys.stdout, "reconfigure"):
@@ -84,6 +86,7 @@ def main():
     parser.add_argument("--puerto", "-p", type=int, default=None, help="Puerto HTTP del panel (por defecto 8766)")
     parser.add_argument("--descargas", "-d", default=None, help="Ruta alternativa de ~/Descargas")
     parser.add_argument("--destino", default=None, help="Ruta base destino (por defecto ~/Descargas/_lucie)")
+    parser.add_argument("--sin-navegador", action="store_true", help="Iniciar sin abrir Google Chrome")
     args = parser.parse_args()
 
     config = ConfiguracionBandeja(ruta_config=args.config)
@@ -116,6 +119,8 @@ def main():
         err_code = getattr(e, "winerror", None) or getattr(e, "errno", None)
         if err_code in (errno.EADDRINUSE, 98, 10048) or "already in use" in err_str or "un solo uso" in err_str or "address already in use" in err_str:
             print(f"Ya hay una bandeja corriendo en el puerto {config.puerto_servidor}")
+            if not args.sin_navegador:
+                abrir_dashboard_chrome(config.puerto_servidor)
             sys.exit(0)
         raise
 
@@ -125,6 +130,10 @@ def main():
     print(f"[*] Bandeja de Descargas iniciada en http://{config.host_servidor}:{config.puerto_servidor}")
     print(f"[*] Vigilando: {config.ruta_descargas}")
     print(f"[*] Destino:   {config.ruta_destino_base}")
+
+    if not args.sin_navegador:
+        threading.Thread(target=abrir_dashboard_chrome, args=(servidor.server_address[1],),
+                         name="AbrirDashboardChrome", daemon=True).start()
 
     try:
         servidor.serve_forever()

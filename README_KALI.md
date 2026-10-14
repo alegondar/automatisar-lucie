@@ -59,7 +59,11 @@ esta capacidad al ejecutarse en Kali. La revisión del contrato POSIX mediante
 mocks en Windows no demuestra ejecución Linux.
 
 La apertura del Explorador y el lanzador Chrome `.bat` son funciones Windows.
-En Kali se inicia la bandeja con Python y se abre su URL en el navegador local.
+En Kali se inicia la bandeja con Python y abre Google Chrome automáticamente
+cuando el dashboard responde. Usa el puerto configurado o `--puerto`; si la
+bandeja ya estaba activa, abre su panel sin duplicar vigilantes. Si Chrome no
+está instalado, informa la URL y conserva el servidor. `--sin-navegador` evita
+la apertura automática.
 Las vistas previas dependen de los códecs que admita ese navegador. Si la red
 bloquea multicast, conectar el receptor por su IP desde el dashboard.
 

@@ -21,11 +21,18 @@ Guía rápida de instalación y operación de la bandeja de descargas del proyec
 Para iniciar la bandeja:
 1. Abra la carpeta del proyecto en el Explorador de Windows.
 2. Haga doble clic en el archivo **`iniciar_bandeja.bat`**.
-3. El lanzador detectará el intérprete de Python y abrirá automáticamente **Google Chrome**, aunque Edge sea el navegador predeterminado, en:
+3. El lanzador detectará el intérprete de Python. El propio `bandeja_descargas.py`
+   abrirá automáticamente **Google Chrome**, aunque Edge sea el navegador
+   predeterminado, cuando el dashboard responda. La dirección por defecto es:
    ```text
    http://127.0.0.1:8766
    ```
 4. Mantenga abierta la ventana de la consola (símbolo del sistema), donde podrá visualizar el registro de actividad (logs) en tiempo real. Para detener la bandeja, cierre la consola o presione `Ctrl + C`.
+
+La apertura automática también funciona al ejecutar Python directamente; respeta
+`--puerto` y no abre dos pestañas desde el `.bat`. Si la bandeja ya está activa,
+abre su panel sin iniciar otros vigilantes. `--sin-navegador` permite iniciar
+sin Chrome. Si no se encuentra Chrome, se informa la URL y la bandeja continúa.
 
 ---
 
