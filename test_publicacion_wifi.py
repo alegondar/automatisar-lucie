@@ -2,6 +2,9 @@
 import hashlib
 import json
 import os
+import shutil
+import ssl
+import subprocess
 import tempfile
 import threading
 import time
@@ -24,7 +27,7 @@ def setUpModule():
 
 
 class ReceptorTemporal:
-    def __init__(self):
+    def __init__(self, contexto_tls=None):
         self.preparacion = 200
         self.recepcion = 200
         self.archivos = {}
@@ -50,7 +53,7 @@ class ReceptorTemporal:
                 self.end_headers()
                 try:
                     self.wfile.write(cuerpo)
-                except (BrokenPipeError, ConnectionResetError):
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                     pass
 
             def do_GET(self):
@@ -84,6 +87,8 @@ class ReceptorTemporal:
                     self.responder(404)
 
         self.servidor = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        if contexto_tls:
+            self.servidor.socket = contexto_tls.wrap_socket(self.servidor.socket, server_side=True)
         self.servidor.daemon_threads = True
         self.hilo = threading.Thread(target=self.servidor.serve_forever, daemon=True)
         self.hilo.start()
@@ -189,6 +194,53 @@ class TestPublicacionWifi(unittest.TestCase):
             self.assertEqual(resultado["publicados"], [])
         finally:
             self.receptor.aprobacion.set()
+
+    def _receptor_https_temporal(self):
+        openssl = shutil.which("openssl")
+        if not openssl:
+            candidato = os.path.join(os.environ.get("ProgramFiles", ""), "Git", "usr", "bin", "openssl.exe")
+            if os.path.isfile(candidato):
+                openssl = candidato
+        if not openssl:
+            self.skipTest("Falta OpenSSL para generar el certificado TLS exclusivamente temporal.")
+        certificado = os.path.join(self.montaje, "certificado-temporal.pem")
+        clave = os.path.join(self.montaje, "clave-temporal.pem")
+        subprocess.run([openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+                        "-subj", "/CN=localhost", "-keyout", clave, "-out", certificado],
+                       cwd=self.montaje, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                       check=True, timeout=15)
+        contexto = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        contexto.load_cert_chain(certificado, clave)
+        receptor = ReceptorTemporal(contexto)
+        self.addCleanup(receptor.cerrar)
+        self.dispositivo = self.gestor.agregar_dispositivo("127.0.0.1", receptor.servidor.server_port)
+        self.assertEqual(self.dispositivo["protocol"], "https")
+        return receptor
+
+    def test_envio_https_con_huella_confirmada_preserva_integridad(self):
+        receptor = self._receptor_https_temporal()
+        plan = self.plan()
+        resultado = self.esperar(self.gestor.iniciar_envio(plan["token"], True)["id"])
+        self.assertEqual(resultado["estado"], "completado", resultado)
+        self.assertEqual(receptor.archivos[plan["archivos"][0]["id"]], b"video original para publicar")
+        self.assertEqual(calcular_sha256(plan["archivos"][0]["destino"]), plan["archivos"][0]["sha256"])
+
+    def test_cancelar_espera_https_no_aguarda_aceptacion_del_receptor(self):
+        receptor = self._receptor_https_temporal()
+        receptor.aprobacion.clear()
+        trabajo = self.gestor.iniciar_envio(self.plan()["token"], True)
+        self.assertTrue(receptor.solicitud.wait(3))
+        inicio = time.monotonic()
+        try:
+            self.gestor.cancelar(trabajo["id"])
+            resultado = self.esperar(trabajo["id"])
+            self.assertLess(time.monotonic() - inicio, 2)
+            self.assertEqual(resultado["estado"], "cancelado")
+            self.assertEqual(resultado["recibidos"], [])
+            self.assertEqual(resultado["publicados"], [])
+            self.assertTrue(os.path.isfile(self.video))
+        finally:
+            receptor.aprobacion.set()
 
     def test_listar_simular_no_mueve_ni_crea_registros(self):
         plan = self.plan()

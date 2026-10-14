@@ -134,8 +134,11 @@ class GestorOrganizacionPublicacion:
         for entrada in accion["foto"]:
             if entrada["archivo"]:
                 sufijo = entrada["relativa"]
-                gestor._actualizar_rutas(os.path.join(origen, sufijo) if sufijo else origen,
-                                        os.path.join(destino, sufijo) if sufijo else destino)
+                # Los sufijos del manifiesto usan '/', pero SQLite registra
+                # rutas nativas del equipo. Evitar separadores mezclados en Windows.
+                partes = sufijo.split("/") if sufijo else []
+                gestor._actualizar_rutas(os.path.join(origen, *partes),
+                                        os.path.join(destino, *partes))
         publicacion = accion.get("publicacion")
         if publicacion:
             publicacion = {**publicacion, "ruta_destino": accion["destino"], "personaje": accion["personaje"]}

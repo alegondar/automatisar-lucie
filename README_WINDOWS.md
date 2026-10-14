@@ -36,8 +36,10 @@ sin Chrome. Si no se encuentra Chrome, se informa la URL y la bandeja continúa.
 
 La entrega vigente está en **`feat/lucie-recibir`**, incluyendo publicados por
 personaje, organización manual, renovación del token tras reiniciar y Chrome
-automático. La revisión de compatibilidad de 2026-10-14 pasó en Kali con ramas
-Windows simuladas; **la suite nativa de esta entrega en Windows sigue pendiente**.
+automático. La actualización del host el 2026-10-14 incluyó dos correcciones
+nativas de rutas/cancelación: **392 pruebas OK, 11 omisiones** en Windows/Python
+3.13.0, con manifiesto estable. El usuario confirmó la publicación de estas
+correcciones en la misma rama, sobre la base descargada `c719cb2`.
 Ver resultados y límites en [ESTADO_ACTUAL.md](ESTADO_ACTUAL.md). Cada equipo
 conserva sus configuraciones y SQLite locales; no copiarlos entre sistemas.
 

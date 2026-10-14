@@ -5,6 +5,8 @@ Solo se conecta a direcciones IP locales elegidas desde el dashboard.
 """
 import hashlib
 import http.client
+import functools
+import io
 import ipaddress
 import json
 import mimetypes
@@ -25,6 +27,52 @@ PUERTO_LUCIE = 53318
 PUERTO_DESCUBRIMIENTO_LUCIE = 53319
 PUERTO_LOCALSEND = 53317
 GRUPO_DESCUBRIMIENTO = "224.0.0.167"
+
+
+class _LecturaCancelable(io.RawIOBase):
+    """Sondea la cancelación sin depender de shutdown entre hilos de Windows."""
+    def __init__(self, sock, propietario, cancelar):
+        super().__init__()
+        self.sock = sock
+        self.propietario = propietario
+        self.cancelar = cancelar
+        self.timeout_original = sock.gettimeout()
+        self.vence = time.monotonic() + (self.timeout_original or 90)
+
+    def readable(self):
+        return True
+
+    def readinto(self, buffer):
+        while True:
+            if self.cancelar.is_set():
+                raise OSError("Envío cancelado.")
+            restante = self.vence - time.monotonic()
+            if restante <= 0:
+                raise TimeoutError("El receptor no respondió a tiempo.")
+            self.sock.settimeout(min(0.1, restante))
+            try:
+                return self.sock.recv_into(buffer)
+            except socket.timeout:
+                continue
+
+    def close(self):
+        try:
+            if not self.closed:
+                try:
+                    self.sock.settimeout(self.timeout_original)
+                except OSError:
+                    pass
+            self.propietario.close()
+        finally:
+            super().close()
+
+
+class _RespuestaCancelable(http.client.HTTPResponse):
+    def __init__(self, sock, *args, cancelar, **kwargs):
+        super().__init__(sock, *args, **kwargs)
+        # Conservar el makefile original como propietario del descriptor: los
+        # servidores HTTP/1.0 pueden cerrar HTTPConnection antes de leer el cuerpo.
+        self.fp = io.BufferedReader(_LecturaCancelable(sock, self.fp, cancelar))
 
 
 class ErrorLocalSend(ValueError):
@@ -212,6 +260,7 @@ class ClienteLocalSend:
                                "sha256": a["sha256"]} for a in archivos}
         consulta = "?" + urlencode({"pin": pin}) if pin else ""
         con, _ = self._conexion(dispositivo, timeout=5)
+        con.response_class = functools.partial(_RespuestaCancelable, cancelar=cancelar)
         sesion = None
         etapa = "identidad"
         operacion = uuid.uuid4().hex
@@ -269,6 +318,7 @@ class ClienteLocalSend:
                 parametros = urlencode({"sessionId": sesion, "fileId": archivo["id"], "token": token})
                 con.close()
                 con, _ = self._conexion(dispositivo, timeout=5)
+                con.response_class = functools.partial(_RespuestaCancelable, cancelar=cancelar)
                 conexiones["actual"] = con
                 if cancelar.is_set():
                     raise ValueError("Envío cancelado.")

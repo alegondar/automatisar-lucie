@@ -1,4 +1,41 @@
-# Estado actual del sistema — 2026-10-12
+# Estado actual del sistema — 2026-10-14
+
+## Actualización del host Windows y correcciones nativas (2026-10-14)
+
+Se descargó `origin/feat/lucie-recibir` hasta **`c719cb2`** y se integraron sus
+cinco commits posteriores a `8cce55e` sin conflictos. El host continúa en la
+rama de trabajo local **`feat/lucie-recibir`**, con upstream del mismo nombre.
+Se conservaron bases/configuraciones locales y no se modificó master.
+La actualización incluye Android 0.2.0, descubrimiento independiente, publicados
+por personaje, organización manual, renovación CSRF y apertura Chrome desde Python.
+
+La primera suite nativa de Windows detectó dos fallos (390 pruebas, 11 omisiones):
+la organización mezclaba separadores en las rutas al actualizar SQLite y cancelar
+durante preparación esperó cinco segundos pese a interrumpir el socket. Se corrigió
+el armado de rutas con segmentos nativos; reintentos y deshacer conservan las
+rutas JSONL relativas. Las lecturas HTTP/HTTPS ahora consultan cancelación con
+esperas de hasta 100 ms, mantienen el límite total, propietario del descriptor
+y timeout original para conexiones reutilizables. No se relajaron aserciones.
+
+Validación final en **Windows/Python 3.13.0: 392 pruebas, OK, 11 saltadas**, en
+**72.590 segundos**. Las omisiones requieren Linux o privilegios reales de symlinks.
+Manifiesto real únicamente contado antes/después: **297 / 297** líneas, estable
+tanto en la ejecución inicial como en la final. Logs fuera del repo:
+`%TEMP%/tests_host_actualizado_20261014.log` y
+`%TEMP%/tests_host_actualizado_20261014_final.log`.
+
+La regresión existente comprueba actualización/reversión de rutas y cancelación
+en menos de dos segundos. Se añadieron envío HTTPS con huella/hash y cancelación
+HTTPS a un receptor loopback, certificado/clave efímeros generados con OpenSSL
+en temporales; ambas se ejecutaron, sin omisión. OpenSSL solo se necesita para
+esas pruebas; la aplicación sigue usando stdlib. Si realmente falta, se documenta
+la omisión de las pruebas TLS. AST **0 infracciones/26 módulos**, sintaxis de ambos
+JS, UI de publicación y CSRF, y auditoría de repo/historial correctas.
+
+No se inició la bandeja real como prueba ni se ejecutó Android, teléfono físico
+o Linux en esta sesión. El usuario confirmó el commit/push de las correcciones
+nativas y esta evidencia en `feat/lucie-recibir`. Para cargar el
+programa actualizado, reiniciar la bandeja y recargar el panel con Ctrl+F5.
 
 ## Revisión Windows y descubrimiento independiente (2026-10-14)
 
