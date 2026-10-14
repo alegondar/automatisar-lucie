@@ -21,7 +21,7 @@ class Elemento {
   replaceChildren(...items) { this.children = items; }
   addEventListener(evento, funcion) { this.events[evento] = funcion; }
   setAttribute(nombre, valor) { this[nombre] = valor; }
-  async emitir(evento) { await this.events[evento]?.(); }
+  async emitir(evento) { await (this.events[evento] || this['on' + evento])?.(); }
   set innerHTML(_) { throw Error('Los nombres de archivos deben usar textContent.'); }
 }
 
@@ -47,20 +47,23 @@ async function probar() {
   let enviados = [];
   let archivados = new Set();
   let deshechos = 0;
+  let organizados = 0;
   const llamadas = [];
-  const evento = {id_operacion: 'operacion-temporal', ruta_destino: 'videos completos/Foto.png',
+  const evento = {id_operacion: 'operacion-temporal', ruta_destino: 'videos completos/videosPublicados/mailen/Foto.png',
     dispositivo: receptor.alias, fecha: '2026-10-12'};
   async function apiFetch(url, opciones) {
     const cuerpo = opciones ? JSON.parse(opciones.body) : null;
     llamadas.push({url, cuerpo});
     if (url.endsWith('/lista')) return {conectado: true, carpeta: 'Pendrive temporal',
-      archivos: datos.filter(a => !archivados.has(a.id)), historial: archivados.size ? [evento] : []};
+      archivos: datos.filter(a => !archivados.has(a.id)), historial: archivados.size ? [evento] : [],
+      organizacion_pendiente: [{id: 'carpeta-antigua', ruta: 'videos completos/roli', tipo: 'carpeta_pendiente', personaje: 'roli'}]};
     if (url.endsWith('/buscar')) return {dispositivos: [receptor]};
     if (url.endsWith('/simular')) {
       assert.deepStrictEqual(cuerpo.seleccion, esperados, 'Se incluyeron archivos ajenos al filtro.');
       assert.strictEqual(cuerpo.dispositivo_id, receptor.id);
+      assert.deepStrictEqual(cuerpo.personajes, esperados.includes('archivo-4') ? {'archivo-4': 'roli'} : {});
       return {token: 'plan-temporal', dispositivo: receptor, total_bytes: 5000,
-        archivos: datos.filter(a => esperados.includes(a.id)).map(a => ({...a, destino_rel: 'videos completos/' + a.nombre})),
+        archivos: datos.filter(a => esperados.includes(a.id)).map(a => ({...a, destino_rel: 'videos completos/videosPublicados/' + a.personaje + '/' + a.nombre})),
         aviso: 'La recepción es señal de publicación.'};
     }
     if (url.endsWith('/enviar')) {
@@ -78,6 +81,15 @@ async function probar() {
       assert.strictEqual(cuerpo.id_operacion, evento.id_operacion);
       archivados.clear();
       deshechos++;
+      return {exito: true};
+    }
+    if (url.endsWith('/organizar-simular')) {
+      assert.deepStrictEqual(cuerpo.seleccion, [{id: 'carpeta-antigua', personaje: 'roli'}]);
+      return {token: 'organizacion-temporal', acciones: [{ruta: 'videos completos/roli', destino: 'videos completos/videos sin publicar/roli', archivos: 2, bytes: 1234}]};
+    }
+    if (url.endsWith('/organizar')) {
+      assert.strictEqual(cuerpo.token, 'organizacion-temporal');
+      assert.strictEqual(cuerpo.confirmacion, true); organizados++;
       return {exito: true};
     }
     throw Error('API inesperada: ' + url);
@@ -138,6 +150,27 @@ async function probar() {
   await el('wifi-historial').children[0].children[1].emitir('click');
   assert.strictEqual(deshechos, 1);
   assert.strictEqual(tarjetas().length, 1);
+  el('wifi-personaje').value = 'sin_asignar'; el('wifi-filtro').value = '';
+  await el('wifi-personaje').emitir('change');
+  await el('wifi-todos').emitir('click'); esperados = ['archivo-4'];
+  const antes = llamadas.filter(l => l.url.endsWith('/simular')).length;
+  await el('wifi-preparar').emitir('click');
+  assert.strictEqual(llamadas.filter(l => l.url.endsWith('/simular')).length, antes, 'Sin personaje no se prepara ni envía.');
+  const asignacion = tarjetas()[0].children.find(c => c.tag === 'label' && c.children.some(e => e.tag === 'select')).children[0];
+  asignacion.value = 'roli'; await asignacion.emitir('change');
+  await el('wifi-preparar').emitir('click');
+  assert.strictEqual(llamadas.at(-1).cuerpo.personajes['archivo-4'], 'roli');
+  const vieja = el('wifi-plan').children[3];
+  asignacion.value = 'lucie'; await asignacion.emitir('change');
+  await vieja.emitir('click');
+  assert.deepStrictEqual(enviados, ['archivo-3'], 'Cambiar personaje invalida la confirmación anterior.');
+  const marcar = el('wifi-organizacion-lista').children[0].children[0].children[0];
+  assert(!marcar.checked, 'La organización no preselecciona carpetas.');
+  marcar.checked = true; await marcar.emitir('change');
+  await el('wifi-organizacion-revisar').emitir('click');
+  assert.strictEqual(organizados, 0, 'La simulación no mueve material.');
+  await el('wifi-organizacion-plan').children[1].emitir('click');
+  assert.strictEqual(organizados, 1);
   console.log('UI OK: grupos, imágenes/video, rutas, filtros, selección visible, invalidación, envío e historial. ' + llamadas.length + ' llamadas simuladas.');
 }
 

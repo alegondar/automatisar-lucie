@@ -3,6 +3,8 @@
   'use strict';
   if (typeof document === 'undefined' || !document.getElementById('sec-publicacion')) return;
   let archivos = [];
+  const personajesElegidos = new Map();
+  let organizacionPlan = null;
   let seleccion = new Set();
   let plan = null;
   let trabajo = null;
@@ -73,7 +75,7 @@
       if (personaje === 'sin_asignar') {
         const ayuda = document.createElement('p');
         ayuda.className = 'wifi-ayuda';
-        ayuda.textContent = 'No se conoce el personaje de estos archivos. Revisá la vista previa antes de enviarlos.';
+        ayuda.textContent = 'No se conoce el personaje de estos archivos. Elegí su personaje en cada tarjeta antes de enviarlos.';
         seccion.append(ayuda);
       }
       const rejilla = document.createElement('div');
@@ -133,6 +135,22 @@
         abrir.rel = 'noopener';
         abrir.textContent = 'Abrir vista previa';
         fila.append(cabecera, marco, detalle, carpeta, abrir);
+        if (archivo.personaje === 'sin_asignar') {
+          const asignacion = document.createElement('label');
+          asignacion.textContent = 'Personaje para publicar ';
+          const selector = document.createElement('select');
+          selector.setAttribute('aria-label', 'Personaje de ' + archivo.nombre);
+          selector.add(new Option('Elegí el personaje', ''));
+          for (const p of ['lucie', 'roli', 'mailen']) selector.add(new Option(etiquetasPersonaje[p], p));
+          selector.value = personajesElegidos.get(archivo.id) || '';
+          selector.disabled = Boolean(trabajo);
+          selector.addEventListener('change', () => {
+            personajesElegidos.set(archivo.id, selector.value);
+            invalidarPlan();
+          });
+          asignacion.append(selector);
+          fila.append(asignacion);
+        }
         rejilla.append(fila);
         preview.dataset.src = url + (archivo.tipo === 'imagen' ? '' : '#t=0.1');
         if (observadorPreviews) observadorPreviews.observe(preview);
@@ -164,6 +182,8 @@
     try {
       const datos = await apiFetch('/api/publicacion/lista');
       archivos = datos.archivos || [];
+      for (const id of personajesElegidos.keys()) if (!archivos.some(a => a.id === id)) personajesElegidos.delete(id);
+      dibujarOrganizacion(datos);
       const disponibles = new Set(archivosVisibles().map(a => a.id));
       seleccion = new Set([...seleccion].filter(id => disponibles.has(id)));
       texto('wifi-carpeta', datos.conectado ? datos.carpeta : datos.mensaje);
@@ -193,6 +213,77 @@
         historial.append(fila);
       }
     } catch (error) { estado(error.message); }
+  }
+
+  function dibujarOrganizacion(datos) {
+    const lista = el('wifi-organizacion-lista');
+    const candidatos = datos.organizacion_pendiente || [];
+    const historial = datos.organizaciones || [];
+    el('wifi-organizacion').style.display = candidatos.length || historial.length ? 'block' : 'none';
+    lista.replaceChildren();
+    el('wifi-organizacion-plan').replaceChildren();
+    organizacionPlan = null;
+    const opciones = [];
+    for (const candidato of candidatos) {
+      const fila = document.createElement('div');
+      const etiqueta = document.createElement('label');
+      const tilde = document.createElement('input'); tilde.type = 'checkbox'; tilde.disabled = Boolean(trabajo);
+      const nombre = document.createElement('span');
+      nombre.textContent = candidato.ruta + (candidato.tipo === 'publicado' ? ' · publicado confirmado' : ' · carpeta pendiente');
+      etiqueta.append(tilde, nombre); fila.append(etiqueta);
+      let personaje = null;
+      if (!candidato.personaje) {
+        personaje = document.createElement('select');
+        personaje.setAttribute('aria-label', 'Personaje de ' + candidato.ruta);
+        personaje.add(new Option('Elegí el personaje', ''));
+        for (const p of ['lucie', 'roli', 'mailen']) personaje.add(new Option(etiquetasPersonaje[p], p));
+        fila.append(personaje);
+      }
+      const invalidar = () => { organizacionPlan = null; el('wifi-organizacion-plan').replaceChildren(); };
+      tilde.addEventListener('change', invalidar);
+      if (personaje) personaje.addEventListener('change', invalidar);
+      lista.append(fila); opciones.push({candidato, tilde, personaje});
+    }
+    el('wifi-organizacion-revisar').disabled = Boolean(trabajo) || !candidatos.length;
+    el('wifi-organizacion-revisar').onclick = async () => {
+      const elegidos = opciones.filter(o => o.tilde.checked).map(o => ({id: o.candidato.id, personaje: o.personaje ? o.personaje.value : o.candidato.personaje}));
+      if (!elegidos.length) { estado('Marcá las carpetas o publicados que quieras organizar.'); return; }
+      try {
+        organizacionPlan = await peticion('organizar-simular', {seleccion: elegidos});
+        const detalle = document.createElement('ul');
+        for (const a of organizacionPlan.acciones) {
+          const item = document.createElement('li');
+          item.textContent = a.ruta + ' → ' + a.destino + ' · ' + a.archivos + ' archivos · ' + bytes(a.bytes);
+          detalle.append(item);
+        }
+        const confirmar = document.createElement('button');
+        confirmar.className = 'btn-sm'; confirmar.textContent = 'Confirmar organización';
+        confirmar.addEventListener('click', async () => {
+          if (!organizacionPlan || trabajo) return;
+          const token = organizacionPlan.token; organizacionPlan = null; confirmar.disabled = true;
+          try {
+            const resultado = await peticion('organizar', {token, confirmacion: true});
+            estado(resultado.exito ? 'Organización completada. Podés deshacer cada traslado.' : 'Organización parcial: ' + resultado.error);
+            await cargar();
+          } catch (error) { estado(error.message); }
+        });
+        el('wifi-organizacion-plan').replaceChildren(detalle, confirmar);
+        estado('Revisá la organización. Todavía no se movió ningún archivo.');
+      } catch (error) { estado(error.message); }
+    };
+    const movimientos = el('wifi-organizacion-historial'); movimientos.replaceChildren();
+    for (const movimiento of historial) {
+      const fila = document.createElement('div');
+      const etiqueta = document.createElement('span'); etiqueta.textContent = movimiento.accion.ruta + ' → ' + movimiento.accion.destino + ' ';
+      const deshacer = document.createElement('button'); deshacer.className = 'btn-sm btn-secundario';
+      deshacer.textContent = 'Deshacer organización'; deshacer.disabled = Boolean(trabajo);
+      deshacer.addEventListener('click', async () => {
+        if (!confirm('¿Devolver este contenido a su ubicación anterior? No se borrará ni sobrescribirá material.')) return;
+        try { await peticion('deshacer-organizacion', {id_organizacion: movimiento.id_organizacion}); await cargar(); }
+        catch (error) { estado(error.message); }
+      });
+      fila.append(etiqueta, deshacer); movimientos.append(fila);
+    }
   }
 
   async function buscar() {
@@ -233,7 +324,15 @@
     estado('Calculando integridad y revisando los destinos…');
     invalidarPlan();
     try {
-      plan = await peticion('simular', {seleccion: [...seleccion], dispositivo_id: el('wifi-dispositivo').value});
+      const personajes = {};
+      for (const id of seleccion) {
+        const archivo = archivos.find(a => a.id === id);
+        if (archivo && archivo.personaje === 'sin_asignar') {
+          if (!personajesElegidos.get(id)) throw new Error('Elegí el personaje de ' + archivo.nombre + ' antes de enviar.');
+          personajes[id] = personajesElegidos.get(id);
+        }
+      }
+      plan = await peticion('simular', {seleccion: [...seleccion], dispositivo_id: el('wifi-dispositivo').value, personajes});
       const cont = el('wifi-plan');
       cont.style.display = 'block';
       const titulo = document.createElement('h3');

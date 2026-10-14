@@ -1,5 +1,45 @@
 # Estado actual del sistema — 2026-10-12
 
+## Publicados separados por personaje (2026-10-14)
+
+El usuario confirmó un envío real al Motorola y pidió corregir la ubicación
+posterior. La causa era el cálculo del destino: solo retiraba el nivel Sin
+publicar y un nombre numérico sin sesión quedaba sin personaje. Ahora se archiva
+en **videos completos/videosPublicados/lucie, roli o mailen**, conservando carpetas
+de capítulo y nombre. Una tarjeta Sin asignar exige elegir personaje antes de
+simular; el filtro no asigna. El plan y el registro incluyen el personaje.
+
+La tarjeta **Organizar completos anteriores** permite seleccionar carpetas
+pendientes o publicados confirmados, revisar destinos y confirmar el grupo.
+No se ejecuta al iniciar/listar. Verifica estructura/hash, identidad, ausencia de
+enlaces y destinos libres; usa traslado sin reemplazo. Actualiza las rutas
+locales de sesiones/exports y el historial de publicación. Deshacer organización
+conserva el contenido y rechaza colisiones o contenido nuevo/cambiado. La lectura
+puede recuperar un traslado con registro final interrumpido, sin mover nada.
+Los conteos de Edición reconocen Sin publicar y videosPublicados.
+
+Reorganización real solicitada: se simuló y aplicó el grupo explícitamente
+indicado por el usuario, con las carpetas/rutas históricas intactas. El publicado
+numérico fue a videosPublicados/roli; las dos carpetas históricas de Lucie/Roli
+fueron a Sin publicar. Resultado: ocho pendientes, un publicado y tres traslados
+con registro y Deshacer. Cinco archivos verificados, sin borrado/fusión/overwrite.
+La auditoría encontró un duplicado exacto; ambas copias se conservan. Plan y
+resultado generados quedaron en el temporal del sistema, fuera de Git. No se
+sincronizaron bases/configuraciones de otros equipos ni se reenviaron archivos.
+
+Validación **Kali/Python 3.13.12: 381 tests OK, cinco saltos Windows**, 51.132 s.
+Manifiesto solo leído para el control de suite: **279 / 279 líneas**, estable.
+La organización real se realizó después de ese control y añadió sus registros
+append-only autorizados; no se usó el pendrive como fixture. Log externo:
+`/tmp/tests_publicados_personaje_381.log`. AST **0 infracciones en 25 módulos**;
+sintaxis JS y test UI (13 llamadas simuladas) OK. Trece tests de organización
+cubren personajes, fechas, confirmación/CSRF, colisiones, cambios, enlaces,
+actualización de rutas, recuperación, deshacer e IDs de archivos tras remontar.
+Windows nativo de este lote no se ejecutó.
+
+Código y documentación en `feat/lucie-recibir`; el usuario autorizó expresamente
+el commit y push de este lote el 2026-10-14. Ver [uso y organización](docs/publicacion-wifi.md).
+
 ## Corrección de puertos y pantalla Android (2026-10-13)
 
 La versión 0.1.0 instalada en el Moto G54 5G / Android 15 mostraba fallo de

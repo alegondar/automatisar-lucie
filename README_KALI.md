@@ -47,7 +47,8 @@ no se sincronizan. Las carpetas históricas no se reorganizan automáticamente.
 - Galería con vistas previas de videos/fotos, carpetas visibles y filtros por
   Lucie, Roli, Mailen y Sin asignar. Selección limitada a los archivos visibles.
 - Emisor LocalSend integrado, revisión previa, progreso, recepción confirmada,
-  traslado al nivel anterior y Deshacer. Los originales de CapCut se conservan.
+  archivo en `videosPublicados/<personaje>`, organización manual de históricos
+  y Deshacer. Los originales de CapCut se conservan.
 
 El código de estos flujos es común a Linux y Windows. Windows utiliza renombrado
 sin reemplazar destinos; Linux utiliza `renameat2(RENAME_NOREPLACE)`. Si el sistema

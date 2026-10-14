@@ -6249,7 +6249,12 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
             self.assertEqual(status, 200)
             status, plan = self._post("/api/publicacion/simular", {"seleccion": [listado["archivos"][0]["id"]],
                 "dispositivo_id": descubiertos["dispositivos"][0]["id"]})
+            self.assertEqual(status, 409)
+            status, plan = self._post("/api/publicacion/simular", {"seleccion": [listado["archivos"][0]["id"]],
+                "dispositivo_id": descubiertos["dispositivos"][0]["id"],
+                "personajes": {listado["archivos"][0]["id"]: "roli"}})
             self.assertEqual(status, 200)
+            self.assertEqual(plan["archivos"][0]["destino_rel"], "videos completos/videosPublicados/roli/wifi-api.mp4")
             self.assertTrue(os.path.isfile(video))
             self.assertFalse(os.path.exists(plan["archivos"][0]["destino"]))
             status, _ = self._post("/api/publicacion/enviar", {"token": plan["token"], "confirmacion": False})

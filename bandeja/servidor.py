@@ -680,7 +680,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
         if ruta in ("/api/publicacion/buscar", "/api/publicacion/conectar", "/api/publicacion/simular",
                     "/api/publicacion/enviar", "/api/publicacion/cancelar", "/api/publicacion/deshacer",
-                    "/api/publicacion/resguardar"):
+                    "/api/publicacion/resguardar", "/api/publicacion/organizar-simular",
+                    "/api/publicacion/organizar", "/api/publicacion/deshacer-organizacion"):
             self._handle_publicacion(ruta, body)
         elif ruta == "/api/pendrive/eliminacion-simular":
             self._handle_eliminacion(body, simular=True)
@@ -758,7 +759,13 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             elif ruta.endswith("/conectar"):
                 resultado = {"dispositivo": self.publicacion.agregar_dispositivo(body.get("ip"), body.get("puerto", 53318))}
             elif ruta.endswith("/simular"):
-                resultado = self.publicacion.simular(body.get("seleccion"), body.get("dispositivo_id"))
+                resultado = self.publicacion.simular(body.get("seleccion"), body.get("dispositivo_id"), body.get("personajes"))
+            elif ruta.endswith("/organizar-simular"):
+                resultado = self.publicacion.organizacion.simular(body.get("seleccion"))
+            elif ruta.endswith("/organizar"):
+                resultado = self.publicacion.organizacion.ejecutar(body.get("token"), body.get("confirmacion"))
+            elif ruta.endswith("/deshacer-organizacion"):
+                resultado = self.publicacion.organizacion.deshacer(body.get("id_organizacion"))
             elif ruta.endswith("/enviar"):
                 resultado = self.publicacion.iniciar_envio(body.get("token"), body.get("confirmacion"), body.get("pin", ""))
             elif ruta.endswith("/cancelar"):

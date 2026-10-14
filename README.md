@@ -162,8 +162,8 @@ python3 instalar_hooks.py
 
 **Sin publicar · Enviar al celular** integra un emisor Wi-Fi compatible con LocalSend.
 Los nuevos completos quedan en `videos completos/videos sin publicar/`; después
-de recibirlos en el dispositivo elegido, pasan al nivel anterior con registro y
-Deshacer. Los originales de CapCut se conservan. Ver [Uso, conexión y reglas de
+de recibirlos en el dispositivo elegido, pasan a
+`videos completos/videosPublicados/<personaje>/` con registro y Deshacer. Los originales de CapCut se conservan. Ver [Uso, conexión y reglas de
 publicación](docs/publicacion-wifi.md). El receptor propio
 [Lucie Recibir para Android](android/README.md) permite aprobar y guardar los
 archivos sin instalar LocalSend; APK inicial probado en emulador, pendiente
@@ -193,7 +193,10 @@ La fecha corresponde al momento del traslado o copia, según el reloj local del
 equipo, con semana del mes por bloques de días. Los clips de una misma edición
 se agrupan en ella. Los completos sin sesión inequívoca se resguardan directamente
 en Sin publicar por nombre/versionado; no se inventa su asociación. Al confirmar
-la recepción en el celular se retira únicamente el nivel `videos sin publicar`.
+la recepción en el celular se trasladan a `videosPublicados/<personaje>/`,
+conservando nombres y carpetas de capítulo. Los numéricos sin personaje requieren
+elegirlo en su tarjeta. La organización de completos anteriores es manual, con
+simulación, confirmación, registro y deshacer; no se fusionan ni sobrescriben destinos.
 
 ### Exports de CapCut y videos completados
 

@@ -21,6 +21,7 @@ from bandeja.edicion import registrar_evento_manifiesto_edicion
 from bandeja.plataforma import mover_sin_sobrescribir
 
 CARPETA_SIN_PUBLICAR = "videos sin publicar"
+CARPETA_PUBLICADOS = "videosPublicados"
 EXTENSIONES_IMAGEN = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp")
 EXTENSIONES_VIDEO = (".mp4", ".mov", ".webm", ".mkv")
 
@@ -53,6 +54,8 @@ class GestorPublicacion:
         self._trabajos = {}
         self._cancelaciones = {}
         self._lock = threading.RLock()
+        from bandeja.organizacion_publicacion import GestorOrganizacionPublicacion
+        self.organizacion = GestorOrganizacionPublicacion(self)
 
     def _identidad(self):
         pen = detectar_pendrive(self.config)
@@ -150,6 +153,7 @@ class GestorPublicacion:
         ruta = os.path.join(raiz, ".lucie", "manifiesto.jsonl")
         sin_enlaces(ruta)
         publicados = {}
+        preparados = {}
         if not os.path.isfile(ruta):
             return []
         with open(ruta, "r", encoding="utf-8") as archivo:
@@ -162,6 +166,18 @@ class GestorPublicacion:
                     publicados[evento["id_operacion"]] = evento
                 elif evento.get("tipo_evento") == "deshacer_publicacion_wifi":
                     publicados.pop(evento.get("id_operacion"), None)
+                elif evento.get("tipo_evento") == "organizacion_completada":
+                    preparados.pop(evento.get("id_organizacion"), None)
+                    publicacion = evento.get("publicacion")
+                    if publicacion and publicacion.get("id_operacion") in publicados:
+                        publicados[publicacion["id_operacion"]] = publicacion
+                elif evento.get("tipo_evento") == "organizacion_preparada":
+                    preparados[evento["id_organizacion"]] = evento
+        for evento in preparados.values():
+            recuperado = self.organizacion.recuperar(raiz, evento)
+            publicacion = recuperado.get("publicacion") if recuperado else None
+            if publicacion and publicacion.get("id_operacion") in publicados:
+                publicados[publicacion["id_operacion"]] = publicacion
         eventos = []
         for evento in list(publicados.values())[::-1]:
             if evento["tipo_evento"] == "recepcion_wifi_confirmada":
@@ -184,6 +200,8 @@ class GestorPublicacion:
             return {"conectado": False, "archivos": [], "historial": [], "mensaje": str(e)}
         return {"conectado": True, "archivos": list(self._inventario(identidad).values()),
                 "historial": self._historial(identidad[1]),
+                "organizacion_pendiente": self.organizacion.candidatos(identidad),
+                "organizaciones": self.organizacion.historial(identidad[1]),
                 "carpeta": os.path.join(identidad[1], "videos completos", CARPETA_SIN_PUBLICAR)}
 
     def _guardar_dispositivo(self, dispositivo):
@@ -198,11 +216,14 @@ class GestorPublicacion:
     def agregar_dispositivo(self, ip, puerto=PUERTO_LUCIE):
         return self._guardar_dispositivo(self.cliente.probar(ip, puerto))
 
-    def simular(self, seleccion, dispositivo_id):
+    def simular(self, seleccion, dispositivo_id, personajes=None):
         if not isinstance(seleccion, list) or not seleccion or len(seleccion) > 50 or any(not isinstance(i, str) for i in seleccion):
             raise ValueError("Elegí entre uno y cincuenta videos.")
         if not isinstance(dispositivo_id, str):
             raise ValueError("Elegí un dispositivo válido.")
+        personajes = {} if personajes is None else personajes
+        if not isinstance(personajes, dict) or not set(personajes).issubset(seleccion):
+            raise ValueError("Asignación de personajes inválida.")
         with self._lock:
             dispositivo = self._dispositivos.get(dispositivo_id)
         if not dispositivo:
@@ -210,18 +231,28 @@ class GestorPublicacion:
         identidad = self._identidad()
         inventario = self._inventario(identidad)
         archivos = []
+        destinos = set()
         for identificador in dict.fromkeys(seleccion):
             entrada = inventario.get(identificador)
             if not entrada:
                 raise ValueError("Un video seleccionado ya no está en Videos sin publicar.")
+            personaje = personaje_conocido(personajes.get(identificador, entrada["personaje"]))
+            if not personaje:
+                raise ValueError("Elegí Lucie, Roli o Mailen para " + entrada["nombre"] + " antes de enviar.")
+            if entrada["personaje"] != "sin_asignar" and personaje != entrada["personaje"]:
+                raise ValueError("La asignación contradice el personaje de la carpeta o sesión.")
             origen = self._ruta(identidad[1], entrada["ruta"])
             relativa = entrada["ruta"].removeprefix("videos completos/" + CARPETA_SIN_PUBLICAR + "/")
-            destino_rel = "videos completos/" + relativa
+            partes = relativa.split("/")
+            if len(partes) > 1 and personaje_conocido(partes[0]):
+                partes = partes[1:]
+            destino_rel = "videos completos/" + CARPETA_PUBLICADOS + "/" + personaje + "/" + "/".join(partes)
             destino = self._ruta(identidad[1], destino_rel)
-            if os.path.exists(destino):
+            if destino_rel in destinos or os.path.lexists(destino):
                 raise FileExistsError("Ya existe el destino de publicación: " + destino_rel + ". No se sobrescribe.")
+            destinos.add(destino_rel)
             st = os.stat(origen)
-            archivos.append({**entrada, "origen": origen, "destino": destino, "destino_rel": destino_rel,
+            archivos.append({**entrada, "personaje": personaje, "origen": origen, "destino": destino, "destino_rel": destino_rel,
                              "sha256": calcular_sha256(origen), "firma": (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)})
         token = secrets.token_urlsafe(32)
         with self._lock:
@@ -230,7 +261,7 @@ class GestorPublicacion:
                                    "vence": time.monotonic() + 300}
         return {"token": token, "dispositivo": dispositivo, "archivos": archivos,
                 "total_bytes": sum(a["tamano"] for a in archivos),
-                "aviso": "Al recibir los videos en el celular, se consideran publicados y pasan al nivel videos completos. Esto no verifica Instagram."}
+                "aviso": "Tras la recepción, pasan a videos completos/videosPublicados separados por personaje. Esto no verifica Instagram."}
 
     def _validar_archivo(self, plan, archivo):
         if self._identidad() != plan["identidad"]:
@@ -307,7 +338,7 @@ class GestorPublicacion:
             evento = {"id_evento": str(uuid.uuid4()), "id_operacion": id_operacion,
                       "fecha": datetime.datetime.now().isoformat(), "ruta_origen": archivo["ruta"],
                       "ruta_destino": archivo["destino_rel"], "sha256": archivo["sha256"],
-                      "bytes": archivo["tamano"], "dispositivo": plan["dispositivo"]["alias"]}
+                      "bytes": archivo["tamano"], "personaje": archivo["personaje"], "dispositivo": plan["dispositivo"]["alias"]}
             registrar_evento_manifiesto_edicion(raiz, {**evento, "tipo_evento": "recepcion_wifi_confirmada"})
             with self._lock:
                 self._trabajos[identificador]["recibidos"].append(archivo["nombre"])

@@ -50,7 +50,7 @@ Los asociados conservan personaje/edición; los exports sin sesión inequívoca
 se resguardan por nombre/versionado, sin adivinar una sesión. No reorganizar
 videos anteriores automáticamente. El modo manual y Deshacer siguen vigentes.
 El usuario autoriza usar una recepción Wi-Fi confirmada como señal de publicación:
-se quita solo el nivel `videos sin publicar`, después de aceptación e integridad,
+se traslada a `videos completos/videosPublicados/<personaje>/`, después de aceptación e integridad,
 con simulación, confirmación, registro y reversión. Esto no comprueba publicaciones
 en Instagram. No borrar ni sobrescribir archivos, ni marcar publicados envíos
 rechazados, incompletos o con checksum fallido. Ver [Publicación y Wi-Fi](docs/publicacion-wifi.md).
@@ -135,3 +135,19 @@ Esta regla sustituye el anterior sufijo de solo mes y año. Las carpetas y rutas
 históricas no se renombran ni migran automáticamente. Reintentos y deshacer usan
 las rutas registradas. La nueva excepción de limpieza solo retira directorios
 vacíos de capítulos enviados; los originales siguen conservados en `_enviados`.
+
+## Publicados por personaje y organización manual (2026-10-14)
+
+La recepción confirmada se archiva en videos completos/videosPublicados/lucie,
+roli o mailen, conservando capítulo/nombre. Los numéricos sin personaje exigen
+una elección explícita en la tarjeta; un filtro no asigna ni adivina personajes.
+Los nuevos destinos incluyen personaje en plan y registro. Deshacer respeta las
+rutas originales registradas, también para publicaciones anteriores.
+
+La organización histórica se ejecuta únicamente para elementos seleccionados y
+simulados: carpetas pendientes a videos sin publicar/personaje y archivos sueltos
+confirmados a videosPublicados/personaje. No se ejecuta al arrancar, listar ni
+buscar. No fusiona destinos existentes ni atraviesa enlaces/junctions. Verifica
+estructura/hash, actualiza rutas locales y registra preparación/finalización.
+Deshacer organización rechaza destinos ocupados o contenido añadido/cambiado;
+conserva archivos y directorios. No borrar ni renombrar automáticamente históricos.

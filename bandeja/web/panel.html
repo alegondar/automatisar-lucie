@@ -108,7 +108,15 @@
         <progress id="wifi-progreso" value="0" max="100" style="display:none;width:100%;"></progress>
         <button class="btn-sm btn-secundario" id="wifi-cancelar" style="display:none;">Cancelar envío</button>
       </div>
-      <div class="card"><h2>Enviados al celular</h2><div id="wifi-historial"></div></div>
+      <div class="card"><h2>Enviados al celular · videosPublicados</h2><div id="wifi-historial"></div></div>
+      <div class="card" id="wifi-organizacion" style="display:none;">
+        <h2>Organizar completos anteriores</h2>
+        <p>Marcá las carpetas pendientes que irán a Sin publicar o los publicados confirmados que irán a videosPublicados. Revisá los destinos antes de confirmar; no se fusionan carpetas ni se sobrescribe material.</p>
+        <div id="wifi-organizacion-lista"></div>
+        <button class="btn-sm" id="wifi-organizacion-revisar">Revisar organización</button>
+        <div id="wifi-organizacion-plan"></div>
+        <div id="wifi-organizacion-historial"></div>
+      </div>
     </section>
     <section id="sec-eliminacion" style="display:none;">
       <div class="eliminacion-cabecera">

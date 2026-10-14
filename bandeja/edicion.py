@@ -290,7 +290,7 @@ def obtener_secciones_edicion(
                     ruta_abs = os.path.join(raiz, arch)
                     rel = os.path.relpath(ruta_abs, dir_completos)
                     partes = rel.split(os.sep)
-                    if partes[0] == "videos sin publicar":
+                    if partes[0] in ("videos sin publicar", "videosPublicados"):
                         partes = partes[1:]
                     capitulo = capitulos_por_ruta.get(os.path.normcase(os.path.abspath(ruta_abs))) or (partes[1] if len(partes) > 2 else "sin_capitulo")
                     _asegurar_conteo(capitulo)
