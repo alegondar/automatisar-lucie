@@ -3730,14 +3730,10 @@
       const primerClip = sesionModalClips[0];
       const capitulo = primerClip.capitulo;
 
-      // Calcular sugerencia de nombre
-      let sugerencia = '';
-      if (sesionModalClips.length === 1) {
-        const nombreSinExt = primerClip.nombre.replace(/\.[^/.]+$/, "");
-        sugerencia = nombreSinExt.toLowerCase().replace(/[^a-z0-9_]/g, "") + 'videocompleto';
-      } else {
-        sugerencia = capitulo.toLowerCase().replace(/[^a-z0-9_]/g, "") + 'videocompleto';
-      }
+      // El servidor comparte el mismo título legible con carpetas y exports.
+      const sugerencia = sesionModalClips.length === 1
+        ? (primerClip.nombre_sesion_sugerido ?? primerClip.nombre.replace(/\.[^/.]+$/, ''))
+        : (primerClip.nombre_capitulo_sugerido ?? capitulo);
 
       document.getElementById('input-nombre-sesion').value = sugerencia;
       document.getElementById('conteo-clips-modal').innerText = String(sesionModalClips.length);

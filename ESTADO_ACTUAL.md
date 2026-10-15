@@ -26,6 +26,57 @@ físico no se ejecutaron en esta sesión. Para cargar la versión, iniciar norma
 la bandeja y recargar el panel con **Ctrl+F5**. Las sesiones anteriores terminadas
 sin export pueden usar **Revisar video final**; no se importan históricos al instalar.
 
+## Títulos legibles sin fecha duplicada (2026-10-15)
+
+La sugerencia del modal de edición eliminaba espacios, guiones y acentos del
+capítulo fechado, y añadía `videocompleto`; el nombre por defecto Python
+también quitaba espacios. Al copiar el export se agregaba otra fecha a ese
+título aplastado. El mismo nombre llegaba al `.mp4` y a la carpeta de salida.
+
+`bandeja/edicion.py` centraliza ahora los títulos: conserva palabras, acentos,
+mayúsculas y separadores, y retira únicamente etiquetas finales generadas de
+video completo y día/semana/mes/año. Reconoce fechas documentadas, pegadas y
+repetidas, incluidas las letras acentuadas perdidas por el antiguo JS. La API
+entrega al modal las sugerencias para un clip o para el capítulo completo;
+`panel.js` deja de aplastar el texto. El campo sigue siendo editable.
+
+Ejemplo de nueva salida:
+`videos completos/videos sin publicar/lucie/Caballero lo estamos llamando - jueves - semana 3 - octubre - 2026/Caballero lo estamos llamando.mp4`.
+La fecha conserva el formato y cálculo vigentes según el reloj del traslado.
+Ya editados mantiene su excepción:
+`videoyaeditado_Caballero_lo_estamos_llamando_semana_3_octubre_2026`.
+
+Para nuevas salidas de sesiones antiguas, solo recupera espacios si el capítulo
+o un clip conserva un único título legible equivalente. Si faltan referencias
+o hay separaciones ambiguas, no inventa palabras. No reescribe nombres en la
+base local ni renombra material existente; se mantienen el export original de
+CapCut, las rutas registradas, las colisiones, los reintentos y Deshacer.
+
+Validación final **Windows/Python 3.13.0: 420 pruebas, OK, 11 omisiones**, en
+**70.958 s**. Las omisiones existentes requieren Linux o privilegios de symlinks;
+se conservaron guardia y aserciones. Manifiesto real exclusivamente contado:
+**325 / 325**, estable en ambas ejecuciones completas. Log externo:
+`%TEMP%/tests_nombres_legibles_20261015.log`. Cinco regresiones nuevas cubren
+limpieza de sufijos, títulos antiguos/ambiguos, sugerencias y copia con hash,
+extensión MOV, colisiones y reversión. Las expectativas antiguas del defecto
+se actualizaron a los nombres legibles, conservando sus controles de seguridad.
+La prueba UI comprueba el modal de uno/varios clips y los acentos. Sintaxis JS,
+UI de edición, Wi-Fi y CSRF, AST **0/27**, auditoría repo/historial y diff
+correctos. La restricción del entorno bloqueó inicialmente la creación del
+HOME temporal; las pruebas se ejecutaron con el permiso correspondiente sin
+relajar la guardia. No se inició la bandeja real ni se usaron archivos reales
+como fixtures; Linux y teléfono físico no ejecutados para este lote. Para
+cargar la corrección, reiniciar la bandeja y recargar el panel con Ctrl+F5.
+
+Trabajo local en `feat/lucie-recibir`, desde `add96b1`. Fetch detectó únicamente
+`c42e928` entrante en `origin/feat/lucie-recibir` (documentación de Kali), sin
+commits locales previos pendientes ni novedades ajenas sin integrar. El usuario
+autorizó expresamente integrar ese commit y hacer commit/push de esta corrección
+el **2026-10-15**, en la misma rama de trabajo, sin modificar master.
+La entrega incorpora `c42e928` como base. Se conservaron ambas secciones de
+estado al resolver el único conflicto de documentación; el código validado
+permanece idéntico al de la suite de 420 pruebas.
+
 ## Terminé de editar revisa y copia el video final (2026-10-14)
 
 El botón antes finalizaba únicamente los clips crudos; una copia final pendiente

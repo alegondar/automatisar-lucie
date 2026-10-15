@@ -20,6 +20,8 @@ from bandeja.config import ConfiguracionBandeja, calcular_sha256
 from bandeja.db import GestorBaseDatosBandeja
 from bandeja.edicion import (
     calcular_nombre_defecto,
+    nombre_video_legible,
+    nombre_video_sesion,
     nombre_carpeta_video,
     nombre_carpeta_ya_editado,
     obtener_secciones_edicion,
@@ -283,17 +285,116 @@ class TestEdicionCapCut(unittest.TestCase):
 
     def test_calculo_nombre_defecto(self):
         """Verifica la lógica de nombrado para capítulos y clips individuales."""
-        # Varios clips -> <capítulo>videocompleto.mp4
+        # Varios clips -> título del capítulo, con sus separadores.
         nombre_var = calcular_nombre_defecto(["clip1.mp4", "clip2.mp4"], "capitulo_01")
-        self.assertEqual(nombre_var, "capitulo_01videocompleto.mp4")
+        self.assertEqual(nombre_var, "capitulo_01.mp4")
 
-        # Un solo clip -> <clip>videocompleto.mp4
+        # Un solo clip -> título del clip, con sus separadores.
         nombre_uno = calcular_nombre_defecto(["escena_lucie.mp4"], "capitulo_01")
-        self.assertEqual(nombre_uno, "escena_lucievideocompleto.mp4")
+        self.assertEqual(nombre_uno, "escena_lucie.mp4")
 
         # Nombres con caracteres especiales o espacios
         nombre_esp = calcular_nombre_defecto(["clip 01 (toma 2).mp4"], "capítulo 01!")
-        self.assertEqual(nombre_esp, "clip01(toma2)videocompleto.mp4")
+        self.assertEqual(nombre_esp, "clip 01 (toma 2).mp4")
+
+    def test_titulo_sin_fechas_heredadas_ni_etiquetas_repetidas(self):
+        titulo = "Caballero lo estamos llamando"
+        fecha = " - jueves - semana 3 - octubre - 2026"
+        for sufijo in (fecha, fecha + "videocompleto", fecha * 2 + " video completo",
+                       "juevessemana3octubre2026videocompleto",
+                       "juevessemana3deoctubre2026videocompleto",
+                       "_jueves_semana_3_de_octubre_2026_video_completo"):
+            with self.subTest(sufijo=sufijo):
+                self.assertEqual(nombre_video_legible(titulo + sufijo + ".mp4"), titulo)
+                self.assertEqual(nombre_carpeta_video(titulo + sufijo, datetime.datetime(2026, 10, 15)), titulo + fecha)
+                self.assertEqual(nombre_carpeta_ya_editado(titulo + sufijo, datetime.datetime(2026, 10, 15)),
+                                 "videoyaeditado_Caballero_lo_estamos_llamando_semana_3_octubre_2026")
+        for nombre in ("Jueves en octubre 2026", "Semana 3 del viaje", "Mi video (15)", "Cap. 2 - Café y canción 🎬"):
+            self.assertEqual(nombre_video_legible(nombre + ".mov"), nombre)
+        self.assertEqual(calcular_nombre_defecto(["Café y canción 🎬.mp4"], "otro"), "Café y canción 🎬.mp4")
+        self.assertEqual(nombre_video_legible('Mi: video?'), 'Mi_ video_')
+        self.assertEqual(nombre_video_legible('CON.mp4'), '_CON')
+        self.assertEqual(nombre_video_legible('...'), 'edicion')
+        for dia in ("miércoles", "miercoles", "mircoles", "sábado", "sabado", "sbado"):
+            self.assertEqual(nombre_video_legible(titulo + dia + "semana3octubre2026videocompleto"), titulo)
+
+    def test_sesion_antigua_recupera_espacios_solo_del_titulo_equivalente(self):
+        sesion = {"nombre": "caballeroloestamosllamandojuevessemana3deoctubre2026videocompleto",
+                  "capitulo": "caballero lo estamos llamando - jueves - semana 3 - octubre - 2026"}
+        self.assertEqual(nombre_video_sesion(sesion), "caballero lo estamos llamando")
+        sesion["capitulo"] = "otro capítulo"
+        self.assertEqual(nombre_video_sesion(sesion), "caballeroloestamosllamando")
+        sesion["clips"] = ["lucie/otro/caballero lo estamos llamando.mp4"]
+        self.assertEqual(nombre_video_sesion(sesion), "caballero lo estamos llamando")
+        sesion["capitulo"] = "caballero loestamos llamando"
+        self.assertEqual(nombre_video_sesion(sesion), "caballeroloestamosllamando")
+        sesion["nombre"] = "Mi título elegido"
+        self.assertEqual(nombre_video_sesion(sesion), "Mi título elegido")
+
+    def test_sugerencias_y_copia_conservan_titulo_sin_repetir_fecha(self):
+        titulo = "Caballero lo estamos llamando"
+        capitulo = titulo + " - jueves - semana 3 - octubre - 2026"
+        self._crear_clip_crudo("lucie", capitulo, "Toma 1.mp4")
+        self._crear_clip_crudo("lucie", capitulo, "Toma 2.mp4")
+        datos = obtener_secciones_edicion(self.pendrive_montaje, self.db)
+        for clip in datos["para_editar"]:
+            self.assertEqual(clip["nombre_sesion_sugerido"], os.path.splitext(clip["nombre"])[0])
+            self.assertEqual(clip["nombre_capitulo_sugerido"], titulo)
+        sesion = crear_sesion(self.db, [c["ruta_relativa"] for c in datos["para_editar"]], "lucie", capitulo)
+        self.assertEqual(sesion["nombre_final_defecto"], titulo + ".mp4")
+        export = os.path.join(self.tmp_dir, "export.mp4")
+        with open(export, "xb") as archivo:
+            archivo.write(b"video original")
+        self.reloj.datetime.now.return_value = datetime.datetime(2026, 10, 15)
+        copia = copiar_export_a_videos_completos(export, sesion, self.pendrive_montaje, self.db,
+                                               self.carpeta_raiz, self.bitacora_path)
+        self.assertEqual(copia["destino"], os.path.join(self.pendrive_raiz, "videos completos", "videos sin publicar",
+                                                     "lucie", capitulo, titulo + ".mp4"))
+        self.assertEqual(calcular_sha256(export), calcular_sha256(copia["destino"]))
+        self.assertTrue(os.path.isfile(export))
+        with self.assertRaises(FileExistsError):
+            copiar_export_a_videos_completos(export, sesion, self.pendrive_montaje, self.db,
+                                            self.carpeta_raiz, self.bitacora_path)
+        deshecho = deshacer_copia_completo(copia["destino"], self.pendrive_montaje, self.db,
+                                          self.carpeta_raiz, self.bitacora_path)
+        self.assertEqual(calcular_sha256(export), calcular_sha256(deshecho["ruta_revertida"]))
+
+    def test_copia_de_sesion_heredada_limpia_solo_el_nuevo_destino(self):
+        sesion = crear_sesion(self.db, ["lucie/cap/toma.mp4"], "lucie",
+                              "caballero lo estamos llamando - jueves - semana 3 - octubre - 2026",
+                              "caballeroloestamosllamandojuevessemana3octubre2026videocompleto.mov")
+        export = os.path.join(self.tmp_dir, "export.mov")
+        with open(export, "xb") as archivo:
+            archivo.write(b"export")
+        copia = copiar_export_a_videos_completos(export, sesion, self.pendrive_montaje, self.db,
+                                               self.carpeta_raiz, self.bitacora_path)
+        self.assertEqual(os.path.basename(copia["destino"]), "caballero lo estamos llamando.mov")
+        self.assertIn("caballero lo estamos llamando - domingo - semana 2 - octubre - 2026", copia["destino"])
+        self.assertEqual(self.db.obtener_sesion_por_id(sesion["id"])["nombre"], sesion["nombre"])
+        self.assertEqual(calcular_sha256(export), calcular_sha256(copia["destino"]))
+
+    def test_titulo_limpio_no_pisa_destino_ni_copia_otra_vez_un_historico(self):
+        antiguo = "Caballerojuevessemana3octubre2026videocompleto"
+        sesion = crear_sesion(self.db, ["lucie/cap/toma.mp4"], "lucie", "cap", antiguo)
+        export = os.path.join(self.tmp_dir, "export.mp4")
+        with open(export, "xb") as archivo:
+            archivo.write(b"nuevo")
+        historico = os.path.join(self.pendrive_raiz, "videos completos", "lucie", "cap", antiguo + ".mp4")
+        destino = os.path.join(self.pendrive_raiz, "videos completos", "videos sin publicar", "lucie",
+                               "Caballero - domingo - semana 2 - octubre - 2026", "Caballero.mp4")
+        for ocupado in (destino, historico):
+            os.makedirs(os.path.dirname(ocupado), exist_ok=True)
+            with open(ocupado, "xb") as archivo:
+                archivo.write(b"preexistente")
+            with self.assertRaises(FileExistsError):
+                copiar_export_a_videos_completos(export, sesion, self.pendrive_montaje, self.db,
+                                                self.carpeta_raiz, self.bitacora_path)
+            with open(ocupado, "rb") as archivo:
+                self.assertEqual(archivo.read(), b"preexistente")
+        self.assertIsNone(self.db.obtener_sesion_por_id(sesion["id"])["video_completo_ruta"])
+        self.assertFalse(os.path.exists(self.bitacora_path))
+        with open(export, "rb") as archivo:
+            self.assertEqual(archivo.read(), b"nuevo")
 
     def test_carpeta_video_mes_y_anio(self):
         for dia in (1, 7, 8, 14, 15, 21, 22, 28, 29, 31):
@@ -390,7 +491,7 @@ class TestEdicionCapCut(unittest.TestCase):
             capitulo="cap01",
         )
         self.assertEqual(sesion["estado"], "en_edicion")
-        self.assertEqual(sesion["nombre_final_defecto"], "clip1videocompleto.mp4")
+        self.assertEqual(sesion["nombre_final_defecto"], "clip1.mp4")
         self.assertTrue(os.path.isfile(ruta_clip))
 
         # Cancelar sesión
@@ -572,9 +673,9 @@ class TestEdicionCapCut(unittest.TestCase):
         self.assertTrue(os.path.isfile(dest_final))
         self.assertEqual(dest_final, os.path.join(
             self.pendrive_raiz, "videos completos", "videos sin publicar", "lucie",
-            "cap01videocompleto - domingo - semana 2 - octubre - 2026", "cap01videocompleto.mp4",
+            "cap01 - domingo - semana 2 - octubre - 2026", "cap01.mp4",
         ))
-        self.assertEqual(os.listdir(os.path.dirname(dest_final)), ["cap01videocompleto.mp4"])
+        self.assertEqual(os.listdir(os.path.dirname(dest_final)), ["cap01.mp4"])
         # El hash obtenido coincide con el origen
         self.assertEqual(calcular_sha256(export_file), res_copia["sha256"])
         conteos = obtener_secciones_edicion(self.pendrive_montaje, self.db, self.carpeta_raiz)["conteos_capitulo"]

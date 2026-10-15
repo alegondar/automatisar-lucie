@@ -22,10 +22,11 @@ import os
 import re
 import shutil
 import threading
+import unicodedata
 import uuid
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from bandeja.config import ConfiguracionBandeja, calcular_sha256
+from bandeja.config import ConfiguracionBandeja, NOMBRES_RESERVADOS_WINDOWS, calcular_sha256
 from bandeja.db import GestorBaseDatosBandeja
 from bandeja.carpetas_vacias import retirar_carpetas_vacias_traslado
 from bandeja.pendrive import NOMBRE_MANIFIESTO_PENDRIVE, operacion_pendrive_exclusiva
@@ -35,11 +36,51 @@ logger = logging.getLogger("bandeja_edicion")
 _lock_manifiesto_edicion = threading.Lock()
 
 
+def nombre_video_legible(nombre: str) -> str:
+    """Título sin etiquetas/fechas generadas; conserva palabras, acentos y separadores."""
+    base = unicodedata.normalize("NFC", str(nombre or "")).strip()
+    base = re.sub(r"(?i)\.(mp4|mov|mkv|webm|mp3)$", "", base)
+    # La antigua sugerencia JS también eliminaba las letras acentuadas.
+    dias = r"lunes|martes|mi[eé]?rcoles|jueves|viernes|s[aá]?bado|domingo"
+    meses = r"enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre"
+    separador = r"[\s_-]*"
+    fecha_generada = (
+        rf"{separador}(?:{dias}){separador}semana{separador}[1-5]"
+        rf"{separador}(?:de{separador})?(?:{meses}){separador}[0-9]{{4}}$"
+    )
+    # También acepta el sufijo aplastado por las sugerencias antiguas. Repetir
+    # permite quitar fecha + videocompleto, incluso si se añadieron varias veces.
+    while True:
+        anterior = base
+        base = re.sub(r"(?i)[\s_-]*video[\s_-]*completo$", "", base)
+        base = re.sub(fecha_generada, "", base, flags=re.IGNORECASE).strip(" _-")
+        if base == anterior:
+            break
+    base = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", base)
+    base = re.sub(r"\s+", " ", base).strip(" .") or "edicion"
+    if base.split(".")[0].upper() in NOMBRES_RESERVADOS_WINDOWS:
+        base = "_" + base
+    return base
+
+
+def nombre_video_sesion(sesion: Dict[str, Any]) -> str:
+    """Recupera espacios antiguos solo si el capítulo/clip conserva el mismo título."""
+    base = nombre_video_legible(sesion.get("nombre") or sesion.get("nombre_final_defecto"))
+    if " " in base:
+        return base
+    clave = re.sub(r"[\W_]+", "", base).casefold()
+    candidatos = [sesion.get("capitulo") or ""]
+    candidatos.extend(os.path.basename(c) for c in sesion.get("clips", []))
+    titulos = {nombre_video_legible(candidato) for candidato in candidatos if candidato}
+    equivalentes = {titulo for titulo in titulos if " " in titulo and re.sub(r"[\W_]+", "", titulo).casefold() == clave}
+    return equivalentes.pop() if len(equivalentes) == 1 else base
+
+
 def nombre_carpeta_video(nombre: str, fecha: Optional[datetime.datetime] = None) -> str:
     """Nombre del video, día, semana del mes, mes español y año del traslado."""
     fecha = fecha or datetime.datetime.now()
     from bandeja.clasificacion import nombre_carpeta_documentado
-    base = os.path.splitext(os.path.basename(nombre))[0]
+    base = nombre_video_legible(nombre)
     return nombre_carpeta_documentado(base, fecha)
 
 
@@ -47,9 +88,7 @@ def nombre_carpeta_ya_editado(nombre: str, fecha: Optional[datetime.datetime] = 
     """Etiqueta de crudos editados, independiente del nombre del export final."""
     fecha = fecha or datetime.datetime.now()
     meses = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre")
-    base = os.path.splitext(os.path.basename(nombre))[0].strip()
-    base = re.sub(r"(?i)[ _-]*video[ _-]*completo$", "", base).strip(" _-")
-    base = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", base)
+    base = nombre_video_legible(nombre)
     base = re.sub(r"\s+", "_", base).strip(" ._") or "edicion"
     return f"videoyaeditado_{base}_semana_{(fecha.day - 1) // 7 + 1}_{meses[fecha.month - 1]}_{fecha.year}"
 
@@ -113,25 +152,9 @@ def _copiar_crudo_bloqueado(origen, destino, sha_esperado, pendrive_raiz):
 
 
 def calcular_nombre_defecto(clips: List[str], capitulo: str) -> str:
-    """
-    Calcula el nombre por defecto del video final:
-    - Si hay múltiples clips o sesión para capítulo: <capítulo>videocompleto.mp4
-    - Si hay un solo clip: <nombre_sin_ext>videocompleto.mp4
-    """
-    cap_limpio = (capitulo or "capitulo").strip().lower()
-    for char in '<>:"/\\|?* .':
-        cap_limpio = cap_limpio.replace(char, "")
-
-    if len(clips) == 1:
-        base_clip = os.path.basename(clips[0])
-        nombre_sin_ext, _ = os.path.splitext(base_clip)
-        limpio = nombre_sin_ext.strip().lower()
-        for char in '<>:"/\\|?* .':
-            limpio = limpio.replace(char, "")
-        if limpio:
-            return f"{limpio}videocompleto.mp4"
-
-    return f"{cap_limpio}videocompleto.mp4"
+    """Un clip usa su título; varios usan el capítulo, sin repetir su fecha."""
+    origen = os.path.basename(clips[0]) if len(clips) == 1 else (capitulo or "capitulo")
+    return f"{nombre_video_legible(origen)}.mp4"
 
 
 def registrar_evento_manifiesto_edicion(
@@ -266,6 +289,8 @@ def obtener_secciones_edicion(
                             "tamano": tamano,
                             "mtime": mtime,
                             "tipo": "audio" if arch.lower().endswith(".mp3") else "video",
+                            "nombre_sesion_sugerido": calcular_nombre_defecto([arch], capitulo)[:-4],
+                            "nombre_capitulo_sugerido": calcular_nombre_defecto([], capitulo)[:-4],
                         }
                         if id_media:
                             clip_dict["id_media"] = id_media
@@ -472,7 +497,7 @@ def finalizar_edicion_crudos(
         ruta_dest = destinos_registrados.get(rel_clip) or (
             ruta_anterior if os.path.exists(ruta_anterior) else os.path.join(
                 dir_ya_editados, sesion["personaje"],
-                nombre_carpeta_ya_editado(sesion.get("nombre") or sesion["nombre_final_defecto"], fecha_traslado),
+                nombre_carpeta_ya_editado(nombre_video_sesion(sesion), fecha_traslado),
                 os.path.basename(ruta_anterior)))
         if not esta_confinado_en_raiz(ruta_orig, base_orig) or not esta_confinado_en_raiz(ruta_dest, dir_ya_editados):
             conflictos.append({"clip": rel_clip, "error": "Ruta no confinada en el pendrive"})
@@ -493,7 +518,7 @@ def finalizar_edicion_crudos(
         if not ruta_dest:
             ruta_dest = ruta_anterior if os.path.exists(ruta_anterior) else os.path.join(
                 dir_ya_editados, sesion["personaje"],
-                nombre_carpeta_ya_editado(sesion.get("nombre") or sesion["nombre_final_defecto"], fecha_traslado),
+                nombre_carpeta_ya_editado(nombre_video_sesion(sesion), fecha_traslado),
                 os.path.basename(ruta_anterior),
             )
 
@@ -723,12 +748,14 @@ def copiar_export_a_videos_completos(
     pendrive_raiz = os.path.join(pendrive_montaje, carpeta_raiz)
     personaje = sesion.get("personaje", "general")
     capitulo = sesion.get("capitulo", "sin_capitulo")
-    nombre_final = sesion.get("nombre") or sesion.get("nombre_final_defecto")
-    if not nombre_final.lower().endswith((".mp4", ".mov")):
-        nombre_final = f"{nombre_final}.mp4"
+    nombre_anterior = sesion.get("nombre") or sesion.get("nombre_final_defecto")
+    extension = ".mov" if nombre_anterior.lower().endswith(".mov") else ".mp4"
+    nombre_final = nombre_video_sesion(sesion) + extension
+    if not nombre_anterior.lower().endswith((".mp4", ".mov")):
+        nombre_anterior += ".mp4"
 
     dir_completos = os.path.join(pendrive_raiz, "videos completos", personaje, capitulo)
-    ruta_anterior = os.path.join(dir_completos, nombre_final)
+    ruta_anterior = os.path.join(dir_completos, nombre_anterior)
     sesion_actual = db.obtener_sesion_por_id(sesion["id"]) or sesion
     ruta_registrada = sesion_actual.get("video_completo_ruta")
     if ruta_registrada and esta_confinado_en_raiz(ruta_registrada, pendrive_raiz) and os.path.exists(ruta_registrada):

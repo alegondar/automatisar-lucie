@@ -177,7 +177,7 @@ de verificar en el Motorola físico.
 
 Las nuevas carpetas de **videos ya editados** usan
 `videoyaeditado_<nombre>_semana_<del mes>_<mes>_<año>`, dentro del personaje.
-Por ejemplo: `videoyaeditado_lucieinvitacafe_semana_2_octubre_2026`.
+Por ejemplo: `videoyaeditado_Lucie_invita_a_café_semana_2_octubre_2026`.
 Se quita el sufijo generado `videocompleto` del nombre base. Esta excepción
 solo cambia los nuevos destinos de crudos editados; las rutas registradas
 anteriormente siguen disponibles para reintentos y deshacer.
@@ -247,6 +247,18 @@ corresponde al tratamiento de los clips crudos.
 Las rutas efectivas quedan registradas para permitir reintentos y deshacer aunque
 cambie la fecha. Los archivos existentes conservan su estructura anterior y no se
 reorganizan automáticamente. Los destinos ocupados se respetan sin sobrescribir.
+
+Desde el 2026-10-15, la sugerencia de edición conserva espacios, acentos y
+mayúsculas. El título base de las nuevas salidas quita el sufijo generado
+`videocompleto` y la fecha documentada del capítulo, incluso si una sugerencia
+anterior los había pegado. La carpeta agrega una sola fecha del traslado y el
+archivo conserva solo el título: por ejemplo,
+`Caballero lo estamos llamando - jueves - semana 3 - octubre - 2026/Caballero lo estamos llamando.mp4`.
+En ya editados se conserva el formato `videoyaeditado_...` con guiones bajos.
+Si una sesión antigua tiene el título pegado, se recuperan sus espacios solo
+cuando el capítulo o un clip conserva el mismo título legible; sin esa evidencia
+no se inventa una separación de palabras. No se renombran salidas existentes,
+no se altera el export original de CapCut ni se cambian las rutas de Deshacer.
 
 ### Audio MP3
 

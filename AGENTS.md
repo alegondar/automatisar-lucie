@@ -40,6 +40,14 @@ se usan guiones bajos como separadores. Las salidas de `videos completos` y los
 capítulos conservan su formato vigente; no renombrar rutas históricas automáticamente.
 Los videos quedan directamente dentro de su carpeta de salida, sin niveles
 adicionales de semana ni subcarpetas de capítulo.
+Corrección de títulos (2026-10-15): conservar espacios, acentos y mayúsculas en
+las sugerencias de edición y en nuevos completos. Quitar del título base los
+sufijos generados `videocompleto` y día/semana/mes/año heredados, también si
+quedaron pegados; la carpeta agrega la fecha vigente una sola vez y el archivo
+usa `<título>.mp4` (o `.mov` cuando corresponde). Ya editados conserva su formato
+`videoyaeditado_...`. Recuperar espacios de títulos antiguos solo a partir de un
+capítulo o clip con el mismo título legible, sin adivinar palabras. No renombrar
+material existente; reintentos y Deshacer respetan las rutas registradas.
 CapCut conserva sus originales. Ver el mapa de módulos, API, estados, modo manual,
 reintentos, reversión y validaciones en `ESTADO_ACTUAL.md`.
 

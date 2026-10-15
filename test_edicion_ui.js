@@ -47,6 +47,30 @@ async function probar() {
   assert.equal(llamadas.filter(c => c.ruta === '/api/edicion/terminar').length, 2);
   ctx.renderizarSesionesEsperandoExport([], []);
   assert.equal(cont.children.length, 0);
+  const campos = new Map();
+  const titulo = 'Caballero lo estamos llamando';
+  const capitulo = titulo + ' - jueves - semana 3 - octubre - 2026';
+  const clips = [1, 2].map(n => ({identificador: String(n), personaje: 'lucie', capitulo,
+    nombre: `Toma ${n}.mp4`, nombre_sesion_sugerido: `Toma ${n}`, nombre_capitulo_sugerido: titulo}));
+  ctx.document.getElementById = id => {
+    if (!campos.has(id)) campos.set(id, {style: {}, value: '', innerHTML: '', innerText: ''});
+    return campos.get(id);
+  };
+  ctx.clipsParaEditar = clips;
+  ctx.clipsSeleccionadosParaEditar = new Set(['1', '2']);
+  vm.runInContext('let sesionModalClips = [];', ctx);
+  vm.runInContext(extraer('abrirModalCrearSesion', 'cerrarModalCrearSesion'), ctx);
+  ctx.abrirModalCrearSesion();
+  assert.equal(campos.get('input-nombre-sesion').value, titulo);
+  assert.equal(campos.get('conteo-clips-modal').innerText, '2');
+  assert.equal(campos.get('modal-crear-sesion').style.display, 'flex');
+  ctx.clipsSeleccionadosParaEditar = new Set(['1']);
+  ctx.abrirModalCrearSesion();
+  assert.equal(campos.get('input-nombre-sesion').value, 'Toma 1');
+  assert.equal(campos.get('conteo-clips-modal').innerText, '1');
+  clips[0].nombre_sesion_sugerido = 'Café y canción 🎬';
+  ctx.abrirModalCrearSesion();
+  assert.equal(campos.get('input-nombre-sesion').value, 'Café y canción 🎬');
   console.log('Edición UI OK: pendientes visibles, revisión explícita, destino y errores de copia.');
 }
 probar().catch(error => {console.error(error); process.exitCode = 1;});
