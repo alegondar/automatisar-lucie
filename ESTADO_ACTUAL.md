@@ -1,5 +1,31 @@
 # Estado actual del sistema — 2026-10-15
 
+## Actualización del host Kali desde GitHub (2026-10-15)
+
+Se descargaron e integraron por fast-forward los commits `46dd8e5` y `add96b1`
+de `origin/feat/lucie-recibir`, desde `c719cb2`, por pedido explícito del usuario.
+La rama local continúa en **`feat/lucie-recibir`**, en **`add96b1`**, coincidente
+con su upstream. Las demás ramas remotas son antecedentes integrados.
+Se conservaron bases/configuraciones locales y material; no se modificó master.
+Incluye rutas/cancelación HTTP y HTTPS, revisión y copia del export al terminar,
+pendientes visibles y retirada limitada de carpetas vacías tras operaciones exitosas.
+
+Validación **Kali/Linux, Python 3.13.12: 415 pruebas OK, cinco saltadas**, en
+**57.177 s**. Las cinco requieren capacidades nativas Windows (socket exclusivo,
+compartición/bloqueo y archivos abiertos). Se conservaron guardia y aserciones.
+La primera ejecución dentro del sandbox no pudo crear sockets locales
+(`PermissionError`, 81 errores); se repitió fuera de esa restricción, sin cambiar
+las pruebas. Log final externo: `/tmp/tests_host_kali_20261015_nativo.log`.
+Manifiesto antes/después: **no disponible / no disponible**, sin pendrive montado;
+no son recuentos cero. Todas las pruebas usaron temporales y receptores loopback.
+
+AST: **0 infracciones/27 módulos**. Sintaxis JS, UI de edición/publicación/CSRF y
+auditoría de 234 archivos rastreados e historial correctas. No se inició la
+bandeja real ni se enviaron archivos reales para probar. Windows nativo y teléfono
+físico no se ejecutaron en esta sesión. Para cargar la versión, iniciar normalmente
+la bandeja y recargar el panel con **Ctrl+F5**. Las sesiones anteriores terminadas
+sin export pueden usar **Revisar video final**; no se importan históricos al instalar.
+
 ## Terminé de editar revisa y copia el video final (2026-10-14)
 
 El botón antes finalizaba únicamente los clips crudos; una copia final pendiente
