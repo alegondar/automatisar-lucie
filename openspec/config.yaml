@@ -17,6 +17,7 @@ context: |
   - Salidas de edición: categoria/personaje/nombre - mes español - año/, con videos directamente dentro; sin semana ni subcarpetas de capítulo. No migrar estructuras anteriores automáticamente.
   - CapCut conserva sus originales. La copia recibe el nombre de la sesión. Regla autorizada 2026-10-12: una única sesión en_edicion pendiente tiene prioridad sobre editadas antiguas; varias en_edicion exigen elección. Sin en_edicion, solo una única editada pendiente permite asociación automática. El modo automático retoma un único export vigente sin asignar generado desde el inicio de esa única edición; no asocia históricos ni elige entre varios exports recientes.
   - El envío automático de exports corresponde a autorización expresa del usuario para ese flujo específico, conservando colisiones, hash, registro y reversión; no extiende permisos a otras acciones. envio_exports_capcut=manual exige envío explícito desde Videos completados.
+  - CIERRE Y EXPORT (2026-10-14): Terminé de editar organiza los clips y revisa el único export vigente para copiarlo a videos completos/videos sin publicar en modo automático. La sesión terminada sin copia queda visible con Revisar video final. Se retoma la revisión tras reiniciar; un export preexistente solo puede recuperarse dentro de la ventana confirmada de esa sesión, con estabilidad y exclusividad. Varios candidatos o ventanas superpuestas requieren elección explícita. Mantener modo manual, históricos ajenos y bloqueo de reenvío tras Deshacer. El dashboard no ejecuta la exportación del proyecto dentro de CapCut.
   - Pruebas herméticas exclusivamente temporales. No tocar Descargas, CapCut ni pendrive reales; para la suite solo contar el manifiesto en lectura antes/después, y detenerse si cambia.
   - Windows usa CreateFileW sin compartir para comprobar exclusividad; Linux conserva fcntl.flock. Preservar ambos sistemas.
   - Consultar ESTADO_ACTUAL.md para módulos, API, estados, reintentos, deshacer, reproducción y evidencia de validación; no confundir propuestas históricas con el comportamiento actual.
@@ -26,6 +27,15 @@ context: |
   - PUBLICACIÓN WI-FI AUTORIZADA (2026-10-12): Nuevos completos se resguardan en videos completos/videos sin publicar. Los exports sin sesión se conservan por nombre/versionado sin asignación ficticia. El envío seleccionado, simulado y confirmado desde el dashboard a un receptor LocalSend usa SHA-256 y su aceptación/confirmación. Solo después se traslada a videos completos/videosPublicados/<personaje> sin sobrescritura, actualizando rutas y registrando reversión. La recepción se considera señal de publicación por elección del usuario; no se consulta Instagram. Rechazos, cancelación, desconexión o checksum fallido conservan los no recibidos en la cola. No migrar material histórico automáticamente.
 
 # Regla vigente de archivo Wi-Fi (2026-10-14): videos completos/videosPublicados/personaje,
+# La revisión tras reiniciar exige revision_export_solicitada, registrada al
+# terminar o revisar explícitamente la sesión. Las sesiones previas mantienen 0;
+# ofrecer Revisar video final sin importar sus exports al instalar la actualización.
+# Excepción de carpetas vacías (2026-10-14): tras finalizar edición o completar
+# envío Wi-Fi con integridad y registros, retirar exclusivamente padres vacíos
+# de archivos trasladados. Solo os.rmdir(ruta) en retirar_carpetas_vacias_traslado
+# de bandeja/carpetas_vacias.py. Conservar raíces/personajes/resguardos/enlaces,
+# contenido nuevo y capítulos ajenos. No limpiar tras fallos/parciales ni
+# retroactivamente. Deshacer recrea los padres originales.
 # conservando carpetas/nombres. Numéricos sin personaje requieren elección explícita.
 # Organización histórica manual seleccionada/simulada/confirmada, sin fusión ni borrado,
 # con estructura/hash, actualización de rutas, registro append-only y deshacer.

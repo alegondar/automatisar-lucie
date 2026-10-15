@@ -448,13 +448,14 @@
         <div class="card-header">
           <div>
             <h2>2. En edición (sesiones activas)</h2>
-            <small style="color:var(--text-muted)">Sesiones en curso. Al terminar de editar en CapCut, confirmá el paso a 'videos ya editados'.</small>
+            <small style="color:var(--text-muted)">«Terminé de editar» organiza los clips en 'videos ya editados' y revisa el export final para copiarlo a 'videos completos/videos sin publicar'.</small>
           </div>
           <div style="display:flex; gap:8px; align-items:center;">
             <button class="btn-sm" onclick="cargarVistaEdicion()">Actualizar sesiones</button>
           </div>
         </div>
         <div id="contenedor-en-edicion">Cargando sesiones...</div>
+        <div id="contenedor-esperando-export"></div>
       </div>
 
       <!-- 3. Editados y completos (resumen por capítulo) -->

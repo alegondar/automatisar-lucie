@@ -64,6 +64,8 @@ from bandeja.edicion import (
     sumar_videos_sesion,
     cancelar_sesion,
     finalizar_edicion_crudos,
+    revisar_export_terminado,
+    registrar_exports_revision_ambigua,
     deshacer_finalizar_edicion,
     copiar_export_a_videos_completos,
     deshacer_copia_completo,
@@ -735,6 +737,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._handle_edicion_cancelar_sesion(body)
         elif ruta == "/api/edicion/terminar":
             self._handle_edicion_terminar(body)
+        elif ruta == "/api/edicion/revisar-export":
+            self._handle_edicion_revisar_export(body)
         elif ruta == "/api/edicion/deshacer-terminar":
             self._handle_edicion_deshacer_terminar(body)
         elif ruta == "/api/capcut/asignar-export":
@@ -1465,9 +1469,51 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
         try:
             res = finalizar_edicion_crudos(self.db, int(sesion_id), punto_pen, carpeta_raiz, ruta_bit)
+            if res["exito"]:
+                res["export_final"] = self._revisar_export_sesion(int(sesion_id), punto_pen, carpeta_raiz, ruta_bit)
             self._enviar_json(res)
         except Exception as e:
             self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al finalizar edición: {e}")
+
+    def _revisar_export_sesion(self, sesion_id, punto_pen, carpeta_raiz, ruta_bit):
+        try:
+            automatico = self.config.envio_exports_capcut == "automatico"
+            estado = revisar_export_terminado(self.db, sesion_id, punto_pen, carpeta_raiz, ruta_bit, automatico,
+                                             self.config.obtener_carpeta_exportacion_capcut())
+            sesion = self.db.obtener_sesion_por_id(sesion_id)
+            if automatico and estado["modo"] == "esperando_export" and not sesion.get("export_asociado"):
+                if self.vigilante_capcut:
+                    revision = self.vigilante_capcut.revisar_export_sesion(sesion, self.db.obtener_sesiones_edicion())
+                    if revision["modo"] == "ambiguo":
+                        registrar_exports_revision_ambigua(self.db, revision)
+                        estado = {"modo": "ambiguo", "mensaje": "Hay varios exports o sesiones posibles. Elegí el video en Videos completados."}
+                    elif revision["modo"] == "esperando_estabilidad":
+                        estado = {"modo": "esperando_estabilidad", "mensaje": "Export encontrado. Se copiará automáticamente al estabilizarse y quedar libre de escritura."}
+                    elif revision["modo"] == "error":
+                        estado = revision
+                else:
+                    estado = {"modo": "error", "mensaje": "El vigilante de CapCut no está disponible. Reiniciá la bandeja para detectar el export."}
+            return estado
+        except (OSError, ValueError) as error:
+            return {"modo": "error", "mensaje": str(error)}
+
+    def _handle_edicion_revisar_export(self, body):
+        try:
+            if type(body.get("sesion_id")) is not int:
+                raise ValueError("Sesión inválida.")
+            pen = detectar_pendrive(self.config)
+            if not pen or not pen.get("conectado"):
+                raise ValueError("Conectá el pendrive para revisar el video final.")
+            sesion = self.db.obtener_sesion_por_id(body["sesion_id"])
+            if not sesion or not sesion.get("fecha_cierre"):
+                raise ValueError("Primero confirmá Terminé de editar en esta sesión.")
+            self.db.actualizar_sesion_edicion(sesion["id"], revision_export_solicitada=1)
+            punto = pen.get("punto_montaje") or pen.get("ruta_montaje")
+            ruta_bit = getattr(self.movimientos, "ruta_bitacora", "bitacora_bandeja.jsonl")
+            estado = self._revisar_export_sesion(body["sesion_id"], punto, self.config.carpeta_raiz_pendrive, ruta_bit)
+            self._enviar_json({"exito": estado["modo"] != "error", "export_final": estado})
+        except (OSError, ValueError) as error:
+            self._enviar_error(HTTPStatus.CONFLICT, str(error))
 
     def _handle_edicion_deshacer_terminar(self, body: Dict[str, Any]):
         sesion_id = body.get("sesion_id")

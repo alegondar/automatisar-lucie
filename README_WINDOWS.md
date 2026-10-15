@@ -85,6 +85,15 @@ Este script evaluará el sistema, rutas, nombres reservados, codificación y exc
 
 ## 7. Edición, CapCut y reproducción
 
+**Terminé de editar** organiza los clips y revisa el export final para copiarlo
+automáticamente a `videos completos/videos sin publicar` cuando sea inequívoco
+y esté libre de escritura. Si aún falta, la sesión terminada queda visible con
+**Revisar video final**. Después de actualizar, reiniciar la bandeja y recargar
+con Ctrl+F5; ese botón permite revisar una sesión que ya se había terminado.
+El proyecto debe exportarse desde CapCut; terminar la sesión del panel no genera
+el video. Si hay varios candidatos, elegir en Videos completados. El modo manual
+sigue esperando el envío explícito.
+
 Para enviarlos por Wi-Fi, abrir **Sin publicar · Enviar al celular**, seleccionar
 videos y el receptor LocalSend, revisar y confirmar. Abrir LocalSend en el celular
 conectado a la misma red y aceptar la recepción. Si la búsqueda falla, se puede

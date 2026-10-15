@@ -15,6 +15,7 @@ import unicodedata
 import uuid
 
 from bandeja.config import calcular_sha256
+from bandeja.carpetas_vacias import retirar_carpetas_vacias_traslado
 from bandeja.localsend import ClienteLocalSend, PUERTO_LUCIE
 from bandeja.pendrive import detectar_pendrive, operacion_pendrive_exclusiva
 from bandeja.edicion import registrar_evento_manifiesto_edicion
@@ -300,6 +301,7 @@ class GestorPublicacion:
             self._trabajos[identificador] = {"id": identificador, "estado": "en_curso", "fase": "preparando", "mensaje": "Preparando envío",
                                             "bytes_enviados": 0, "total_bytes": sum(a["tamano"] for a in plan["archivos"]),
                                             "publicados": [], "recibidos": [], "error": None}
+            self._trabajos[identificador]["carpetas_vacias_retiradas"] = []
             self._cancelaciones[identificador] = threading.Event()
         threading.Thread(target=self._enviar, args=(identificador, plan, pin), daemon=True,
                          name="LucieEnvioWifi").start()
@@ -360,6 +362,12 @@ class GestorPublicacion:
                     "id_envio": identificador, "dispositivo": plan["dispositivo"]["alias"],
                     "archivos": [{"ruta": a["ruta"], "sha256": a["sha256"]} for a in plan["archivos"]]})
                 self.cliente.enviar(plan["dispositivo"], plan["archivos"], recibido, progreso, cancelacion, pin)
+                with self._lock:
+                    completo = len(self._trabajos[identificador]["publicados"]) == len(plan["archivos"])
+                if completo:
+                    retiradas = retirar_carpetas_vacias_traslado(raiz, [a["origen"] for a in plan["archivos"]])
+                    with self._lock:
+                        self._trabajos[identificador]["carpetas_vacias_retiradas"] = retiradas
             with self._lock:
                 if len(self._trabajos[identificador]["publicados"]) != len(plan["archivos"]):
                     raise ValueError("No se confirmó la recepción y archivo de todos los videos.")

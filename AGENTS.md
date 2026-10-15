@@ -45,6 +45,18 @@ reintentos, reversión y validaciones en `ESTADO_ACTUAL.md`.
 
 ## Cola de publicación y Wi-Fi (2026-10-12)
 
+Al confirmar «Terminé de editar» (corrección 2026-10-14), además de organizar
+los clips, revisar el único export vigente de esa sesión y copiarlo a la cola
+en modo automático. Si falta o sigue escribiéndose, mantener visible la sesión
+terminada pendiente del video final, con «Revisar video final». Una revisión
+puede recuperar un export preexistente al arranque solo dentro de la ventana
+de esa sesión confirmada; exigir estabilidad y exclusividad. Varios exports
+o ventanas de sesiones superpuestas requieren elección explícita. Conservar
+el modo manual, versiones históricas ajenas y el bloqueo de reenvío tras Deshacer.
+La recuperación tras reiniciar solo se habilita con `revision_export_solicitada`,
+registrada al terminar o revisar explícitamente la sesión. Las sesiones anteriores
+a esta corrección conservan ese indicador desactivado; usar «Revisar video final».
+
 Los nuevos completos se guardan en `videos completos/videos sin publicar/`.
 Los asociados conservan personaje/edición; los exports sin sesión inequívoca
 se resguardan por nombre/versionado, sin adivinar una sesión. No reorganizar
@@ -120,6 +132,16 @@ Un envío fallido no inicia esta limpieza. El resultado API informa las carpetas
 retiradas. Deshacer recrea los directorios necesarios para restaurar los archivos.
 No se aplica una limpieza retroactiva al material real.
 
+
+## Carpetas vacías de edición y Wi-Fi (2026-10-14)
+
+Excepción adicional solicitada el 2026-10-14: al finalizar correctamente una
+edición o completar un envío Wi-Fi, después de verificar los traslados y escribir
+sus registros, retirar solo los padres vacíos de los archivos de esa operación.
+`bandeja/carpetas_vacias.py` limita `os.rmdir` a esos directorios; conserva raíces,
+personajes, respaldos, capítulos ajenos y enlaces/junctions. Los fallos o envíos
+parciales no inician esta limpieza. Deshacer recrea los padres originales.
+No es una limpieza retroactiva del pendrive ni elimina archivos.
 
 ## Nombres documentados de carpetas nuevas (2026-10-12)
 

@@ -461,6 +461,9 @@ class TestEdicionCapCut(unittest.TestCase):
         ruta_dest = os.path.join(self.pendrive_raiz, "videos ya editados", "lucie", "videoyaeditado_toma1_semana_2_octubre_2026", "toma1.mp4")
         self.assertFalse(os.path.exists(ruta_orig))
         self.assertTrue(os.path.exists(ruta_dest))
+        self.assertEqual(res_fin["carpetas_vacias_retiradas"], [os.path.dirname(ruta_orig)])
+        self.assertFalse(os.path.isdir(os.path.dirname(ruta_orig)))
+        self.assertTrue(os.path.isdir(os.path.dirname(os.path.dirname(ruta_orig))))
 
         # Manifiesto y bitácora registrados
         manif_path = os.path.join(self.pendrive_raiz, ".lucie", "manifiesto.jsonl")
@@ -485,6 +488,29 @@ class TestEdicionCapCut(unittest.TestCase):
         # Comprobar retorno
         self.assertTrue(os.path.exists(ruta_orig))
         self.assertFalse(os.path.exists(ruta_dest))
+
+    def test_limpieza_edicion_conserva_archivos_ajenos(self):
+        origen = self._crear_clip_crudo("lucie", "cap01", "uno.mp4", b"uno")
+        ajeno = self._crear_clip_crudo("lucie", "cap01", "dos.mp4", b"dos")
+        sesion = crear_sesion(self.db, ["lucie/cap01/uno.mp4"], "lucie", "cap01")
+        resultado = finalizar_edicion_crudos(self.db, sesion["id"], self.pendrive_montaje,
+                                             self.carpeta_raiz, self.bitacora_path)
+        self.assertTrue(resultado["exito"])
+        self.assertEqual(resultado["carpetas_vacias_retiradas"], [])
+        self.assertFalse(os.path.exists(origen))
+        with open(ajeno, "rb") as archivo:
+            self.assertEqual(archivo.read(), b"dos")
+
+    def test_error_de_registro_no_inicia_limpieza_edicion(self):
+        origen = self._crear_clip_crudo("lucie", "cap01", "uno.mp4", b"uno")
+        sesion = crear_sesion(self.db, ["lucie/cap01/uno.mp4"], "lucie", "cap01")
+        with patch("bandeja.edicion.registrar_bitacora_edicion", side_effect=OSError("registro fallido")), \
+                patch("bandeja.edicion.retirar_carpetas_vacias_traslado") as limpiar:
+            with self.assertRaises(OSError):
+                finalizar_edicion_crudos(self.db, sesion["id"], self.pendrive_montaje,
+                                         self.carpeta_raiz, self.bitacora_path)
+            limpiar.assert_not_called()
+        self.assertTrue(os.path.isdir(os.path.dirname(origen)))
 
     def test_conflicto_destino_ocupado_con_distinto_hash(self):
         """Si el destino en 'videos ya editados' existe con distinto hash, no se pisa."""

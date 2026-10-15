@@ -31,7 +31,7 @@ Dado el valor irreemplazable de las creaciones y grabaciones, toda la plataforma
 6. **Bitácora Append-Only y Operaciones Reversibles:**  
    Cada eliminación manual se registra en `.lucie/eliminaciones.jsonl` y es irreversible, sin opción de deshacer. Cada movimiento queda documentado en bitácoras cronológicas `.jsonl`. El sistema cuenta con mecanismos de deshacer (`/api/deshacer`) capaces de retornar los archivos a su ubicación original sin colisiones.
 7. **Verificación Estática Continua (AST):**  
-   Un analizador sintáctico automatizado ([`seguridad_anti_borrado.py`](seguridad_anti_borrado.py)) audita el árbol de sintaxis abstracta de cada archivo operativo, prohibiendo el borrado automático y el pisado. Admite las dos primitivas del método manual `GestorEliminacionPendrive.ejecutar` y únicamente `os.rmdir(ruta)` en `_limpiar_carpetas_vacias_enviadas` después de un envío exitoso; las pruebas verifican el confinamiento de ambas excepciones.
+   Un analizador sintáctico automatizado ([`seguridad_anti_borrado.py`](seguridad_anti_borrado.py)) audita el árbol de sintaxis abstracta de cada archivo operativo, prohibiendo el borrado automático y el pisado. Admite las dos primitivas del método manual `GestorEliminacionPendrive.ejecutar` y únicamente `os.rmdir(ruta)` en `_limpiar_carpetas_vacias_enviadas` y `retirar_carpetas_vacias_traslado`, después de operaciones exitosas y registradas; las pruebas verifican el confinamiento de estas excepciones.
 
 ---
 
@@ -206,6 +206,21 @@ simulación, confirmación, registro y deshacer; no se fusionan ni sobrescriben 
 
 ### Exports de CapCut y videos completados
 
+**Terminé de editar** también revisa el video final de la sesión: en modo
+automático lo copia a `videos completos/videos sin publicar` si hay un único
+export vigente. El aviso distingue la organización de clips del resultado del
+export e informa destino, espera o error. Si falta la copia, la sesión terminada
+permanece visible con **Revisar video final**; no hace falta crear otra sesión.
+El botón no exporta el proyecto dentro de CapCut: hay que usar Exportar allí.
+
+Una revisión puede recuperar un video exportado durante esa sesión que existía
+antes del arranque de la bandeja, respetando los sondeos de estabilidad y la
+apertura exclusiva. La espera solicitada se retoma tras reiniciar. Las sesiones
+terminadas antes de esta corrección requieren **Revisar video final**, para evitar
+una importación retroactiva al instalar la actualización. Varios exports o sesiones
+superpuestas se ofrecen en Videos completados para elegir, sin copiar ni adivinar
+una asociación. El modo manual y Deshacer mantienen sus restricciones.
+
 La bandeja inicia el vigilante de la carpeta de exportación de CapCut y espera
 a que cada nuevo video se estabilice y quede libre de escritura. Cuando hay una
 sola sesión esperando un export, incluso después de pulsar «Terminé de editar»,
@@ -241,6 +256,13 @@ documentados en [Dashboard: eliminación y MP3](docs/dashboard-eliminacion-y-mp3
 Los `.mp3` se detectan como multimedia. Con alias conocido o capítulo en foco se incorporan a lotes; los demás aparecen en «Sin identificar» y pueden adoptarse con «Del proyecto». Se trasladan a `audios/` conservando su nombre, sin sobrescribir, y se envían al pendrive bajo `audios/<personaje>/<capítulo>/`.
 
 ## Carpetas vacías después del envío (2026-10-12)
+
+Desde el 2026-10-14, finalizar una edición y completar un envío al celular también
+retiran los directorios vacíos que dejaron sus archivos trasladados. Solo se
+consideran los padres de esos archivos; se conservan categorías, personajes,
+respaldos, carpetas ajenas y cualquier contenido nuevo. No se limpian traslados
+fallidos ni envíos parciales. Deshacer recrea las rutas originales. La limpieza
+no se aplica retroactivamente al material del pendrive.
 
 Excepción expresamente autorizada: después de verificar todas las copias y escribir
 los registros del envío, se retiran mediante `os.rmdir` las subcarpetas vacías y

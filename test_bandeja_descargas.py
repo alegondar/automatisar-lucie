@@ -6272,6 +6272,80 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
             self.assertTrue(os.path.isfile(self.clip_path))
             self.assertFalse(os.path.isfile(dest_esperado))
 
+    def test_terminar_edicion_copia_export_registrado_y_muestra_destino(self):
+        from bandeja.edicion import crear_sesion
+        capcut = os.path.join(self.tmp_dir, "CapCut")
+        os.makedirs(capcut)
+        self.config.carpeta_exportacion_capcut = capcut
+        sesion = crear_sesion(self.db, ["lucie/capitulo_01/toma_01.mp4"], "lucie", "capitulo_01", "Mi final")
+        inicio = datetime.datetime.now() - datetime.timedelta(minutes=5)
+        self.db.actualizar_sesion_edicion(sesion["id"], fecha_creacion=inicio.isoformat())
+        origen = os.path.join(capcut, "1014.mp4")
+        with open(origen, "xb") as archivo:
+            archivo.write(b"export final temporal")
+        ts = (inicio + datetime.timedelta(minutes=1)).timestamp()
+        os.utime(origen, (ts, ts))
+        st = os.stat(origen)
+        self.db.registrar_export_pendiente(origen, "1014.mp4", st.st_size, st.st_mtime)
+        pen = {"conectado": True, "punto_montaje": self.pendrive_dir}
+        with patch("bandeja.servidor.detectar_pendrive", return_value=pen):
+            status, datos = self._post("/api/edicion/terminar", {"sesion_id": sesion["id"]})
+            self.assertEqual(status, 200)
+            self.assertTrue(datos["exito"])
+            self.assertEqual(datos["export_final"]["modo"], "copiado", datos)
+            destino = datos["export_final"]["destino"]
+            self.assertIn(os.path.join("videos completos", "videos sin publicar", "lucie"), destino)
+            with open(destino, "rb") as archivo:
+                self.assertEqual(archivo.read(), b"export final temporal")
+            self.assertTrue(os.path.isfile(origen))
+            # Una sesión terminada por una versión anterior puede revisarse
+            # explícitamente, sin habilitar una recuperación histórica global.
+            self.db.actualizar_sesion_edicion(sesion["id"], revision_export_solicitada=0)
+            status, repetido = self._post("/api/edicion/revisar-export", {"sesion_id": sesion["id"]})
+            self.assertEqual(status, 200)
+            self.assertEqual(repetido["export_final"]["destino"], destino)
+            self.assertEqual(self.db.obtener_exports_pendientes()[0]["estado"], "copiado")
+            self.assertEqual(self.db.obtener_sesion_por_id(sesion["id"])["revision_export_solicitada"], 1)
+
+    def test_terminar_recupera_export_preexistente_y_conserva_historicos(self):
+        from bandeja.edicion import crear_sesion
+        from bandeja_descargas import crear_vigilante_capcut
+        capcut = os.path.join(self.tmp_dir, "CapCut")
+        os.makedirs(capcut)
+        self.config.carpeta_exportacion_capcut = capcut
+        sesion = crear_sesion(self.db, ["lucie/capitulo_01/toma_01.mp4"], "lucie", "capitulo_01", "Mi final")
+        inicio = datetime.datetime.now() - datetime.timedelta(minutes=5)
+        self.db.actualizar_sesion_edicion(sesion["id"], fecha_creacion=inicio.isoformat())
+        for nombre, ts in (("final.mp4", (inicio + datetime.timedelta(minutes=1)).timestamp()),
+                           ("antiguo.mp4", (inicio - datetime.timedelta(days=1)).timestamp())):
+            ruta = os.path.join(capcut, nombre)
+            with open(ruta, "xb") as archivo:
+                archivo.write(nombre.encode())
+            os.utime(ruta, (ts, ts))
+        vigilante = crear_vigilante_capcut(self.config, self.db, self.bitacora)
+        vigilante.tomar_fotografia_inicial()
+        self.servidor.RequestHandlerClass.vigilante_capcut = vigilante
+        pen = {"conectado": True, "punto_montaje": self.pendrive_dir}
+        with patch("bandeja.servidor.detectar_pendrive", return_value=pen), \
+                patch("bandeja_descargas.detectar_pendrive", return_value=pen):
+            status, _ = self._post("/api/edicion/revisar-export", {"sesion_id": sesion["id"]}, csrf="incorrecto")
+            self.assertEqual(status, 403)
+            self.assertTrue(os.path.isfile(self.clip_path))
+            status, datos = self._post("/api/edicion/terminar", {"sesion_id": sesion["id"]})
+            self.assertEqual(status, 200)
+            self.assertEqual(datos["export_final"]["modo"], "esperando_estabilidad", datos)
+            status, lista, _ = self._get("/api/edicion/secciones")
+            self.assertEqual(len(lista["sesiones_esperando_export"]), 1)
+            for _ in range(4):
+                vigilante.escanear()
+            status, lista, _ = self._get("/api/edicion/secciones")
+            self.assertEqual(lista["sesiones_esperando_export"], [])
+            self.assertEqual(len(lista["videos_completados"]), 1)
+            self.assertEqual(lista["videos_completados"][0]["estado"], "copiado")
+            with open(lista["videos_completados"][0]["ruta_destino"], "rb") as archivo:
+                self.assertEqual(archivo.read(), b"final.mp4")
+            self.assertTrue(os.path.isfile(os.path.join(capcut, "antiguo.mp4")))
+
     def test_publicacion_wifi_api_lista_plan_y_csrf(self):
         from unittest.mock import patch
         carpeta = os.path.join(self.raiz_pen, "videos completos", "videos sin publicar")

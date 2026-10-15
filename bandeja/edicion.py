@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from bandeja.config import ConfiguracionBandeja, calcular_sha256
 from bandeja.db import GestorBaseDatosBandeja
+from bandeja.carpetas_vacias import retirar_carpetas_vacias_traslado
 from bandeja.pendrive import NOMBRE_MANIFIESTO_PENDRIVE, operacion_pendrive_exclusiva
 from bandeja.plataforma import esta_confinado_en_raiz, verificar_archivo_exclusivo, mover_sin_sobrescribir
 
@@ -306,6 +307,8 @@ def obtener_secciones_edicion(
         "exports_sin_asignar": exports_sin_asignar,
         "videos_completados": obtener_videos_completados(db),
         "sesiones_para_export": obtener_sesiones_para_export(db),
+        "sesiones_esperando_export": [s for s in db.obtener_sesiones_edicion()
+                                     if s["estado"] == "editado" and not s.get("video_completo_ruta")],
     }
 
 
@@ -579,7 +582,12 @@ def finalizar_edicion_crudos(
             sesion_id,
             estado="completado" if sesion.get("video_completo_ruta") else "editado",
             fecha_cierre=datetime.datetime.now().isoformat(),
+            revision_export_solicitada=1,
         )
+
+    carpetas_retiradas = retirar_carpetas_vacias_traslado(
+        pendrive_raiz, [m["origen"] for m in movidos if not m["original_preservado"]]
+    ) if not conflictos else []
 
     return {
         "exito": len(conflictos) == 0,
@@ -588,6 +596,7 @@ def finalizar_edicion_crudos(
         "movidos": movidos,
         "conflictos": conflictos,
         "omisiones": omisiones,
+        "carpetas_vacias_retiradas": carpetas_retiradas,
     }
 
 
@@ -672,7 +681,8 @@ def deshacer_finalizar_edicion(
     registrar_bitacora_edicion(ruta_bitacora, registro_bit)
 
     if revertidos:
-        db.actualizar_sesion_edicion(sesion_id, estado="completado" if sesion.get("video_completo_ruta") else "en_edicion", fecha_cierre=None)
+        db.actualizar_sesion_edicion(sesion_id, estado="completado" if sesion.get("video_completo_ruta") else "en_edicion",
+                                    fecha_cierre=None, revision_export_solicitada=0)
 
     return {
         "exito": len(conflictos) == 0,
@@ -981,6 +991,12 @@ def vincular_nuevo_export(
     sesiones_activas = obtener_sesiones_para_export(db)
 
     sesion = elegir_sesion_export_automatico(sesiones_activas)
+    solicitada = export_info.get("sesion_solicitada")
+    if solicitada is not None:
+        sesion = next((s for s in sesiones_activas if s["id"] == solicitada), None)
+        if sesion is None:
+            # Una solicitud cancelada o ya satisfecha no se reasigna a otra edición.
+            return {"vinculado": False, "modo": "solicitud_no_vigente"}
     if sesion:
         sesion_id = sesion["id"]
         db.actualizar_sesion_edicion(sesion_id, export_asociado=ruta_origen)
@@ -1073,6 +1089,102 @@ def verificar_version_export(export):
     st = os.stat(export["ruta_origen"])
     if st.st_size != export["tamano"] or st.st_mtime != export["mtime"]:
         raise ValueError("CapCut reemplazó este export. Elegí la nueva versión en Videos completados.")
+
+
+def revisar_export_terminado(db, sesion_id, pendrive_montaje, carpeta_raiz,
+                            ruta_bitacora, automatico=True, ruta_capcut=None):
+    """Conecta el cierre explícito de una sesión con su único export vigente."""
+    with operacion_pendrive_exclusiva():
+        return _revisar_export_terminado(db, sesion_id, pendrive_montaje, carpeta_raiz,
+                                        ruta_bitacora, automatico, ruta_capcut)
+
+
+def registrar_exports_revision_ambigua(db, revision):
+    """Ofrece los exports revisados para elección sin enviarlos ni asociarlos."""
+    existentes = db.obtener_exports_pendientes()
+    for exp in revision.get("exports", []):
+        if any(os.path.normcase(os.path.abspath(e["ruta_origen"])) == os.path.normcase(os.path.abspath(exp["ruta_absoluta"]))
+               and e["tamano"] == exp["tamano"] and e["mtime"] == exp["mtime"] for e in existentes):
+            continue
+        identificador = db.registrar_export_pendiente(exp["ruta_absoluta"], exp["nombre"], exp["tamano"], exp["mtime"])
+        db.actualizar_export_pendiente(identificador, envio_automatico_bloqueado=1)
+
+
+def _revisar_export_terminado(db, sesion_id, pendrive_montaje, carpeta_raiz,
+                             ruta_bitacora, automatico, ruta_capcut):
+    sesion = db.obtener_sesion_por_id(sesion_id)
+    if not sesion or not sesion.get("fecha_cierre"):
+        raise ValueError("Primero confirmá Terminé de editar en esta sesión.")
+    if sesion.get("video_completo_ruta"):
+        if not os.path.isfile(sesion["video_completo_ruta"]):
+            return {"modo": "error", "mensaje": "La copia registrada del video final no está disponible. Revisá Videos completados."}
+        return {"modo": "copiado", "destino": sesion["video_completo_ruta"],
+                "mensaje": "El video final ya está guardado en el pendrive."}
+    inicio = datetime.datetime.fromisoformat(sesion["fecha_creacion"]).timestamp()
+    fin = datetime.datetime.fromisoformat(sesion["fecha_cierre"]).timestamp()
+    candidatos = []
+    ambiguo = False
+    for exp in db.obtener_exports_pendientes():
+        if exp["estado"] == "descartado" or exp.get("envio_automatico_bloqueado"):
+            if exp.get("sesion_id") == sesion_id and exp.get("envio_automatico_bloqueado"):
+                return {"modo": "revertido", "mensaje": "El envío fue deshecho. Usá Enviar al pendrive en Videos completados para volver a copiarlo."}
+            continue
+        if exp.get("sesion_id") != sesion_id:
+            if exp.get("sesion_id") or exp["estado"] != "sin_asignar" or not inicio <= exp["mtime"] <= fin:
+                continue
+            # No adoptar un export que también pertenece a otra edición abierta
+            # en ese momento, ni adivinar entre ventanas superpuestas.
+            if any(s["id"] != sesion_id and s["estado"] != "cancelado"
+                   and datetime.datetime.fromisoformat(s["fecha_creacion"]).timestamp() <= exp["mtime"]
+                   and (not s.get("fecha_cierre") or
+                        datetime.datetime.fromisoformat(s["fecha_cierre"]).timestamp() >= exp["mtime"])
+                   for s in db.obtener_sesiones_edicion()):
+                ambiguo = True
+                continue
+        if ruta_capcut:
+            segura = esta_confinado_en_raiz(exp["ruta_origen"], ruta_capcut)
+            actual = os.path.abspath(exp["ruta_origen"])
+            while segura:
+                if os.path.islink(actual) or (hasattr(os.path, "isjunction") and os.path.isjunction(actual)):
+                    segura = False
+                    break
+                padre = os.path.dirname(actual)
+                if padre == actual:
+                    break
+                actual = padre
+            if not segura:
+                if exp.get("sesion_id") == sesion_id:
+                    return {"modo": "error", "mensaje": "El export asociado está fuera de la carpeta de CapCut o contiene enlaces."}
+                continue
+        try:
+            verificar_version_export(exp)
+        except (OSError, ValueError):
+            continue
+        candidatos.append(exp)
+    asociados = [e for e in candidatos if e.get("sesion_id") == sesion_id]
+    if asociados:
+        candidatos, ambiguo = asociados, False
+    if len(candidatos) != 1 or ambiguo:
+        return {"modo": "ambiguo" if candidatos or ambiguo else "esperando_export",
+                "mensaje": "Hay varios exports o sesiones posibles. Elegí el video en Videos completados." if candidatos or ambiguo
+                           else "Esperando el video final de CapCut. Exportá el video; terminar la edición no lo exporta."}
+    exp = candidatos[0]
+    if not automatico:
+        return {"modo": "esperando_envio", "mensaje": "Modo manual: enviá el export desde Videos completados."}
+    db.actualizar_export_pendiente(exp["id"], sesion_id=sesion_id, estado="pendiente_copia")
+    db.actualizar_sesion_edicion(sesion_id, export_asociado=exp["ruta_origen"])
+    try:
+        verificar_version_export(exp)
+        resultado = copiar_export_a_videos_completos(exp["ruta_origen"], sesion, pendrive_montaje,
+                                                    db, carpeta_raiz, ruta_bitacora)
+        db.actualizar_export_pendiente(exp["id"], estado="copiado", ruta_destino=resultado["destino"],
+                                      sha256=resultado["sha256"], error=None,
+                                      fecha_copia=datetime.datetime.now().isoformat())
+        return {"modo": "copiado", "destino": resultado["destino"],
+                "mensaje": "Video final copiado a videos completos/videos sin publicar."}
+    except (OSError, ValueError) as error:
+        db.actualizar_export_pendiente(exp["id"], error=str(error))
+        return {"modo": "error", "mensaje": "Los clips están organizados, pero falta copiar el video final: " + str(error)}
 
 
 def copiar_export_sin_sesion_a_sin_publicar(exp, pendrive_montaje, db, carpeta_raiz, ruta_bitacora):

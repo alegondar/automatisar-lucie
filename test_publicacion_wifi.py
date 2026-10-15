@@ -313,11 +313,31 @@ class TestPublicacionWifi(unittest.TestCase):
         self.assertEqual(self.db.obtener_sesion_por_id(sesion["id"])["video_completo_ruta"], destino)
         self.assertEqual(self.db.obtener_exports_pendientes()[0]["ruta_destino"], destino)
         self.assertEqual(self.gestor.listar()["archivos"], [])
+        self.assertEqual(resultado["carpetas_vacias_retiradas"], [os.path.dirname(self.video)])
+        self.assertFalse(os.path.isdir(os.path.dirname(self.video)))
+        self.assertTrue(os.path.isdir(os.path.dirname(os.path.dirname(self.video))))
         self.assertTrue(self.gestor.deshacer(resultado["publicados"][0]["id_operacion"])["exito"])
         self.assertTrue(os.path.isfile(self.video))
         self.assertFalse(os.path.exists(destino))
         self.assertEqual(self.db.obtener_sesion_por_id(sesion["id"])["video_completo_ruta"], self.video)
         self.assertEqual(self.gestor.listar()["historial"], [])
+
+    def test_archivo_nuevo_durante_envio_impide_retirar_carpeta(self):
+        plan = self.plan()
+        nuevo = os.path.join(os.path.dirname(self.video), "nuevo.txt")
+        enviar = self.gestor.cliente.enviar
+
+        def agregar_y_enviar(*args, **kwargs):
+            with open(nuevo, "xb") as archivo:
+                archivo.write(b"conservar contenido nuevo")
+            return enviar(*args, **kwargs)
+
+        with patch.object(self.gestor.cliente, "enviar", side_effect=agregar_y_enviar):
+            resultado = self.esperar(self.gestor.iniciar_envio(plan["token"], True)["id"])
+        self.assertEqual(resultado["estado"], "completado", resultado)
+        self.assertEqual(resultado["carpetas_vacias_retiradas"], [])
+        with open(nuevo, "rb") as archivo:
+            self.assertEqual(archivo.read(), b"conservar contenido nuevo")
 
     def test_aceptacion_parcial_envia_solo_archivos_aceptados(self):
         self.crear("roli/Otro/Otro.mp4")
@@ -328,6 +348,8 @@ class TestPublicacionWifi(unittest.TestCase):
         resultado = self.esperar(self.gestor.iniciar_envio(plan["token"], True)["id"])
         self.assertEqual(resultado["estado"], "error")
         self.assertEqual(len(resultado["publicados"]), 1)
+        self.assertEqual(resultado["carpetas_vacias_retiradas"], [])
+        self.assertTrue(os.path.isdir(os.path.dirname(aceptado["origen"])))
         self.assertTrue(os.path.isfile(aceptado["destino"]))
         self.assertTrue(os.path.isfile(rechazado["origen"]))
         self.assertFalse(os.path.exists(rechazado["destino"]))

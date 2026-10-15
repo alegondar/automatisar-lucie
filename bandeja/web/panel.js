@@ -3565,6 +3565,8 @@
             `;
           }
           if (contEnEdicion) contEnEdicion.innerHTML = '<p style="color:var(--text-muted);">Sin sesiones disponibles.</p>';
+          const esperando = document.getElementById('contenedor-esperando-export');
+          if (esperando) esperando.replaceChildren();
           if (contEditados) contEditados.innerHTML = '<p style="color:var(--text-muted);">Sin datos de capítulos.</p>';
           if (contExports) renderizarExportsCapCut(data.videos_completados || [], data.sesiones_para_export || []);
           return;
@@ -3576,6 +3578,7 @@
 
         // 2. En edición
         renderizarSesionesEnEdicion(data.en_edicion || []);
+        renderizarSesionesEsperandoExport(data.sesiones_esperando_export || [], data.videos_completados || []);
 
         // 3. Editados y completos
         renderizarEditadosYCompletos(data.conteos_capitulo || {});
@@ -3787,6 +3790,35 @@
       }
     }
 
+    function renderizarSesionesEsperandoExport(sesiones, exports) {
+      const cont = document.getElementById('contenedor-esperando-export');
+      if (!cont) return;
+      cont.replaceChildren();
+      for (const sesion of sesiones) {
+        const fila = document.createElement('div');
+        fila.style.marginTop = '12px';
+        const asociado = exports.find(e => e.sesion_id === sesion.id);
+        const texto = document.createElement('p');
+        texto.textContent = `${sesion.nombre} (${sesion.personaje} / ${sesion.capitulo}): edición terminada; ${asociado?.error ? asociado.error : 'el video final todavía no está copiado a Sin publicar.'}`;
+        const revisar = document.createElement('button');
+        revisar.className = 'btn-sm btn-secundario';
+        revisar.textContent = 'Revisar video final';
+        revisar.addEventListener('click', async () => {
+          revisar.disabled = true;
+          try {
+            const resultado = await apiFetch('/api/edicion/revisar-export', {
+              method: 'POST', body: JSON.stringify({sesion_id: sesion.id})
+            });
+            const estado = resultado.export_final || {};
+            mostrarAvisoEdicion(escapeHTML(`${estado.mensaje || 'Revisión terminada.'} ${estado.destino || ''}`));
+            await cargarVistaEdicion();
+          } catch (error) { mostrarAvisoEdicion(escapeHTML(error.message)); }
+          finally { revisar.disabled = false; }
+        });
+        fila.append(texto, revisar); cont.append(fila);
+      }
+    }
+
     function renderizarSesionesEnEdicion(sesiones) {
       const destino = document.getElementById('sesion-destino-sumar');
       if (destino) {
@@ -3864,7 +3896,7 @@
     }
 
     async function terminarEdicionSesion(sesionId) {
-      if (!confirm("¿Confirmás que terminaste de editar? Los clips quedarán en 'videos ya editados'. Si CapCut los mantiene abiertos, se copiarán con verificación de integridad y se conservarán los originales.")) return;
+      if (!confirm("¿Confirmás que terminaste de editar? Los clips quedarán en 'videos ya editados'. Se revisará el video final exportado de CapCut para copiarlo a 'videos completos/videos sin publicar' en modo automático. Los originales de CapCut se conservan.")) return;
 
       try {
         const res = await fetchConCsrf('/api/edicion/terminar', {
@@ -3875,7 +3907,7 @@
         if (data.exito) {
           const movidosCount = (data.movidos || []).length;
           mostrarAvisoEdicion(
-            `✅ ${movidosCount} clip(s) organizados en 'videos ya editados'. ${(data.movidos || []).some(c => c.original_preservado) ? 'Se conservaron los originales que CapCut mantiene abiertos.' : ''}`,
+            `✅ ${movidosCount} clip(s) organizados en 'videos ya editados'. ${(data.movidos || []).some(c => c.original_preservado) ? 'Se conservaron los originales que CapCut mantiene abiertos.' : ''} ${escapeHTML(data.export_final?.mensaje || '')} ${data.export_final?.destino ? escapeHTML(data.export_final.destino) : ''}`,
             `<button class="btn-sm" onclick="deshacerTerminarEdicion(${sesionId})" style="background:#f59e0b; color:#000; font-weight:600;">Deshacer</button>`
           );
           await cargarVistaEdicion();

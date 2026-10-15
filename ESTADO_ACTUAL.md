@@ -1,4 +1,84 @@
-# Estado actual del sistema — 2026-10-14
+# Estado actual del sistema — 2026-10-15
+
+## Terminé de editar revisa y copia el video final (2026-10-14)
+
+El botón antes finalizaba únicamente los clips crudos; una copia final pendiente
+podía quedar sin revisión ni aviso. Ahora, después de organizar los clips,
+revisa el export vigente de la sesión y lo copia en modo automático a
+`videos completos/videos sin publicar/<personaje>/<carpeta de salida>/`.
+La respuesta incluye `export_final` con estado, mensaje y destino efectivo.
+El panel distingue clips organizados de video copiado, espera o error.
+
+Las sesiones editadas sin copia permanecen visibles con **Revisar video final**
+(`POST /api/edicion/revisar-export`, con CSRF). No se necesita crear otra sesión.
+Un export preexistente al arranque puede recuperarse si corresponde a la ventana
+de esa edición confirmada, después de los sondeos normales de estabilidad y
+apertura exclusiva. El origen de CapCut se conserva. Varios exports o ventanas
+de sesiones superpuestas se ofrecen para asignación explícita; no se elige uno
+por ser el último ni se copia el grupo ambiguo automáticamente.
+
+La solicitud se registra en la columna local `revision_export_solicitada` y se
+retoma tras reiniciar. La migración añade esa columna con cero para sesiones
+anteriores: no importa exports históricos al instalar la corrección. Para la
+sesión ya terminada del usuario, reiniciar normalmente la bandeja, recargar con
+Ctrl+F5 y usar **Revisar video final**. El modo manual sigue esperando el envío
+explícito y Deshacer conserva su bloqueo contra reenvíos automáticos.
+
+El dashboard no exporta el proyecto dentro de CapCut; el video final debe
+generarse con Exportar allí y guardarse en la carpeta vigilada configurada.
+No se cambiaron las categorías ni se migró material real del pendrive.
+
+Validación final **Windows/Python 3.13.0: 415 pruebas OK, 11 omisiones**, en
+**72.160 s**. Las omisiones existentes requieren Linux o privilegios de symlinks;
+se conservaron guardia y aserciones. Manifiesto real exclusivamente contado:
+**302 / 302**, estable. Log externo:
+`%TEMP%/tests_terminar_export_20261014_validado.log`. La primera ejecución del
+ajuste final detectó una conexión SQLite sin cerrar en la nueva prueba de
+migración; se corrigió su cierre explícito y pasó la repetición completa.
+
+Doce regresiones nuevas cubren copia al terminar, recuperación tras reiniciar,
+exports históricos, sesiones superpuestas, estabilidad/bloqueos, modo manual,
+Deshacer, error de copia, confinamiento y migración conservadora del indicador.
+Dos pruebas API cubren el botón, destino, solicitud persistente, pendientes
+visibles y CSRF. JS/UI de edición, CSRF y Wi-Fi correctos; AST 0/27, auditorías
+del repo/historial y cuatro archivos nuevos sin infracciones, diff sin errores.
+Pruebas exclusivamente en temporales. No se inició la bandeja real ni se usaron
+archivos reales de CapCut/pendrive como fixtures. Linux y teléfono físico no
+ejecutados para este lote. El usuario autorizó el commit y push de las correcciones
+de cierre y carpetas vacías el **2026-10-15**, en `feat/lucie-recibir`.
+La revisión previa a publicar no encontró novedades remotas ni commits anteriores
+pendientes de subir en esa rama.
+
+## Carpetas vacías de edición y envío al celular (2026-10-14)
+
+Corrección local en `feat/lucie-recibir`, sobre `46dd8e5`. Fetch comprobado:
+sin commits entrantes ni locales pendientes en esta rama. Tras finalizar
+correctamente la edición o completar todos los archivos del envío Wi-Fi, se
+retiran los padres vacíos de los archivos trasladados, después de sus registros.
+La API informa `carpetas_vacias_retiradas`. Deshacer recrea las rutas originales.
+
+`bandeja/carpetas_vacias.py` no recorre ramas hermanas ni limpia históricos:
+conserva categorías, personajes, respaldos, enlaces/junctions y cualquier
+contenido nuevo. Los errores de registro, conflictos y envíos parciales no
+inician la limpieza. AST admite exclusivamente `os.rmdir(ruta)` dentro de
+`retirar_carpetas_vacias_traslado`; no se amplía la autorización a archivos.
+
+Windows/Python 3.13.0: **401 pruebas OK, 11 omisiones**, **71.292 s**.
+Las omisiones existentes requieren Linux o privilegios reales de symlinks.
+Manifiesto real solo contado: **297 / 297**, estable. Log externo:
+`%TEMP%/tests_carpetas_vacias_20261014.log`. AST 0 infracciones/27 módulos,
+sintaxis de ambos JS, UI Wi-Fi (13 llamadas) y auditoría repo/historial correctas.
+Pruebas de nuevas carpetas, contenido concurrente, fallos, envíos parciales,
+límites AST y reversión, exclusivamente en temporales con guardia hermética.
+No se inició la bandeja real ni se reorganizó el pendrive como prueba; Linux y
+el celular físico no se ejecutaron para este lote.
+
+Esta validación corresponde a la limpieza de carpetas vacías. El usuario aclaró
+después que el video final exportado debe aparecer automáticamente en
+`videos completos/videos sin publicar` al confirmar «Terminé de editar».
+Se conserva la separación vigente: clips en Ya editados y export final en la cola.
+La corrección de ese botón y su evidencia se describen arriba. La autorización
+de commit/push del 2026-10-15 incluye este lote de limpieza junto con el cierre.
 
 ## Actualización del host Windows y correcciones nativas (2026-10-14)
 

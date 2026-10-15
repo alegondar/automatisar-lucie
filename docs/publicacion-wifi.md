@@ -44,6 +44,12 @@ Una copia deshecha no vuelve a enviarse automáticamente.
    los videos se trasladan a `videos completos/videosPublicados/<personaje>/`,
    conservando las carpetas del capítulo y el nombre del archivo. El historial ofrece **Volver a Sin publicar**.
 
+Al completar todos los archivos del envío se retiran únicamente las carpetas
+vacías que dejaron esos traslados en Sin publicar. Se conservan la cola, los
+personajes, carpetas ajenas y cualquier contenido nuevo. Un envío fallido o
+parcial no inicia la limpieza; Deshacer recrea la carpeta original del video.
+El estado del envío incluye `carpetas_vacias_retiradas`.
+
 Por decisión del usuario, una recepción confirmada se utiliza como señal de
 publicación. No se consulta Instagram ni se comprueba que un video se subió a
 una red social. Deshacer devuelve el archivo local a la cola; no elimina la

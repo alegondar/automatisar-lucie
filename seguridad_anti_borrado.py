@@ -10,6 +10,9 @@ Solo se admiten os.unlink(ruta) y os.rmdir(ruta) en el método manual confirmado
 GestorEliminacionPendrive.ejecutar (bandeja/eliminacion.py).
 También se permite únicamente os.rmdir(ruta) en la limpieza autorizada de
 carpetas vacías después de un envío exitoso (bandeja/pendrive.py).
+La excepción del 2026-10-14 admite también solo os.rmdir(ruta) en
+retirar_carpetas_vacias_traslado (bandeja/carpetas_vacias.py), después de una
+edición o envío Wi-Fi completados y registrados.
 
 Detecta y prohíbe las siguientes 11 primitivas:
 1. os.remove
@@ -184,10 +187,16 @@ def analizar_ast_codigo(codigo_fuente: str, nombre_archivo: str = "<codigo>") ->
                                     and llamada.args[0].id == "ruta"):
                                 permitidas.add((llamada.lineno, llamada.col_offset))
         return [v for v in analizador.infracciones if (v.linea, v.columna) not in permitidas]
-    if ruta_norm.endswith("/bandeja/pendrive.py") or ruta_norm == "bandeja/pendrive.py":
+    funciones_limpieza = {
+        "bandeja/pendrive.py": "_limpiar_carpetas_vacias_enviadas",
+        "bandeja/carpetas_vacias.py": "retirar_carpetas_vacias_traslado",
+    }
+    funcion_limpieza = next((nombre for archivo, nombre in funciones_limpieza.items()
+                             if ruta_norm == archivo or ruta_norm.endswith("/" + archivo)), None)
+    if funcion_limpieza:
         permitidas = set()
         for funcion in arbol.body:
-            if isinstance(funcion, ast.FunctionDef) and funcion.name == "_limpiar_carpetas_vacias_enviadas":
+            if isinstance(funcion, ast.FunctionDef) and funcion.name == funcion_limpieza:
                 for llamada in ast.walk(funcion):
                     if (isinstance(llamada, ast.Call) and isinstance(llamada.func, ast.Attribute)
                             and isinstance(llamada.func.value, ast.Name) and llamada.func.value.id == "os"

@@ -59,7 +59,22 @@ def crear_vigilante_capcut(config, db, ruta_bitacora):
     def procesar_pendientes():
         punto = punto_montaje()
         if config.envio_exports_capcut == "automatico":
-            from bandeja.edicion import retomar_export_actual_sin_asignar
+            from bandeja.edicion import (retomar_export_actual_sin_asignar, revisar_export_terminado,
+                                        registrar_exports_revision_ambigua)
+            if punto:
+                for sesion in db.obtener_sesiones_edicion():
+                    if (sesion["estado"] != "editado" or not sesion.get("fecha_cierre")
+                            or not sesion.get("revision_export_solicitada") or sesion.get("video_completo_ruta")):
+                        continue
+                    try:
+                        revision = revisar_export_terminado(db, sesion["id"], punto, config.carpeta_raiz_pendrive, ruta_bitacora,
+                                                           ruta_capcut=config.obtener_carpeta_exportacion_capcut())
+                        if revision["modo"] == "esperando_export" and not sesion.get("export_asociado"):
+                            revision = vigilante.revisar_export_sesion(sesion, db.obtener_sesiones_edicion())
+                            if revision["modo"] == "ambiguo":
+                                registrar_exports_revision_ambigua(db, revision)
+                    except (OSError, ValueError) as error:
+                        logger.warning("No se pudo revisar el video final de la sesión %s: %s", sesion["id"], error)
             retomar_export_actual_sin_asignar(db, punto, config.carpeta_raiz_pendrive, ruta_bitacora)
         if punto:
             procesar_exports_pendientes_copia(punto, db, config.carpeta_raiz_pendrive, ruta_bitacora)
@@ -74,10 +89,11 @@ def crear_vigilante_capcut(config, db, ruta_bitacora):
                         if export.get("error") != str(error):
                             db.actualizar_export_pendiente(export["id"], error=str(error))
 
-    return VigilanteCapCut(config.obtener_carpeta_exportacion_capcut(),
+    vigilante = VigilanteCapCut(config.obtener_carpeta_exportacion_capcut(),
                           extensiones_temporales=config.extensiones_temporales_capcut,
                           callback_nuevo_export=nuevo_export, callback_sondeo=procesar_pendientes,
                           exports_registrados=db.obtener_exports_pendientes())
+    return vigilante
 
 
 def main():

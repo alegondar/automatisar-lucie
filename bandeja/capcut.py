@@ -69,6 +69,7 @@ class VigilanteCapCut:
             self._registrados.setdefault(ruta, set()).add((export["tamano"], export["mtime"]))
         self._conteo_estabilidad: Dict[str, int] = {}
         self._ultimo_tamano: Dict[str, int] = {}
+        self._sesiones_solicitadas = {}
         self._fotografia_tomada: bool = False
 
         self._detener = threading.Event()
@@ -200,6 +201,11 @@ class VigilanteCapCut:
                         "carpeta_relativa": carpeta_rel,
                         "fecha_deteccion": datetime.datetime.now().isoformat(),
                     }
+                    solicitud = self._sesiones_solicitadas.get(norm)
+                    if solicitud and solicitud["identidad"] == (st.st_dev, st.st_ino):
+                        info["sesion_solicitada"] = solicitud["sesion_id"]
+                    elif solicitud:
+                        self._sesiones_solicitadas.pop(norm, None)
                     nuevos_listos.append(info)
                     logger.info(f"[CapCut] Nuevo export detectado y verificado: '{arch}' ({tamano_actual} bytes)")
 
@@ -208,6 +214,7 @@ class VigilanteCapCut:
                 if self.callback_nuevo_export:
                     try:
                         self.callback_nuevo_export(info)
+                        self._sesiones_solicitadas.pop(os.path.normcase(os.path.abspath(info["ruta_absoluta"])), None)
                     except Exception as e:
                         self._exports_detectados.pop(os.path.normcase(os.path.abspath(info["ruta_absoluta"])), None)
                         logger.error(f"[CapCut] Error en callback_nuevo_export: {e}")
@@ -219,6 +226,72 @@ class VigilanteCapCut:
                     logger.error(f"[CapCut] Error al procesar pendientes: {e}")
 
             return nuevos_listos
+
+    def revisar_export_sesion(self, sesion, otras_sesiones=()):
+        """Revisa solo un export de la ventana de la sesión confirmada.
+
+        Permite detectar un export anterior al arranque del vigilante, sin
+        importar históricos ajenos ni saltar estabilidad/apertura exclusiva.
+        Varios candidatos exigen elección explícita en Videos completados.
+        """
+        inicio = datetime.datetime.fromisoformat(sesion["fecha_creacion"]).timestamp()
+        fin = datetime.datetime.fromisoformat(sesion["fecha_cierre"]).timestamp()
+        with self._lock:
+            actual = self.ruta_capcut
+            while True:
+                if os.path.islink(actual) or (hasattr(os.path, "isjunction") and os.path.isjunction(actual)):
+                    return {"modo": "error", "mensaje": "La carpeta de exports contiene un enlace o junction."}
+                padre = os.path.dirname(actual)
+                if padre == actual:
+                    break
+                actual = padre
+            candidatos = []
+            superpuestas = False
+            for carpeta, dirs, nombres in os.walk(self.ruta_capcut, followlinks=False):
+                rel = os.path.relpath(carpeta, self.ruta_capcut)
+                if rel != "." and len(rel.split(os.sep)) >= 3:
+                    dirs[:] = []
+                dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(carpeta, d))
+                           and not (hasattr(os.path, "isjunction") and os.path.isjunction(os.path.join(carpeta, d)))]
+                for nombre in nombres:
+                    minuscula = nombre.lower()
+                    if (minuscula.startswith((".", "~")) or os.path.splitext(minuscula)[1] not in EXTENSIONES_EXPORT_VALIDAS
+                            or any(minuscula.endswith(ext) for ext in self.extensiones_temporales)):
+                        continue
+                    ruta = os.path.join(carpeta, nombre)
+                    if os.path.islink(ruta):
+                        continue
+                    try:
+                        st = os.stat(ruta)
+                    except OSError:
+                        continue
+                    if st.st_size <= 0 or not inicio <= st.st_mtime <= fin:
+                        continue
+                    if any(s["id"] != sesion["id"] and s["estado"] != "cancelado"
+                           and datetime.datetime.fromisoformat(s["fecha_creacion"]).timestamp() <= st.st_mtime
+                           and (not s.get("fecha_cierre") or
+                                datetime.datetime.fromisoformat(s["fecha_cierre"]).timestamp() >= st.st_mtime)
+                           for s in otras_sesiones):
+                        superpuestas = True
+                    norm = os.path.normcase(os.path.abspath(ruta))
+                    if (st.st_size, st.st_mtime) in self._registrados.get(norm, set()):
+                        continue
+                    if self._exports_detectados.get(norm) == self._firma(st):
+                        continue
+                    candidatos.append((norm, st, ruta))
+            if len(candidatos) != 1 or superpuestas:
+                return {"modo": "ambiguo" if candidatos or superpuestas else "esperando_export", "cantidad": len(candidatos),
+                        "exports": [{"ruta_absoluta": ruta, "nombre": os.path.basename(ruta),
+                                     "tamano": st.st_size, "mtime": st.st_mtime} for norm, st, ruta in candidatos]}
+            norm, st, _ = candidatos[0]
+            asignada = self._sesiones_solicitadas.get(norm)
+            if asignada is not None and asignada["sesion_id"] != sesion["id"]:
+                return {"modo": "ambiguo", "cantidad": 1}
+            self._sesiones_solicitadas[norm] = {"sesion_id": sesion["id"], "identidad": (st.st_dev, st.st_ino)}
+            self._preexistentes.pop(norm, None)
+            # No se ejecuta ni se simula un sondeo adicional: la escritura debe
+            # estabilizarse mediante los sondeos normales del vigilante.
+            return {"modo": "esperando_estabilidad", "cantidad": 1}
 
     def _bucle_sondeo(self):
         """Bucle periódico en segundo plano."""

@@ -145,6 +145,9 @@ class GestorBaseDatosBandeja:
                 fecha_cierre TEXT
             );
             """)
+            columnas_sesion = {r[1] for r in con.execute("PRAGMA table_info(sesiones_edicion)")}
+            if "revision_export_solicitada" not in columnas_sesion:
+                cur.execute("ALTER TABLE sesiones_edicion ADD COLUMN revision_export_solicitada INTEGER NOT NULL DEFAULT 0")
 
             cur.execute("""
             CREATE TABLE IF NOT EXISTS exports_pendientes (
