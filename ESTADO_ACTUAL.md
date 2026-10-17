@@ -1,5 +1,30 @@
 # Estado actual del sistema — 2026-10-17
 
+## Icono propio de Lucie (2026-10-17)
+
+Se sustituye el icono genérico de Windows por una L blanca sobre un recuadro
+violeta redondeado con degradado y destello rosa. `bandeja/icono_lucie.py`
+dibuja geometría escalable con transparencia y antialiasing; genera el recurso
+Win32 en memoria, sin fuentes, dependencias ni imágenes binarias versionadas.
+El HICON propio se reutiliza al restaurar Explorer y se libera al cerrar.
+
+Pruebas específicas Windows/Python 3.13.0: **20 OK**, **4.865 s**, sin omisiones.
+Se mantienen los controles de clic/salida, recuperación, mutex, inicio y errores;
+se comprueba también la creación/liberación del icono propio. Manifiesto real
+solo contado **373 / 373**, estable. Log externo:
+`%TEMP%/tests_icono_lucie_violeta.log`. AST **0/30**, auditoría de repo/historial
+y del módulo nuevo correctas. No se repitió la suite completa por este cambio
+visual ni se ejecutó Linux. La vista previa se generó fuera del repositorio.
+
+Se actualizó el icono local cerrando solo su proceso adjunto y volviéndolo a
+abrir desde el acceso de Inicio. Se comprobó que el servidor previo seguía
+siendo dueño del puerto y se conservó sin reiniciarlo ni duplicar vigilantes;
+Windows confirmó el nuevo icono registrado. Fue aplicación del cambio solicitado,
+no fixture. Fetch sin novedades, desde `9fa109e` en `feat/lucie-recibir`.
+El usuario autorizó expresamente el commit y push de esta mejora visual el
+**2026-10-17**, en `feat/lucie-recibir`. Revisión previa sin novedades remotas
+ni commits locales anteriores pendientes de subir.
+
 ## Inicio automático de Windows e icono de Lucie (2026-10-17)
 
 El usuario solicitó iniciar Lucie al entrar a Windows y abrir el panel desde un

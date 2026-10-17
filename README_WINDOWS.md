@@ -50,7 +50,9 @@ Conserva un acceso directo diferente si ya existe; repetir la instalación con
 los mismos datos no lo modifica. Cada equipo registra sus propias rutas.
 
 Lucie se inicia en segundo plano, sin consola ni apertura automática de Chrome,
-usando la misma configuración y vigilantes del `.bat`. **Un clic izquierdo en
+usando la misma configuración y vigilantes del `.bat`. El icono propio es una
+**L blanca sobre violeta con un destello rosa**, dibujado sin fuentes externas
+y con bordes suaves para tamaños pequeños. **Un clic izquierdo en
 el icono abre el panel** en Chrome; el menú derecho ofrece abrirlo o salir de
 Lucie, deteniendo sus vigilantes. Windows puede ubicar el icono dentro de **^**:
 se puede arrastrar desde allí junto al reloj. No se modifican las preferencias

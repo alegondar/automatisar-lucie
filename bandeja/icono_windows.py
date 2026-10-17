@@ -25,6 +25,7 @@ class IconoWindows:
         self.al_salir = None
         self.hwnd = None
         self._mutex = None
+        self._hicon = None
         self._hilo = None
         self._listo = threading.Event()
         self._error = None
@@ -67,7 +68,9 @@ class IconoWindows:
                 ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
                 w.HWND, w.HMENU, w.HINSTANCE, ctypes.c_void_p], w.HWND),
             (self.user.DefWindowProcW, [w.HWND, w.UINT, w.WPARAM, w.LPARAM], ctypes.c_ssize_t),
-            (self.user.LoadIconW, [w.HINSTANCE, ctypes.c_void_p], w.HICON),
+            (self.user.CreateIconFromResourceEx, [ctypes.c_void_p, w.DWORD, w.BOOL, w.DWORD,
+                                                ctypes.c_int, ctypes.c_int, w.UINT], w.HICON),
+            (self.user.DestroyIcon, [w.HICON], w.BOOL),
             (self.user.RegisterWindowMessageW, [w.LPCWSTR], w.UINT),
             (self.user.GetMessageW, [ctypes.POINTER(w.MSG), w.HWND, w.UINT, w.UINT], w.BOOL),
             (self.user.TranslateMessage, [ctypes.POINTER(w.MSG)], w.BOOL),
@@ -155,11 +158,18 @@ class IconoWindows:
             self.user.DestroyMenu(menu)
 
     def _notificar(self, operacion):
+        if not self._hicon and operacion != 2:
+            from bandeja.icono_lucie import recurso_icono
+            recurso = recurso_icono()
+            buffer = ctypes.create_string_buffer(recurso)
+            self._hicon = self.user.CreateIconFromResourceEx(buffer, len(recurso), True, 0x00030000, 32, 32, 0)
+            if not self._hicon:
+                raise ctypes.WinError(ctypes.get_last_error())
         datos = self._DatosIcono()
         datos.cbSize = ctypes.sizeof(datos)
         datos.hWnd, datos.uID = self.hwnd, 1
         datos.uFlags, datos.uCallbackMessage = 7, WM_ICONO  # mensaje, icono, tooltip
-        datos.hIcon = self.user.LoadIconW(None, ctypes.c_void_p(32512))
+        datos.hIcon = self._hicon
         datos.szTip = "Lucie - Clic para abrir el panel"
         return bool(self.shell.Shell_NotifyIconW(operacion, ctypes.byref(datos)))
 
@@ -236,4 +246,7 @@ class IconoWindows:
                 self.hwnd = None
             if registrado:
                 self.user.UnregisterClassW(self._clase, instancia)
+            if self._hicon:
+                self.user.DestroyIcon(self._hicon)
+                self._hicon = None
             self._listo.set()

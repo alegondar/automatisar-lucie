@@ -43,12 +43,14 @@ class TestIconoWindows(unittest.TestCase):
         icono.iniciar()
         self.assertIsNone(icono._error)
         self.assertTrue(icono.hwnd)
+        self.assertTrue(icono._hicon)
         icono.user.PostMessageW(icono.hwnd, WM_ICONO, 1, WM_LBUTTONUP)
         self.assertTrue(abierto.wait(3), "Un clic debe abrir el panel")
         icono.user.PostMessageW(icono.hwnd, WM_COMMAND, 2, 0)
         self.assertTrue(salido.wait(3), "Salir debe avisar al servicio dueño")
         icono._hilo.join(timeout=3)
         self.assertFalse(icono._hilo.is_alive())
+        self.assertIsNone(icono._hicon)
 
     def test_icono_restaurable_tras_mensaje_taskbarcreated(self):
         icono = self.crear_icono()
