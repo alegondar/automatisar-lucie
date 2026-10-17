@@ -35,6 +35,20 @@ def localizar_chrome():
     return None
 
 
+def dashboard_disponible(puerto, timeout=0.5):
+    """Comprueba la identidad del panel sin abrir Chrome ni tocar la base local."""
+    conexion = http.client.HTTPConnection("127.0.0.1", puerto, timeout=timeout)
+    try:
+        conexion.request("GET", "/panel.html")
+        respuesta = conexion.getresponse()
+        html = respuesta.read(131072)
+        return respuesta.status == 200 and b"<title>Lucie Sin Reglas" in html and b'src="/panel.js"' in html
+    except (OSError, http.client.HTTPException):
+        return False
+    finally:
+        conexion.close()
+
+
 def abrir_dashboard_chrome(puerto, espera=5):
     """Espera respuesta del panel local y lanza Chrome; un fallo no corta la bandeja."""
     if type(puerto) is not int or not 1 <= puerto <= 65535:
@@ -46,16 +60,7 @@ def abrir_dashboard_chrome(puerto, espera=5):
         return False
     limite = time.monotonic() + espera
     while time.monotonic() < limite:
-        conexion = http.client.HTTPConnection("127.0.0.1", puerto, timeout=min(0.5, max(0.01, limite - time.monotonic())))
-        try:
-            conexion.request("GET", "/panel.html")
-            respuesta = conexion.getresponse()
-            html = respuesta.read(131072)
-            listo = respuesta.status == 200 and b"<title>Lucie Sin Reglas" in html and b'src="/panel.js"' in html
-        except (OSError, http.client.HTTPException):
-            listo = False
-        finally:
-            conexion.close()
+        listo = dashboard_disponible(puerto, timeout=min(0.5, max(0.01, limite - time.monotonic())))
         if listo:
             try:
                 subprocess.Popen([chrome, "--new-tab", url], stdin=subprocess.DEVNULL,

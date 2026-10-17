@@ -136,6 +136,96 @@ class TestNavegador(unittest.TestCase):
             capcut.iniciar.assert_not_called()
             hilo.assert_not_called()
 
+    def test_icono_se_conecta_a_panel_existente_sin_base_ni_vigilantes(self):
+        with ExitStack() as stack:
+            app, vigilante, capcut, servidor, _, abrir = self.contexto_main(stack, ["--icono", "--sin-navegador"])
+            stack.enter_context(patch.object(app.sys, "platform", "win32"))
+            stack.enter_context(patch.object(app, "dashboard_disponible", return_value=True))
+            icono = stack.enter_context(patch("bandeja.icono_windows.IconoWindows")).return_value
+            icono.adquirir_instancia.return_value = True
+            app.main()
+            app.GestorBaseDatosBandeja.assert_not_called()
+            vigilante.iniciar.assert_not_called()
+            capcut.iniciar.assert_not_called()
+            servidor.serve_forever.assert_not_called()
+            abrir.assert_not_called()
+            icono.iniciar.assert_called_once()
+            icono.esperar.assert_called_once()
+            icono.detener.assert_called_once()
+
+    def test_icono_duplicado_no_inicia_servicio_ni_otro_icono(self):
+        for argumentos in (["--icono"], ["--icono", "--sin-navegador"]):
+            with self.subTest(argumentos=argumentos), ExitStack() as stack:
+                app, vigilante, capcut, _, _, abrir = self.contexto_main(stack, argumentos)
+                stack.enter_context(patch.object(app.sys, "platform", "win32"))
+                icono = stack.enter_context(patch("bandeja.icono_windows.IconoWindows")).return_value
+                icono.adquirir_instancia.return_value = False
+                app.main()
+                app.GestorBaseDatosBandeja.assert_not_called()
+                vigilante.iniciar.assert_not_called()
+                capcut.iniciar.assert_not_called()
+                icono.iniciar.assert_not_called()
+                icono.detener.assert_called_once()
+                self.assertEqual(abrir.call_count, 0 if "--sin-navegador" in argumentos else 1)
+
+    def test_icono_inicia_y_detiene_el_servicio_que_le_pertenece(self):
+        with ExitStack() as stack:
+            app, vigilante, capcut, servidor, _, abrir = self.contexto_main(stack, ["--icono", "--sin-navegador"])
+            stack.enter_context(patch.object(app.sys, "platform", "win32"))
+            stack.enter_context(patch.object(app, "dashboard_disponible", return_value=False))
+            icono = stack.enter_context(patch("bandeja.icono_windows.IconoWindows")).return_value
+            icono.adquirir_instancia.return_value = True
+            app.main()
+            icono.iniciar.assert_called_once()
+            icono.detener.assert_called_once()
+            self.assertEqual(icono.al_salir, servidor.shutdown)
+            vigilante.iniciar.assert_called_once()
+            capcut.iniciar.assert_called_once()
+            vigilante.detener.assert_called_once()
+            capcut.detener.assert_called_once()
+            servidor.server_close.assert_called_once()
+            abrir.assert_not_called()
+
+    def test_icono_rechaza_otro_servicio_y_libera_mutex(self):
+        with ExitStack() as stack:
+            app, vigilante, capcut, _, _, abrir = self.contexto_main(stack, ["--icono"], ocupado=True)
+            stack.enter_context(patch.object(app.sys, "platform", "win32"))
+            stack.enter_context(patch.object(app, "dashboard_disponible", return_value=False))
+            icono = stack.enter_context(patch("bandeja.icono_windows.IconoWindows")).return_value
+            icono.adquirir_instancia.return_value = True
+            with self.assertRaisesRegex(OSError, "otro servicio"):
+                app.main()
+            icono.iniciar.assert_not_called()
+            icono.detener.assert_called_once()
+            vigilante.iniciar.assert_not_called()
+            capcut.iniciar.assert_not_called()
+            abrir.assert_not_called()
+
+    def test_icono_no_cambia_arranque_linux(self):
+        with ExitStack() as stack:
+            app, vigilante, _, servidor, _, _ = self.contexto_main(stack, ["--icono", "--sin-navegador"])
+            stack.enter_context(patch.object(app.sys, "platform", "linux"))
+            icono = stack.enter_context(patch("bandeja.icono_windows.IconoWindows"))
+            app.main()
+            icono.assert_not_called()
+            vigilante.iniciar.assert_called_once()
+            servidor.serve_forever.assert_called_once()
+
+    def test_fallo_icono_libera_servidor_sin_iniciar_vigilantes(self):
+        with ExitStack() as stack:
+            app, vigilante, capcut, servidor, _, _ = self.contexto_main(stack, ["--icono", "--sin-navegador"])
+            stack.enter_context(patch.object(app.sys, "platform", "win32"))
+            stack.enter_context(patch.object(app, "dashboard_disponible", return_value=False))
+            icono = stack.enter_context(patch("bandeja.icono_windows.IconoWindows")).return_value
+            icono.adquirir_instancia.return_value = True
+            icono.iniciar.side_effect = OSError("No hay icono")
+            with self.assertRaisesRegex(OSError, "No hay icono"):
+                app.main()
+            icono.detener.assert_called_once()
+            vigilante.iniciar.assert_not_called()
+            capcut.iniciar.assert_not_called()
+            servidor.server_close.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

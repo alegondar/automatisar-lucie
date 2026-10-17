@@ -122,6 +122,12 @@ la dirección y el servidor sigue funcionando. Para iniciar sin navegador:
 2. Para más detalles sobre configuración local, nombres reservados y el montaje de unidades en Windows, consultar la guía específica:  
    👉 **[README_WINDOWS.md](README_WINDOWS.md)**
 
+Windows también permite iniciar Lucie en segundo plano al entrar a la sesión,
+con un icono junto al reloj para abrir el panel con un clic. El instalador
+`instalar_inicio_windows.ps1` ofrece simulación y habilitación por usuario;
+ver [inicio automático e icono](README_WINDOWS.md#inicio-automático-e-icono-junto-al-reloj).
+El `.bat` conserva su consola y añade el mismo icono, sin duplicar instancias.
+
 ---
 
 ## 🧪 Pruebas Automatizadas y Auditorías

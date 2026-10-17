@@ -51,6 +51,13 @@ material existente; reintentos y Deshacer respetan las rutas registradas.
 CapCut conserva sus originales. Ver el mapa de módulos, API, estados, modo manual,
 reintentos, reversión y validaciones en `ESTADO_ACTUAL.md`.
 
+Inicio Windows (2026-10-17): el usuario solicitó habilitar el inicio de Lucie al
+entrar a su sesión, en segundo plano con icono junto al reloj. El acceso de Inicio
+es local al equipo; `instalar_inicio_windows.ps1` simula antes de instalarlo sin
+pisar accesos ajenos. Ver README_WINDOWS.md. No iniciar la bandeja real como
+fixture: las pruebas del icono usan callbacks falsos y el instalador solo carpetas
+temporales. Una bandeja existente puede recibir el icono sin nuevos vigilantes.
+
 ## Cola de publicación y Wi-Fi (2026-10-12)
 
 Al confirmar «Terminé de editar» (corrección 2026-10-14), además de organizar

@@ -29,7 +29,7 @@ from bandeja.servidor import HandlerServidorBandeja, crear_servidor, GeneradorMi
 from bandeja.capcut import VigilanteCapCut
 from bandeja.edicion import vincular_nuevo_export, procesar_exports_pendientes_copia
 from bandeja.pendrive import detectar_pendrive
-from bandeja.navegador import abrir_dashboard_chrome
+from bandeja.navegador import abrir_dashboard_chrome, dashboard_disponible
 
 # Reconfiguración de consola para evitar fallos de codificación en Windows
 if hasattr(sys.stdout, "reconfigure"):
@@ -103,6 +103,7 @@ def main():
     parser.add_argument("--descargas", "-d", default=None, help="Ruta alternativa de ~/Descargas")
     parser.add_argument("--destino", default=None, help="Ruta base destino (por defecto ~/Descargas/_lucie)")
     parser.add_argument("--sin-navegador", action="store_true", help="Iniciar sin abrir Google Chrome")
+    parser.add_argument("--icono", action="store_true", help="Mostrar el icono de Lucie junto al reloj de Windows")
     args = parser.parse_args()
 
     config = ConfiguracionBandeja(ruta_config=args.config)
@@ -113,6 +114,32 @@ def main():
     if args.destino:
         config.ruta_destino_base = os.path.abspath(os.path.expanduser(args.destino))
 
+    if args.icono and sys.platform == "win32":
+        from bandeja.icono_windows import IconoWindows
+        icono = IconoWindows(config.puerto_servidor,
+                             lambda: abrir_dashboard_chrome(config.puerto_servidor))
+        try:
+            if not icono.adquirir_instancia():
+                if not args.sin_navegador:
+                    abrir_dashboard_chrome(config.puerto_servidor)
+                return
+            if dashboard_disponible(config.puerto_servidor):
+                # Una bandeja iniciada antes de instalar el icono sigue siendo
+                # dueña de sus vigilantes; este proceso solo aporta el acceso.
+                icono.iniciar()
+                if not args.sin_navegador:
+                    abrir_dashboard_chrome(config.puerto_servidor)
+                icono.esperar()
+                return
+            ejecutar_bandeja(config, args, icono)
+        finally:
+            icono.detener()
+    else:
+        ejecutar_bandeja(config, args)
+
+
+def ejecutar_bandeja(config, args, icono=None):
+    """Ciclo normal; el icono es opcional y Linux conserva el arranque de consola."""
     db = GestorBaseDatosBandeja()
     filtro = FiltroListaBlanca(config)
     detector = DetectorDescargasActivas()
@@ -134,24 +161,35 @@ def main():
         err_str = str(e).lower()
         err_code = getattr(e, "winerror", None) or getattr(e, "errno", None)
         if err_code in (errno.EADDRINUSE, 98, 10048) or "already in use" in err_str or "un solo uso" in err_str or "address already in use" in err_str:
+            if icono:
+                # Puede haberse iniciado otro proceso mientras se preparaba este.
+                if not dashboard_disponible(config.puerto_servidor):
+                    raise OSError("El puerto está ocupado por otro servicio; Lucie no se inició.") from e
+                icono.iniciar()
+                if not args.sin_navegador:
+                    abrir_dashboard_chrome(config.puerto_servidor)
+                icono.esperar()
+                return
             print(f"Ya hay una bandeja corriendo en el puerto {config.puerto_servidor}")
             if not args.sin_navegador:
                 abrir_dashboard_chrome(config.puerto_servidor)
             sys.exit(0)
         raise
 
-    vigilante.iniciar()
-    vigilante_capcut.iniciar()
-
-    print(f"[*] Bandeja de Descargas iniciada en http://{config.host_servidor}:{config.puerto_servidor}")
-    print(f"[*] Vigilando: {config.ruta_descargas}")
-    print(f"[*] Destino:   {config.ruta_destino_base}")
-
-    if not args.sin_navegador:
-        threading.Thread(target=abrir_dashboard_chrome, args=(servidor.server_address[1],),
-                         name="AbrirDashboardChrome", daemon=True).start()
-
     try:
+        if icono:
+            icono.al_salir = servidor.shutdown
+            icono.iniciar()
+        vigilante.iniciar()
+        vigilante_capcut.iniciar()
+
+        print(f"[*] Bandeja de Descargas iniciada en http://{config.host_servidor}:{config.puerto_servidor}")
+        print(f"[*] Vigilando: {config.ruta_descargas}")
+        print(f"[*] Destino:   {config.ruta_destino_base}")
+
+        if not args.sin_navegador:
+            threading.Thread(target=abrir_dashboard_chrome, args=(servidor.server_address[1],),
+                             name="AbrirDashboardChrome", daemon=True).start()
         servidor.serve_forever()
     except KeyboardInterrupt:
         print("\n[*] Deteniendo servidor y vigilante...")

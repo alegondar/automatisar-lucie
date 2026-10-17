@@ -45,7 +45,7 @@ rem Python abre Chrome cuando el panel responde, respetando --puerto y --sin-nav
 
 echo [*] Ejecutando Bandeja de Descargas... Consola de logs activa:
 echo ----------------------------------------------------------------------------
-%PYTHON_CMD% bandeja_descargas.py %*
+%PYTHON_CMD% bandeja_descargas.py --icono %*
 set "EXIT_CODE=%errorlevel%"
 echo ----------------------------------------------------------------------------
 echo [*] Proceso finalizado con código %EXIT_CODE%.

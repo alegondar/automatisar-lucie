@@ -1,4 +1,62 @@
-# Estado actual del sistema — 2026-10-15
+# Estado actual del sistema — 2026-10-17
+
+## Inicio automático de Windows e icono de Lucie (2026-10-17)
+
+El usuario solicitó iniciar Lucie al entrar a Windows y abrir el panel desde un
+icono junto al reloj. `instalar_inicio_windows.ps1` muestra una simulación y,
+con `-Instalar`, crea `Lucie.lnk` en Inicio del usuario actual. Registra las
+rutas propias del equipo, sin administrador, dependencias nuevas ni cambios a
+configuraciones/SQLite. No pisa accesos ajenos y repetir la misma instalación
+es idempotente. El acceso ejecuta `iniciar_bandeja_windows.py` con `pythonw.exe`
+y `--sin-navegador`, sin consola ni pestaña automática al iniciar sesión.
+
+`bandeja_descargas.py --icono` y el `.bat` usan el icono nativo de
+`bandeja/icono_windows.py` (ctypes/Win32). Un clic izquierdo abre el dashboard
+en Chrome con el puerto configurado; el derecho ofrece abrir o salir. Un mutex
+por puerto/sesión evita iconos duplicados y el socket exclusivo sigue evitando
+otros vigilantes. El icono se restaura con `TaskbarCreated` tras reiniciar Explorer.
+Windows conserva la decisión de mostrarlo junto al reloj o en el desplegable
+**^**; se puede arrastrar allí sin modificar preferencias privadas del sistema.
+
+Si ya existe una bandeja iniciada sin icono, el nuevo lanzador verifica su panel
+y agrega solo el acceso, sin abrir la base ni crear vigilantes. En ese caso el
+menú dice **Cerrar icono**; conserva el servicio previo. Cuando el proceso posee
+el servicio, **Salir de Lucie** solicita su cierre y detiene sus dos vigilantes.
+El lanzador sin consola agrega diagnósticos a
+`%LOCALAPPDATA%/Lucie/logs/bandeja_windows.log` y muestra un aviso si falla el
+arranque. Los archivos generados y el acceso del usuario quedan fuera de Git.
+Linux conserva el arranque de consola; `--icono` no carga Win32 allí.
+
+Fetch al comenzar: `feat/lucie-recibir` en `2d88f7b`, sin novedades remotas ni
+commits locales pendientes. Esta implementación es un lote nuevo; el inicio
+automático y su instalación local están autorizados por la solicitud del usuario.
+El usuario confirmó expresamente el commit y push de este lote el
+**2026-10-17**, en `feat/lucie-recibir`. La revisión previa a publicar no
+encontró novedades remotas ni commits locales anteriores pendientes de subir.
+
+Validación **Windows/Python 3.13.0: 432 pruebas, OK, 11 omisiones**, en
+**86.127 s**. Las omisiones existentes requieren Linux o privilegios de symlinks;
+se conservaron guardia y aserciones. Manifiesto real solo contado: **364 / 364**,
+estable tanto en las pruebas específicas como en la suite. Log externo:
+`%TEMP%/tests_inicio_icono_windows_20261017.log`. Doce pruebas nuevas cubren
+Win32 nativo (clic, salida, mutex y recuperación del icono), instalador temporal
+(simulación, idempotencia y colisión), pythonw/log/errores y ciclo del servicio
+simulado (instancia existente, duplicado, dueño, puerto ajeno, fallo y Linux).
+No se usaron archivos reales como fixtures ni se iniciaron vigilantes reales
+para probar. No se ejecutaron Linux nativo ni un reinicio real de Windows.
+AST: **0 infracciones/29 módulos**, auditoría repo/historial y cuatro archivos
+nuevos sin infracciones; sintaxis JS, UI de edición/Wi-Fi/CSRF y diff correctos.
+
+Instalación local aplicada tras la simulación y las pruebas: acceso `Lucie.lnk`
+en Inicio del usuario actual, con pythonw, directorio del proyecto y
+`--sin-navegador` verificados mediante COM. Se activó el acceso solicitado sobre
+la bandeja preexistente, conservando su proceso y sin duplicar vigilantes.
+Windows confirmó un único icono registrado y su rectángulo en la barra de tareas
+(`Shell_NotifyIconGetRect`, resultado correcto). El log del lanzador no mostró
+errores. Esta activación es uso normal autorizado; no fue fixture de la suite.
+El arranque tras cerrar sesión/reiniciar queda configurado, sin afirmar que se
+haya realizado ese reinicio. Mientras se conecta a la bandeja previa, el menú
+ofrece **Cerrar icono**; al próximo inicio será dueño del servicio en segundo plano.
 
 ## Actualización del host Kali desde GitHub (2026-10-15)
 

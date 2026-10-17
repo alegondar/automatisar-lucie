@@ -34,6 +34,41 @@ La apertura automática también funciona al ejecutar Python directamente; respe
 abre su panel sin iniciar otros vigilantes. `--sin-navegador` permite iniciar
 sin Chrome. Si no se encuentra Chrome, se informa la URL y la bandeja continúa.
 
+### Inicio automático e icono junto al reloj
+
+Para habilitar Lucie al **iniciar sesión con tu usuario de Windows**, desde
+PowerShell en esta carpeta:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\instalar_inicio_windows.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\instalar_inicio_windows.ps1 -Instalar
+```
+
+El primer comando muestra la simulación y el segundo crea `Lucie.lnk` en la
+carpeta Inicio del usuario. No requiere administrador ni instala dependencias.
+Conserva un acceso directo diferente si ya existe; repetir la instalación con
+los mismos datos no lo modifica. Cada equipo registra sus propias rutas.
+
+Lucie se inicia en segundo plano, sin consola ni apertura automática de Chrome,
+usando la misma configuración y vigilantes del `.bat`. **Un clic izquierdo en
+el icono abre el panel** en Chrome; el menú derecho ofrece abrirlo o salir de
+Lucie, deteniendo sus vigilantes. Windows puede ubicar el icono dentro de **^**:
+se puede arrastrar desde allí junto al reloj. No se modifican las preferencias
+de la barra de tareas. Para deshabilitar el arranque, usar las aplicaciones de
+inicio de Windows o abrir `shell:startup` y gestionar el acceso `Lucie`.
+
+`iniciar_bandeja.bat` también habilita el icono. Si ya existe, abre el panel sin
+crear otro servicio ni otro icono. Si la bandeja fue iniciada previamente con
+Python sin icono, se conecta a ella sin reiniciarla: el menú muestra **Cerrar
+icono**, y esa acción conserva el servicio que ya estaba funcionando.
+
+El acceso de Inicio ejecuta `iniciar_bandeja_windows.py` con `pythonw.exe` y
+`--sin-navegador`. Para iniciarlo manualmente sin consola se puede usar ese
+mismo lanzador; `bandeja_descargas.py --icono` permite mantener una consola.
+Los diagnósticos de inicio se agregan a
+`%LOCALAPPDATA%\Lucie\logs\bandeja_windows.log`, fuera del repositorio. Los
+fallos de arranque muestran un aviso con la ruta del diagnóstico.
+
 La entrega vigente está en **`feat/lucie-recibir`**, incluyendo publicados por
 personaje, organización manual, renovación del token tras reiniciar y Chrome
 automático. La actualización del host el 2026-10-14 incluyó dos correcciones
