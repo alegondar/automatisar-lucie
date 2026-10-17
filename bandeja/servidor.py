@@ -759,11 +759,11 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             if not isinstance(body, dict):
                 raise ValueError("El cuerpo debe ser un objeto JSON.")
             if ruta.endswith("/buscar"):
-                resultado = {"dispositivos": self.publicacion.buscar_dispositivos()}
+                resultado = {"dispositivos": self.publicacion.buscar_dispositivos(body.get("receptor"))}
             elif ruta.endswith("/conectar"):
-                resultado = {"dispositivo": self.publicacion.agregar_dispositivo(body.get("ip"), body.get("puerto", 53318))}
+                resultado = {"dispositivo": self.publicacion.agregar_dispositivo(body.get("ip"), body.get("puerto", 53318), body.get("receptor"))}
             elif ruta.endswith("/simular"):
-                resultado = self.publicacion.simular(body.get("seleccion"), body.get("dispositivo_id"), body.get("personajes"))
+                resultado = self.publicacion.simular(body.get("seleccion"), body.get("dispositivo_id"), body.get("personajes"), body.get("receptor"))
             elif ruta.endswith("/organizar-simular"):
                 resultado = self.publicacion.organizacion.simular(body.get("seleccion"))
             elif ruta.endswith("/organizar"):

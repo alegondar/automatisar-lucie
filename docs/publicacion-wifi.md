@@ -27,22 +27,55 @@ Una copia deshecha no vuelve a enviarse automáticamente.
 ## Usar la sección del dashboard
 
 1. Reiniciar la bandeja después de actualizar y recargar el navegador con `Ctrl+F5`.
-2. Abrir **Sin publicar · Enviar al celular**. Elegir Lucie, Roli o Mailen,
+2. Abrir **Sin publicar · Enviar al celular → Preparar envío**. Elegir Lucie, Roli o Mailen,
    buscar por nombre/carpeta si es necesario y revisar la vista previa. Marcar
    archivos individualmente o pulsar **Seleccionar los visibles**.
-3. Abrir [Lucie Recibir](../android/README.md) o
+3. En **Conectá tu celular**, elegir la **app que va a recibir**. La opción
+   inicial es **Lucie Recibir**. Abrir [Lucie Recibir](../android/README.md) o
    [LocalSend en el celular](https://localsend.org/download), en la misma
    red Wi-Fi que la PC. No hace falta instalar LocalSend en la PC: el emisor está
    integrado al dashboard y usa la biblioteca estándar de Python.
-4. Pulsar **Buscar celulares**, elegir el receptor y **Revisar envío**. Si no
-   aparece, ingresar su IP local y el puerto del receptor (53318 para Lucie Recibir, 53317 para LocalSend).
+4. Pulsar **Buscar celular**, elegir el receptor y **Revisar antes de enviar**.
+   La lista muestra el nombre, IP y puerto. La búsqueda no selecciona ni envía
+   automáticamente. Si no aparece, desplegar **Conectar manualmente por IP**
+   e ingresar los datos de la app elegida (53318 para Lucie, 53317 para LocalSend).
 5. Revisar archivos, tamaños, receptor y destinos, y confirmar el envío. Si el
    receptor solicita PIN, ingresarlo antes de confirmar. Aceptar la recepción
    en el celular y mantener el receptor abierto hasta completar la transferencia.
    Con Lucie Recibir, comparar antes la huella HTTPS completa con el dashboard.
 6. Tras la respuesta satisfactoria del receptor y la verificación de integridad,
    los videos se trasladan a `videos completos/videosPublicados/<personaje>/`,
-   conservando las carpetas del capítulo y el nombre del archivo. El historial ofrece **Volver a Sin publicar**.
+   conservando las carpetas del capítulo y el nombre del archivo. La vista
+   **Enviados** ofrece buscar, ver la ubicación y **Volver a Sin publicar**.
+
+La pantalla separa **Preparar envío**, **Enviados** y **Organizar anteriores**.
+En escritorio, la selección y el destino quedan uno al lado del otro; en móvil
+hay accesos a los pasos Archivos, Celular y Revisar. La revisión muestra primero
+los nombres y tamaños: destinos completos, huella HTTPS y diagnóstico se pueden
+desplegar. Cambiar archivos, filtro, personaje, app o celular invalida la revisión;
+una respuesta tardía no la vuelve a habilitar. Una confirmación anterior tampoco
+puede enviar una revisión nueva. Cada envío sigue requiriendo confirmación.
+
+## Búsqueda de Lucie sin conocer la IP
+
+Cada búsqueda consulta las interfaces IPv4 privadas vigentes. Envía anuncios
+repetidos por interfaz y broadcast dirigido; un fallo de multicast o de un
+adaptador no cancela los demás intentos. Para Lucie, las respuestas vuelven al
+socket UDP emisor y no hace falta una escucha HTTP entrante en la PC.
+
+Si no aparece Lucie por UDP, se comprueba exclusivamente su puerto TCP 53318
+en vecinos locales, con un máximo de 254 direcciones por interfaz y cuatro
+interfaces. En una red mayor se limita al bloque /24 de esta PC. No recorre
+Internet ni consulta otros puertos. Cada candidato debe responder como receptor
+Lucie por HTTPS antes de ofrecerlo; encontrar un puerto abierto no basta.
+Esto permite volver a encontrar el teléfono cuando el router cambia su IP,
+si la app está abierta y hay conectividad entre ambos equipos.
+
+**Lucie Recibir y LocalSend se eligen por separado.** La búsqueda de Lucie no
+anuncia al puerto de LocalSend ni usa esa app como respaldo. Cambiar de app
+limpia el celular y la revisión seleccionados; la conexión manual y la simulación
+rechazan una app diferente de la elegida. La identidad HTTPS se sigue fijando
+por huella al enviar. No se modifica el firewall, el router ni el receptor Android.
 
 Al completar todos los archivos del envío se retiran únicamente las carpetas
 vacías que dejaron esos traslados en Sin publicar. Se conservan la cola, los

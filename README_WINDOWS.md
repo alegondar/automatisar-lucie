@@ -132,10 +132,13 @@ el video. Si hay varios candidatos, elegir en Videos completados. El modo manual
 sigue esperando el envío explícito.
 
 Para enviarlos por Wi-Fi, abrir **Sin publicar · Enviar al celular**, seleccionar
-videos y el receptor LocalSend, revisar y confirmar. Abrir LocalSend en el celular
-conectado a la misma red y aceptar la recepción. Si la búsqueda falla, se puede
-conectar por la IP y el puerto de LocalSend. Los recibidos pasan de
-`videos completos/videos sin publicar/` al nivel anterior con opción de Deshacer.
+los archivos y elegir **Lucie Recibir** o **LocalSend** en el paso del celular.
+Abrir esa misma app en el teléfono, buscarlo, revisar y confirmar. Lucie es la
+opción inicial; no se sustituye automáticamente por LocalSend. La búsqueda
+consulta las interfaces actuales y tiene respaldo local para cambios de IP o
+multicast bloqueado. La conexión por IP queda desplegable como opción manual.
+Los recibidos se archivan en `videos completos/videosPublicados/<personaje>/`
+y aparecen en la vista **Enviados**, con opción de Deshacer.
 Ver [Publicación y envío Wi-Fi](docs/publicacion-wifi.md).
 
 **Terminé de editar** permite mantener CapCut abierto cuando sus clips pueden

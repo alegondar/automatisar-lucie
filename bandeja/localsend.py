@@ -20,6 +20,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlencode
+from bandeja.red_local import interfaces_locales, buscar_puerto_lucie
 
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,19 @@ PUERTO_LUCIE = 53318
 PUERTO_DESCUBRIMIENTO_LUCIE = 53319
 PUERTO_LOCALSEND = 53317
 GRUPO_DESCUBRIMIENTO = "224.0.0.167"
+
+
+def tipo_receptor(dispositivo):
+    """Identifica la app anunciada; la identidad criptográfica se verifica aparte."""
+    if dispositivo.get("receptor") in ("lucie", "localsend"):
+        return dispositivo["receptor"]
+    return "lucie" if (dispositivo.get("port") == PUERTO_LUCIE and
+                        str(dispositivo.get("alias", "")).startswith("Lucie Recibir")) else "localsend"
+
+
+def validar_receptor(receptor):
+    if receptor not in (None, "lucie", "localsend"):
+        raise ValueError("Elegí Lucie Recibir o LocalSend.")
 
 
 class _LecturaCancelable(io.RawIOBase):
@@ -142,20 +156,21 @@ class ClienteLocalSend:
             raise ValueError("Respuesta LocalSend inválida.")
         return resultado
 
-    def probar(self, ip, puerto=PUERTO_LUCIE, protocolo=None):
+    def probar(self, ip, puerto=PUERTO_LUCIE, protocolo=None, timeout=3):
         validar_destino(ip, puerto)
         errores = []
         for modo in ([protocolo] if protocolo else ["https", "http"]):
             dispositivo = {"ip": ip, "port": puerto, "protocol": modo}
             con = None
             try:
-                con, huella = self._conexion(dispositivo, timeout=3, comprobar=False)
+                con, huella = self._conexion(dispositivo, timeout=timeout, comprobar=False)
                 con.request("GET", "/api/localsend/v2/info")
                 datos = self._leer_json(con.getresponse())
                 if not str(datos.get("version", "")).startswith("2.") or not datos.get("alias"):
                     raise ValueError("El dispositivo no ofrece un receptor LocalSend v2.")
                 dispositivo.update(alias=str(datos["alias"])[:100],
                                    fingerprint=huella or str(datos.get("fingerprint", "")))
+                dispositivo["receptor"] = tipo_receptor(dispositivo)
                 return dispositivo
             except (OSError, ValueError, http.client.HTTPException) as error:
                 errores.append(str(error))
@@ -164,7 +179,9 @@ class ClienteLocalSend:
                     con.close()
         raise ValueError("No se pudo conectar al receptor. Abrí Lucie Recibir en el celular, verificá Wi-Fi, IP y puerto. " + "; ".join(errores))
 
-    def descubrir(self, segundos=3):
+    def descubrir(self, segundos=3, receptor=None):
+        validar_receptor(receptor)
+        interfaces = interfaces_locales()
         encontrados = {}
         encontrados_lock = threading.Lock()
         cliente = self
@@ -204,26 +221,54 @@ class ClienteLocalSend:
                 except (ValueError, OSError):
                     self.send_error(400)
 
-        servidor = ThreadingHTTPServer(("0.0.0.0", 0), Registro)
-        servidor.daemon_threads = True
-        hilo = threading.Thread(target=servidor.serve_forever, daemon=True)
-        hilo.start()
-        udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        servidor = None
+        hilo = None
+        # Lucie contesta al socket UDP emisor; no necesita una escucha HTTP
+        # entrante que el firewall pueda bloquear en una red pública de Windows.
+        if receptor != "lucie":
+            servidor = ThreadingHTTPServer(("0.0.0.0", 0), Registro)
+            servidor.daemon_threads = True
+            hilo = threading.Thread(target=servidor.serve_forever, daemon=True)
+            hilo.start()
+        udp = None
         try:
+            udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
             udp.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
             udp.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             # Puerto efímero propio: no competir con LocalSend ni depender de
             # compartir UDP 53317. Lucie responde por unicast a este socket.
             udp.bind(("0.0.0.0", 0))
             udp.settimeout(0.1)
-            anuncio = {**self.info(servidor.server_port), "announce": True, "lucie": True}
+            anuncio = {**self.info(servidor.server_port if servidor else PUERTO_LUCIE), "announce": True, "lucie": True}
             cuerpo = json.dumps(anuncio).encode()
-            udp.sendto(cuerpo, (GRUPO_DESCUBRIMIENTO, PUERTO_DESCUBRIMIENTO_LUCIE))
-            udp.sendto(cuerpo, ("255.255.255.255", PUERTO_DESCUBRIMIENTO_LUCIE))
-            # Compatibilidad con el registro HTTP del receptor oficial.
-            udp.sendto(cuerpo, (GRUPO_DESCUBRIMIENTO, PUERTO_LOCALSEND))
+            def anunciar():
+                puertos = ([PUERTO_DESCUBRIMIENTO_LUCIE] if receptor == "lucie" else
+                           [PUERTO_LOCALSEND] if receptor == "localsend" else
+                           [PUERTO_DESCUBRIMIENTO_LUCIE, PUERTO_LOCALSEND])
+                for interfaz in interfaces or [None]:
+                    try:
+                        if interfaz:
+                            udp.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(str(interfaz.ip)))
+                    except OSError:
+                        continue
+                    for puerto in puertos:
+                        destinos = {GRUPO_DESCUBRIMIENTO, "255.255.255.255"}
+                        if interfaz:
+                            destinos.add(str(interfaz.network.broadcast_address))
+                        for destino in destinos:
+                            try:
+                                udp.sendto(cuerpo, (destino, puerto))
+                            except OSError:
+                                # Un adaptador o multicast rechazado no cancela la búsqueda.
+                                continue
+
+            anunciar()
             limite = time.monotonic() + min(max(segundos, 0.1), 5)
+            siguiente_anuncio = time.monotonic() + 0.8
             while time.monotonic() < limite:
+                if time.monotonic() >= siguiente_anuncio:
+                    anunciar()
+                    siguiente_anuncio = time.monotonic() + 0.8
                 try:
                     cuerpo, origen = udp.recvfrom(8192)
                     datos = json.loads(cuerpo)
@@ -239,17 +284,31 @@ class ClienteLocalSend:
                     continue
                 except (ValueError, OSError):
                     continue
+        except OSError:
+            logger.warning("La búsqueda UDP no respondió; se conserva la comprobación local de Lucie.")
         finally:
-            udp.close()
-            servidor.shutdown()
-            servidor.server_close()
-            hilo.join(timeout=2)
+            if udp:
+                udp.close()
+            if servidor:
+                servidor.shutdown()
+                servidor.server_close()
+                hilo.join(timeout=2)
         dispositivos = []
         for ip, puerto, protocolo in list(encontrados.values())[:32]:
             try:
-                dispositivos.append(self.probar(ip, puerto, protocolo))
+                dispositivo = self.probar(ip, puerto, protocolo)
+                if receptor is None or tipo_receptor(dispositivo) == receptor:
+                    dispositivos.append(dispositivo)
             except ValueError:
                 pass
+        if receptor != "localsend" and not any(tipo_receptor(d) == "lucie" for d in dispositivos):
+            for ip in buscar_puerto_lucie(interfaces):
+                try:
+                    dispositivo = self.probar(ip, PUERTO_LUCIE, "https", timeout=1)
+                    if tipo_receptor(dispositivo) == "lucie":
+                        dispositivos.append(dispositivo)
+                except ValueError:
+                    continue
         return dispositivos
 
     def enviar(self, dispositivo, archivos, recibido, progreso, cancelar, pin=""):

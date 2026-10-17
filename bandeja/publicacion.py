@@ -16,7 +16,7 @@ import uuid
 
 from bandeja.config import calcular_sha256
 from bandeja.carpetas_vacias import retirar_carpetas_vacias_traslado
-from bandeja.localsend import ClienteLocalSend, PUERTO_LUCIE
+from bandeja.localsend import ClienteLocalSend, PUERTO_LUCIE, tipo_receptor, validar_receptor
 from bandeja.pendrive import detectar_pendrive, operacion_pendrive_exclusiva
 from bandeja.edicion import registrar_evento_manifiesto_edicion
 from bandeja.plataforma import mover_sin_sobrescribir
@@ -206,18 +206,26 @@ class GestorPublicacion:
                 "carpeta": os.path.join(identidad[1], "videos completos", CARPETA_SIN_PUBLICAR)}
 
     def _guardar_dispositivo(self, dispositivo):
+        dispositivo = {**dispositivo, "receptor": tipo_receptor(dispositivo)}
         identificador = hashlib.sha256(json.dumps(dispositivo, sort_keys=True).encode()).hexdigest()[:24]
         with self._lock:
             self._dispositivos[identificador] = dict(dispositivo)
         return {"id": identificador, **dispositivo}
 
-    def buscar_dispositivos(self):
-        return [self._guardar_dispositivo(d) for d in self.cliente.descubrir()]
+    def buscar_dispositivos(self, receptor=None):
+        validar_receptor(receptor)
+        return [self._guardar_dispositivo(d) for d in self.cliente.descubrir(receptor=receptor)
+                if receptor is None or tipo_receptor(d) == receptor]
 
-    def agregar_dispositivo(self, ip, puerto=PUERTO_LUCIE):
-        return self._guardar_dispositivo(self.cliente.probar(ip, puerto))
+    def agregar_dispositivo(self, ip, puerto=PUERTO_LUCIE, receptor=None):
+        validar_receptor(receptor)
+        dispositivo = self.cliente.probar(ip, puerto)
+        if receptor is not None and tipo_receptor(dispositivo) != receptor:
+            raise ValueError("En esa dirección responde otra app. Elegí la app correcta antes de conectar.")
+        return self._guardar_dispositivo(dispositivo)
 
-    def simular(self, seleccion, dispositivo_id, personajes=None):
+    def simular(self, seleccion, dispositivo_id, personajes=None, receptor=None):
+        validar_receptor(receptor)
         if not isinstance(seleccion, list) or not seleccion or len(seleccion) > 50 or any(not isinstance(i, str) for i in seleccion):
             raise ValueError("Elegí entre uno y cincuenta videos.")
         if not isinstance(dispositivo_id, str):
@@ -229,6 +237,8 @@ class GestorPublicacion:
             dispositivo = self._dispositivos.get(dispositivo_id)
         if not dispositivo:
             raise ValueError("Buscá y elegí el celular antes de preparar el envío.")
+        if receptor is not None and tipo_receptor(dispositivo) != receptor:
+            raise ValueError("El receptor no corresponde a la app elegida. Buscá nuevamente el celular.")
         identidad = self._identidad()
         inventario = self._inventario(identidad)
         archivos = []
@@ -258,7 +268,7 @@ class GestorPublicacion:
         token = secrets.token_urlsafe(32)
         with self._lock:
             self._planes = {k: v for k, v in self._planes.items() if v["vence"] > time.monotonic()}
-            self._planes[token] = {"identidad": identidad, "dispositivo": dict(dispositivo), "archivos": archivos,
+            self._planes[token] = {"identidad": identidad, "dispositivo": dict(dispositivo), "dispositivo_id": dispositivo_id, "archivos": archivos,
                                    "vence": time.monotonic() + 300}
         return {"token": token, "dispositivo": dispositivo, "archivos": archivos,
                 "total_bytes": sum(a["tamano"] for a in archivos),
@@ -299,6 +309,7 @@ class GestorPublicacion:
                 raise ValueError("El plan venció o ya se utilizó. Prepará un nuevo envío.")
             identificador = str(uuid.uuid4())
             self._trabajos[identificador] = {"id": identificador, "estado": "en_curso", "fase": "preparando", "mensaje": "Preparando envío",
+                                            "dispositivo": {"id": plan["dispositivo_id"], **plan["dispositivo"]},
                                             "bytes_enviados": 0, "total_bytes": sum(a["tamano"] for a in plan["archivos"]),
                                             "publicados": [], "recibidos": [], "error": None}
             self._trabajos[identificador]["carpetas_vacias_retiradas"] = []

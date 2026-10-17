@@ -1,5 +1,65 @@
 # Estado actual del sistema — 2026-10-17
 
+## Envío guiado y búsqueda independiente de Lucie (2026-10-17)
+
+La sección de publicación se organiza en tres vistas: **Preparar envío**,
+**Enviados** y **Organizar anteriores**. En escritorio quedan los archivos a la
+izquierda y el celular/revisión al lado; móvil incorpora accesos a cada paso.
+Se muestran primero nombres, personaje, fecha legible y receptor; rutas completas,
+huella y diagnósticos son desplegables. El historial admite búsqueda y conserva
+Volver a Sin publicar. La selección/revisión/confirmación siguen siendo manuales;
+las reglas de copia de exports de CapCut continúan vigentes.
+
+Se elige explícitamente **Lucie Recibir** (opción inicial) o **LocalSend**.
+La lista distingue IP/puerto y no preselecciona un celular al buscar. Cambiar app,
+celular o selección invalida planes; una respuesta tardía o un botón de una
+revisión anterior no puede confirmar otro envío. Buscar/conectar/cambiar vistas
+no transmite archivos. API y cliente comprueban el tipo de receptor esperado;
+Lucie no cae automáticamente en LocalSend aunque compartan IP. Se conservan
+compatibilidad de API anterior, huella TLS, aceptación, hashes, colisiones,
+registro, archivado por personaje y Deshacer.
+Al recargar un envío en curso, su estado informa la app/celular reales y bloquea
+cambios de destino; no muestra Lucie por defecto para un envío a LocalSend.
+
+La búsqueda anterior emitía una sola vez por la interfaz predeterminada; una
+búsqueda diagnóstica nueva devolvió vacío en este host. `bandeja/red_local.py`
+consulta direcciones/máscaras actuales con herramientas del SO, excluyendo
+loopback, APIPA e IP públicas. Se anuncia reiteradamente por interfaz y broadcast
+dirigido, tolerando fallos de envío. Lucie usa solo su puerto UDP 53319 y ya no
+requiere el servidor HTTP de registro usado por LocalSend. Si UDP no encuentra
+Lucie, se comprueba solo TCP 53318 en hasta 254 vecinos por interfaz (máximo
+cuatro, bloque /24 si la red es mayor) y se verifica el receptor por HTTPS.
+No se persisten IP antiguas ni se cambian firewall/router. El Android existente
+0.2.0 conserva su contrato; no hay APK ni instalación del teléfono en este lote.
+
+Validación final **Windows/Python 3.13.0: 438 pruebas, OK, 11 omisiones**, **405.450 s**.
+Las omisiones existentes requieren Linux o privilegios de symlinks; guardia y
+aserciones conservadas. Manifiesto real solo contado: **no disponible / no
+disponible**, tanto en específicas como en la suite; no son recuentos cero.
+Log externo: `%TEMP%/tests_flujo_wifi_20261017.log`. Seis regresiones Python
+nuevas cubren interfaces Windows/Linux simuladas, límite de respaldo, fallo UDP,
+broadcast por interfaz y rechazo de otra app; la API existente amplía los
+rechazos por app/CSRF. JS/UI: selección visible, historial, app/puerto, conexión
+equivocada y revisión tardía, con **17 llamadas simuladas**. Las verificaciones
+de UI se repitieron tras los ajustes finales de texto/espaciado.
+
+Chrome headless con servidor/datos temporales: escritorio, móvil e historial
+completaron carga y selección sin desbordamiento horizontal. Capturas externas
+`%TEMP%/lucie-wifi-{escritorio,movil,enviados}.png`; ningún vigilante real iniciado
+como fixture ni material real usado. AST **0/31**, sintaxis JS y auditorías de
+repositorio/historial y archivos nuevos correctas. Linux nativo no ejecutado.
+
+La comprobación de conexión real independiente, sin IP indicada y sin enviar
+archivos, no encontró a Lucie en ese momento. Se pidió mantener la app visible
+para verificar el Motorola; aún no hay confirmación física del nuevo flujo.
+Esto no prueba que el fallo histórico tuviera una sola causa ni garantiza
+descubrimiento si la app está cerrada o la red aísla los equipos. Para usar el
+backend actualizado, reiniciar normalmente la bandeja y recargar con Ctrl+F5.
+Fetch al empezar sin novedades, rama `feat/lucie-recibir` desde `2de192a`.
+El usuario autorizó el commit y push de este lote el 2026-10-17 en
+`feat/lucie-recibir`. La comprobación de GitHub previa a la publicación no
+mostró cambios entrantes ni commits anteriores pendientes de subir.
+
 ## Icono propio de Lucie (2026-10-17)
 
 Se sustituye el icono genérico de Windows por una L blanca sobre un recuadro

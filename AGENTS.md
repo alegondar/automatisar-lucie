@@ -60,6 +60,13 @@ temporales. Una bandeja existente puede recibir el icono sin nuevos vigilantes.
 
 ## Cola de publicación y Wi-Fi (2026-10-12)
 
+Interfaz y receptor (2026-10-17): Preparar envío, Enviados y Organizar anteriores
+son vistas separadas. El envío exige elegir archivos, app/celular, revisar y
+confirmar. Lucie Recibir es la opción inicial; no sustituirla silenciosamente
+por LocalSend. Cambiar app o destino invalida revisiones, incluso las pendientes
+de respuesta. La búsqueda usa interfaces actuales y un respaldo local acotado
+solo a TCP 53318 para Lucie; no cambia firewall/router ni envía archivos al buscar.
+
 Al confirmar «Terminé de editar» (corrección 2026-10-14), además de organizar
 los clips, revisar el único export vigente de esa sesión y copiarlo a la cola
 en modo automático. Si falta o sigue escribiéndose, mantener visible la sesión

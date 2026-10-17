@@ -6363,6 +6363,9 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
             self.assertEqual(status, 403)
             status, descubiertos = self._post("/api/publicacion/buscar", {})
             self.assertEqual(status, 200)
+            status, solo_lucie = self._post("/api/publicacion/buscar", {"receptor": "lucie"})
+            self.assertEqual(status, 200)
+            self.assertEqual(solo_lucie["dispositivos"], [], "LocalSend no sustituye a Lucie aunque esté en la misma IP")
             status, plan = self._post("/api/publicacion/simular", {"seleccion": [listado["archivos"][0]["id"]],
                 "dispositivo_id": descubiertos["dispositivos"][0]["id"]})
             self.assertEqual(status, 409)
@@ -6371,6 +6374,10 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
                 "personajes": {listado["archivos"][0]["id"]: "roli"}})
             self.assertEqual(status, 200)
             self.assertEqual(plan["archivos"][0]["destino_rel"], "videos completos/videosPublicados/roli/wifi-api.mp4")
+            status, _ = self._post("/api/publicacion/simular", {"seleccion": [listado["archivos"][0]["id"]],
+                "dispositivo_id": descubiertos["dispositivos"][0]["id"], "receptor": "lucie",
+                "personajes": {listado["archivos"][0]["id"]: "roli"}})
+            self.assertEqual(status, 409)
             self.assertTrue(os.path.isfile(video))
             self.assertFalse(os.path.exists(plan["archivos"][0]["destino"]))
             status, _ = self._post("/api/publicacion/enviar", {"token": plan["token"], "confirmacion": False})

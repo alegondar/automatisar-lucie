@@ -133,6 +133,25 @@ class TestPublicacionWifi(unittest.TestCase):
         listado = self.gestor.listar()
         return self.gestor.simular([a["id"] for a in listado["archivos"]], self.dispositivo["id"])
 
+    def test_app_elegida_no_se_sustituye_por_localsend_en_misma_ip(self):
+        lucie = {'ip': '127.0.0.1', 'port': 53318, 'protocol': 'https', 'alias': 'Lucie Recibir · fixture', 'fingerprint': 'lucie'}
+        oficial = {'ip': '127.0.0.1', 'port': 53317, 'protocol': 'https', 'alias': 'Mi teléfono', 'fingerprint': 'localsend'}
+        with patch.object(self.gestor.cliente, 'descubrir', return_value=[oficial, lucie]):
+            dispositivos = self.gestor.buscar_dispositivos('lucie')
+            self.assertEqual(len(dispositivos), 1)
+            self.assertEqual(dispositivos[0]['receptor'], 'lucie')
+            self.assertEqual(dispositivos[0]['port'], 53318)
+        cantidad = len(self.gestor._dispositivos)
+        with patch.object(self.gestor.cliente, 'probar', return_value=oficial):
+            with self.assertRaisesRegex(ValueError, 'otra app'):
+                self.gestor.agregar_dispositivo('127.0.0.1', 53317, 'lucie')
+        self.assertEqual(len(self.gestor._dispositivos), cantidad)
+        id_oficial = self.gestor._guardar_dispositivo(oficial)['id']
+        listado = self.gestor.listar()
+        with self.assertRaisesRegex(ValueError, 'app elegida'):
+            self.gestor.simular([a['id'] for a in listado['archivos']], id_oficial, receptor='lucie')
+        self.assertTrue(os.path.isfile(self.video))
+
     def esperar(self, identificador):
         limite = time.monotonic() + 8
         while time.monotonic() < limite:
@@ -147,6 +166,8 @@ class TestPublicacionWifi(unittest.TestCase):
         resultado = self.esperar(self.gestor.iniciar_envio(self.plan()["token"], True)["id"])
         self.assertEqual(resultado["codigo_http"], 409)
         self.assertEqual(resultado["etapa"], "preparacion")
+        self.assertEqual(resultado["dispositivo"]["id"], self.dispositivo["id"])
+        self.assertEqual(resultado["dispositivo"]["receptor"], "localsend")
         self.assertIsNone(resultado["cancelacion_confirmada"])
         self.assertEqual(self.receptor.cancelaciones, [])
         self.assertEqual(resultado["recibidos"], [])
@@ -549,6 +570,7 @@ class TestDescubrimientoUdpLocalSend(unittest.TestCase):
         receptor = {'ip':'127.0.0.1','port':53318,'protocol':'https','alias':'Lucie Recibir','fingerprint':'verificada'}
         with patch('bandeja.localsend.socket.socket', side_effect=lambda family, kind, proto=0, *a, **k:
                    udp if kind == socket.SOCK_DGRAM else original(family,kind,proto,*a,**k)), \
+             patch('bandeja.localsend.interfaces_locales', return_value=[]), \
              patch.object(cliente,'probar',return_value=receptor) as verificar:
             self.assertEqual(cliente.descubrir(.1),[receptor])
             verificar.assert_called_once_with('127.0.0.1',53318,'https')
@@ -577,6 +599,7 @@ class TestDescubrimientoUdpLocalSend(unittest.TestCase):
             return {'ip':ip,'port':port,'protocol':protocol,'alias':'fixture-'+str(port),'fingerprint':'fixture'}
         with patch('bandeja.localsend.socket.socket',side_effect=lambda family,kind,proto=0,*a,**k:
                    udp if kind==socket.SOCK_DGRAM else original(family,kind,proto,*a,**k)), \
+             patch('bandeja.localsend.interfaces_locales', return_value=[]), \
              patch.object(cliente,'probar',side_effect=verified) as verify:
             devices=cliente.descubrir(.1)
             self.assertEqual({d['port'] for d in devices},{53317,53318})

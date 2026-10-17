@@ -64,14 +64,23 @@
 
   <main>
     <section id="sec-publicacion" style="display:none;">
-      <div class="card">
-        <h2>Videos y fotos sin publicar</h2>
-        <p>Elegí los videos nuevos y envialos al celular por Wi-Fi. Al confirmar su recepción,
-          pasan de «videos completos/videos sin publicar» a «videos completos».
-          Usamos el envío como tu señal de publicación; no verificamos Instagram.</p>
-        <p id="wifi-carpeta" style="overflow-wrap:anywhere;"></p>
+      <div class="wifi-cabecera">
+        <div><p class="wifi-eyebrow">DEL PENDRIVE AL CELULAR</p><h2>Enviar al celular</h2>
+          <p>Elegí los archivos, revisá el destino y confirmá. Vos decidís cada envío.</p></div>
+        <button class="btn-sm btn-secundario" id="wifi-actualizar">Actualizar archivos</button>
+      </div>
+      <div class="wifi-vistas" role="group" aria-label="Vistas de envío">
+        <button id="wifi-tab-envio" class="wifi-tab" aria-pressed="true">Preparar envío</button>
+        <button id="wifi-tab-historial" class="wifi-tab" aria-pressed="false">Enviados <span id="wifi-historial-conteo">0</span></button>
+        <button id="wifi-tab-organizacion" class="wifi-tab" aria-pressed="false">Organizar anteriores</button>
+      </div>
+      <div id="wifi-vista-envio" class="wifi-distribucion">
+      <div class="wifi-saltos" aria-label="Ir a un paso"><a href="#wifi-paso-archivos">1 · Archivos</a><a href="#wifi-paso-celular">2 · Celular</a><a href="#wifi-paso-revision">3 · Revisar</a></div>
+      <div class="card wifi-archivos-panel" id="wifi-paso-archivos">
+        <div class="wifi-paso"><span>1</span><div><h3>Elegí qué enviar</h3><p>Solo se incluyen los archivos que marques.</p></div></div>
+        <p id="wifi-fuente-estado" class="wifi-ayuda" role="status"></p>
         <div class="wifi-filtros">
-          <label for="wifi-personaje">Personaje</label>
+          <label for="wifi-personaje">Personaje
           <select id="wifi-personaje">
             <option value="todos">Todos, separados por personaje</option>
             <option value="lucie">Lucie</option>
@@ -79,44 +88,66 @@
             <option value="mailen">Mailen</option>
             <option value="sin_asignar">Sin asignar</option>
           </select>
-          <label for="wifi-filtro">Buscar</label>
-          <input id="wifi-filtro" type="search" placeholder="Nombre del archivo o carpeta">
+          </label>
+          <label for="wifi-filtro">Buscar archivo o capítulo
+          <input id="wifi-filtro" type="search" placeholder="Escribí parte del nombre…"></label>
         </div>
-        <p class="wifi-ayuda">Se muestra únicamente la carpeta Sin publicar del pendrive.
-          Los nombres numéricos sin personaje conocido quedan separados en «Sin asignar».</p>
-        <button class="btn-sm" id="wifi-actualizar">Actualizar videos</button>
+        <div class="wifi-acciones">
         <button class="btn-sm btn-secundario" id="wifi-todos">Seleccionar los visibles</button>
         <button class="btn-sm btn-secundario" id="wifi-ninguno">Quitar selección</button>
+        </div>
         <p id="wifi-conteo" role="status" aria-live="polite"></p>
-        <div id="wifi-videos" style="margin:16px 0;"></div>
+        <div id="wifi-videos"></div>
+        <details class="wifi-detalles"><summary>¿De dónde salen estos archivos?</summary>
+          <p>Son los videos y fotos de Sin publicar del pendrive. «Sin asignar» requiere elegir su personaje.</p>
+          <p id="wifi-carpeta"></p></details>
       </div>
-      <div class="card">
-        <h2>Celular en la misma red Wi-Fi</h2>
-        <p>Abrí Lucie Recibir o LocalSend en el celular y mantenelo visible. Después buscá tu dispositivo y aceptá el envío allí.</p>
-        <button class="btn-sm" id="wifi-buscar">Buscar celulares</button>
-        <select id="wifi-dispositivo" aria-label="Celular receptor"><option value="">Elegí el celular</option></select>
-        <details style="margin-top:12px;"><summary>No aparece mi celular</summary>
-          <p>Ingresá la IP local que muestra el receptor y su puerto (53318 en Lucie Recibir; 53317 en LocalSend).</p>
-          <label>IP del celular <input id="wifi-ip" placeholder="192.168.1.20" autocomplete="off"></label>
-          <label>Puerto <input id="wifi-puerto" type="number" value="53318" min="1" max="65535"></label>
+      <aside class="wifi-lateral" aria-label="Destino y revisión del envío">
+      <div class="card" id="wifi-paso-celular">
+        <div class="wifi-paso"><span>2</span><div><h3>Conectá tu celular</h3><p>Misma Wi-Fi y app abierta en el teléfono.</p></div></div>
+        <div class="wifi-conexion-barra"><label class="wifi-campo" for="wifi-app">App que va a recibir
+          <select id="wifi-app"><option value="lucie">Lucie Recibir</option><option value="localsend">LocalSend</option></select>
+        </label>
+        <button class="btn-sm" id="wifi-buscar" aria-label="Buscar mi celular por Wi-Fi">Buscar celular</button></div>
+        <p id="wifi-busqueda-estado" class="wifi-ayuda" role="status">Abrí Lucie Recibir en tu celular y tocá Buscar.</p>
+        <label class="wifi-campo" for="wifi-dispositivo">Celular encontrado
+          <select id="wifi-dispositivo"><option value="">Elegí tu celular</option></select></label>
+        <p id="wifi-destino" class="wifi-destino">Todavía no elegiste un celular.</p>
+        <details class="wifi-detalles"><summary>Conectar manualmente por IP</summary>
+          <p>Usá la dirección que muestra la app elegida en el celular. La búsqueda automática vuelve a consultar la red si cambia la IP.</p>
+          <label class="wifi-campo">IP del celular <input id="wifi-ip" placeholder="192.168.1.20" autocomplete="off"></label>
+          <label class="wifi-campo">Puerto <input id="wifi-puerto" type="number" value="53318" min="1" max="65535"></label>
           <button class="btn-sm" id="wifi-conectar">Conectar por IP</button>
         </details>
-        <label style="display:block;margin:12px 0;">PIN del receptor (si lo pide el celular)
-          <input id="wifi-pin" type="password" autocomplete="off"></label>
-        <button class="btn-sm" id="wifi-preparar">Revisar envío</button>
-        <div id="wifi-plan" style="display:none;margin-top:16px;"></div>
-        <div id="wifi-estado" role="status" aria-live="polite" style="margin-top:16px;"></div>
+      </div>
+      <div class="card wifi-revision" id="wifi-paso-revision">
+        <div class="wifi-paso"><span>3</span><div><h3>Revisá y enviá</h3><p>El envío empieza recién cuando lo confirmás.</p></div></div>
+        <p id="wifi-resumen-seleccion" class="wifi-resumen">Ningún archivo seleccionado.</p>
+        <button class="btn-sm" id="wifi-preparar" disabled>Revisar antes de enviar</button>
+        <details class="wifi-detalles"><summary>Mi celular pide un PIN</summary>
+          <label class="wifi-campo">PIN del receptor <input id="wifi-pin" type="password" autocomplete="off"></label></details>
+        <div id="wifi-plan" style="display:none;"></div>
+        <div id="wifi-estado" role="status" aria-live="polite" class="wifi-estado"></div>
+        <details id="wifi-diagnostico" class="wifi-detalles" style="display:none;"><summary>Detalles del problema</summary><p id="wifi-diagnostico-texto"></p></details>
         <progress id="wifi-progreso" value="0" max="100" style="display:none;width:100%;"></progress>
         <button class="btn-sm btn-secundario" id="wifi-cancelar" style="display:none;">Cancelar envío</button>
       </div>
-      <div class="card"><h2>Enviados al celular · videosPublicados</h2><div id="wifi-historial"></div></div>
-      <div class="card" id="wifi-organizacion" style="display:none;">
-        <h2>Organizar completos anteriores</h2>
+      </aside>
+      </div>
+      <div id="wifi-vista-historial" style="display:none;" class="card">
+        <h3>Enviados al celular</h3><p class="wifi-ayuda">Recibidos y archivados por personaje. Volver a Sin publicar conserva la copia del celular.</p>
+        <label class="wifi-campo">Buscar en enviados <input id="wifi-historial-filtro" type="search" placeholder="Archivo, personaje o celular"></label>
+        <div id="wifi-historial"></div>
+      </div>
+      <div id="wifi-vista-organizacion" style="display:none;" class="card">
+      <h3>Organizar archivos anteriores</h3><p class="wifi-ayuda">Una herramienta manual para el material histórico, separada de los nuevos envíos.</p>
+      <div id="wifi-organizacion" style="display:none;">
         <p>Marcá las carpetas pendientes que irán a Sin publicar o los publicados confirmados que irán a videosPublicados. Revisá los destinos antes de confirmar; no se fusionan carpetas ni se sobrescribe material.</p>
         <div id="wifi-organizacion-lista"></div>
         <button class="btn-sm" id="wifi-organizacion-revisar">Revisar organización</button>
         <div id="wifi-organizacion-plan"></div>
         <div id="wifi-organizacion-historial"></div>
+      </div>
       </div>
     </section>
     <section id="sec-eliminacion" style="display:none;">

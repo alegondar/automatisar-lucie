@@ -3,10 +3,17 @@
   'use strict';
   if (typeof document === 'undefined' || !document.getElementById('sec-publicacion')) return;
   let archivos = [];
+  let pendriveConectado = false;
   const personajesElegidos = new Map();
   let organizacionPlan = null;
   let seleccion = new Set();
   let plan = null;
+  let revision = 0;
+  let revisando = false;
+  let buscando = false;
+  let conectando = false;
+  let enviando = false;
+  let historialEnvios = [];
   let trabajo = null;
   try { trabajo = sessionStorage.getItem('lucie-envio-wifi') || null; } catch (_) { /* Sin almacenamiento disponible. */ }
   let timer = null;
@@ -20,11 +27,17 @@
     method: 'POST', body: JSON.stringify(datos || {})
   });
   const estado = mensaje => texto('wifi-estado', mensaje);
+  const appElegida = () => el('wifi-app').value || 'lucie';
+  const nombreApp = receptor => receptor === 'localsend' ? 'LocalSend' : 'Lucie Recibir';
+  const tipoDispositivo = d => d.receptor || (d.port === 53318 && d.alias.startsWith('Lucie Recibir') ? 'lucie' : 'localsend');
+  const aliasDispositivo = d => tipoDispositivo(d) === 'lucie' ? d.alias.replace(/^Lucie Recibir\s*[·-]\s*/, '') : d.alias;
 
   function invalidarPlan() {
+    revision++;
     plan = null;
     el('wifi-plan').replaceChildren();
     el('wifi-plan').style.display = 'none';
+    dibujarConteo();
   }
 
   function archivosVisibles() {
@@ -38,6 +51,17 @@
     const cantidad = archivosVisibles().length;
     texto('wifi-conteo', cantidad + (cantidad === 1 ? ' archivo visible de ' : ' archivos visibles de ') + archivos.length +
       ' · ' + seleccion.size + (seleccion.size === 1 ? ' seleccionado para enviar' : ' seleccionados para enviar'));
+    const elegidos = archivos.filter(a => seleccion.has(a.id));
+    texto('wifi-resumen-seleccion', elegidos.length ? elegidos.length + (elegidos.length === 1 ? ' archivo' : ' archivos') +
+      ' · ' + bytes(elegidos.reduce((s, a) => s + a.tamano, 0)) : 'Ningún archivo seleccionado. Marcá los que quieras enviar.');
+    const celular = dispositivos.get(el('wifi-dispositivo').value);
+    texto('wifi-destino', celular ? 'Recibe: ' + nombreApp(celular.receptor || appElegida()) + ' · ' +
+      celular.ip + ':' + celular.port : trabajo ? 'Envío en curso. El receptor se conserva hasta que termine.' : 'Todavía no elegiste un celular.');
+    const ocupado = Boolean(trabajo) || enviando;
+    el('wifi-preparar').disabled = ocupado || revisando || buscando || conectando || !seleccion.size || !celular;
+    for (const id of ['wifi-app', 'wifi-dispositivo', 'wifi-ip', 'wifi-puerto', 'wifi-todos', 'wifi-ninguno', 'wifi-actualizar', 'wifi-tab-historial', 'wifi-tab-organizacion']) el(id).disabled = ocupado;
+    el('wifi-buscar').disabled = ocupado || buscando;
+    el('wifi-conectar').disabled = ocupado || conectando;
   }
 
   function dibujarArchivos() {
@@ -56,7 +80,7 @@
     el('wifi-filtro').disabled = Boolean(trabajo);
     dibujarConteo();
     if (!archivos.length) {
-      lista.textContent = 'No hay videos ni fotos pendientes en Sin publicar. Los nuevos exports aparecerán aquí después de copiarse al pendrive.';
+      lista.textContent = pendriveConectado ? 'No hay videos ni fotos pendientes en Sin publicar. Los nuevos exports aparecerán aquí después de copiarse al pendrive.' : 'Conectá el pendrive para ver los archivos listos para enviar.';
       return;
     }
     const visibles = archivosVisibles();
@@ -170,17 +194,20 @@
 
   function dibujarDispositivos() {
     const selector = el('wifi-dispositivo');
-    const anterior = selector.value;
     selector.replaceChildren(new Option('Elegí el celular', ''));
     for (const dispositivo of dispositivos.values()) {
-      selector.add(new Option(dispositivo.alias + ' · ' + dispositivo.ip, dispositivo.id));
+      selector.add(new Option(aliasDispositivo(dispositivo) +
+        ' · ' + dispositivo.ip + ':' + dispositivo.port, dispositivo.id));
     }
-    if (dispositivos.has(anterior)) selector.value = anterior;
+    selector.value = '';
+    dibujarConteo();
   }
 
   async function cargar() {
     try {
       const datos = await apiFetch('/api/publicacion/lista');
+      pendriveConectado = Boolean(datos.conectado);
+      texto('wifi-fuente-estado', datos.conectado ? 'Pendrive conectado · Archivos de Sin publicar' : datos.mensaje || 'Conectá el pendrive vinculado.');
       archivos = datos.archivos || [];
       for (const id of personajesElegidos.keys()) if (!archivos.some(a => a.id === id)) personajesElegidos.delete(id);
       dibujarOrganizacion(datos);
@@ -188,14 +215,34 @@
       seleccion = new Set([...seleccion].filter(id => disponibles.has(id)));
       texto('wifi-carpeta', datos.conectado ? datos.carpeta : datos.mensaje);
       dibujarArchivos();
+      historialEnvios = datos.historial || [];
+      dibujarHistorial();
+    } catch (error) { estado(error.message); }
+  }
+
+  function dibujarHistorial() {
       const historial = el('wifi-historial');
       historial.replaceChildren();
-      if (!(datos.historial || []).length) historial.textContent = 'Todavía no hubo envíos confirmados desde esta sección.';
-      for (const envio of datos.historial || []) {
-        const fila = document.createElement('div');
-        fila.style.cssText = 'padding:12px;border-bottom:1px solid var(--border);';
-        const etiqueta = document.createElement('span');
-        etiqueta.textContent = envio.ruta_destino + ' · recibido en ' + envio.dispositivo + ' · ' + envio.fecha + ' ';
+      texto('wifi-historial-conteo', String(historialEnvios.length));
+      const busqueda = el('wifi-historial-filtro').value.trim().toLocaleLowerCase();
+      const visibles = historialEnvios.filter(e => (e.ruta_destino + ' ' + e.dispositivo + ' ' + e.fecha).toLocaleLowerCase().includes(busqueda));
+      if (!visibles.length) historial.textContent = historialEnvios.length ? 'No hay envíos que coincidan con tu búsqueda.' : 'Todavía no enviaste archivos desde esta sección.';
+      for (const envio of visibles) {
+        const fila = document.createElement('article');
+        fila.className = 'wifi-historial-fila';
+        const etiqueta = document.createElement('div');
+        const titulo = document.createElement('strong');
+        titulo.className = 'wifi-historial-titulo';
+        titulo.textContent = envio.ruta_destino.split('/').at(-1);
+        const meta = document.createElement('p'); meta.className = 'wifi-historial-meta';
+        const fecha = new Date(envio.fecha);
+        const fechaLegible = Number.isNaN(fecha.getTime()) ? envio.fecha : fecha.toLocaleString('es-AR', {dateStyle: 'medium', timeStyle: 'short'});
+        const personaje = envio.personaje || envio.ruta_destino.split('/')[2];
+        meta.textContent = (etiquetasPersonaje[personaje] || 'Sin asignar') + ' · ' + fechaLegible + ' · Recibido en ' + envio.dispositivo;
+        const detalles = document.createElement('details'); detalles.className = 'wifi-detalles';
+        const resumen = document.createElement('summary'); resumen.textContent = 'Ver ubicación del archivo';
+        const ruta = document.createElement('p'); ruta.textContent = envio.ruta_destino;
+        detalles.append(resumen, ruta); etiqueta.append(titulo, meta, detalles);
         const boton = document.createElement('button');
         boton.className = 'btn-sm btn-secundario';
         boton.textContent = 'Volver a Sin publicar';
@@ -212,7 +259,14 @@
         fila.append(etiqueta, boton);
         historial.append(fila);
       }
-    } catch (error) { estado(error.message); }
+  }
+
+  function mostrarVista(vista) {
+    if ((trabajo || enviando) && vista !== 'envio') return;
+    for (const nombre of ['envio', 'historial', 'organizacion']) {
+      el('wifi-vista-' + nombre).style.display = nombre === vista ? (nombre === 'envio' ? 'grid' : 'block') : 'none';
+      el('wifi-tab-' + nombre).setAttribute('aria-pressed', String(nombre === vista));
+    }
   }
 
   function dibujarOrganizacion(datos) {
@@ -287,35 +341,47 @@
   }
 
   async function buscar() {
+    if (trabajo || enviando || buscando) return;
+    buscando = true;
     invalidarPlan();
+    const receptor = appElegida();
+    dispositivos.clear(); dibujarDispositivos();
     el('wifi-buscar').disabled = true;
-    estado('Buscando Lucie Recibir o LocalSend en la red Wi-Fi. Mantené la app abierta en el celular…');
+    texto('wifi-busqueda-estado', 'Buscando ' + nombreApp(receptor) + ' en la Wi-Fi actual… Puede tardar unos segundos.');
     try {
-      const datos = await peticion('buscar');
+      const datos = await peticion('buscar', {receptor});
+      if (appElegida() !== receptor) return;
       dispositivos.clear();
-      for (const d of datos.dispositivos || []) dispositivos.set(d.id, d);
+      for (const d of datos.dispositivos || []) if (tipoDispositivo(d) === receptor) dispositivos.set(d.id, d);
       dibujarDispositivos();
-      estado(datos.dispositivos.length ? 'Elegí tu celular en la lista.' : 'No apareció ningún celular. Podés conectarlo por su IP local en «No aparece mi celular».');
-    } catch (error) { estado(error.message); }
-    finally { el('wifi-buscar').disabled = false; }
+      texto('wifi-busqueda-estado', dispositivos.size ? 'Encontramos ' + dispositivos.size + '. Elegí tu celular en la lista.' :
+        'No encontramos ' + nombreApp(receptor) + '. Abrí esa app en el celular y buscá de nuevo. También podés usar la conexión manual.');
+    } catch (error) { texto('wifi-busqueda-estado', error.message); }
+    finally { buscando = false; dibujarConteo(); }
   }
 
   async function conectar() {
+    if (trabajo || enviando || conectando) return;
+    conectando = true;
+    invalidarPlan();
+    const receptor = appElegida();
     el('wifi-conectar').disabled = true;
-    estado('Comprobando el receptor…');
+    texto('wifi-busqueda-estado', 'Comprobando ' + nombreApp(receptor) + '…');
     try {
-      const datos = await peticion('conectar', {ip: el('wifi-ip').value.trim(), puerto: Number(el('wifi-puerto').value)});
+      const datos = await peticion('conectar', {ip: el('wifi-ip').value.trim(), puerto: Number(el('wifi-puerto').value), receptor});
+      if (appElegida() !== receptor) return;
+      if (tipoDispositivo(datos.dispositivo) !== receptor) throw new Error('En esa dirección responde ' + nombreApp(tipoDispositivo(datos.dispositivo)) + '. Cambiá la app elegida o revisá el puerto.');
       dispositivos.set(datos.dispositivo.id, datos.dispositivo);
       dibujarDispositivos();
       el('wifi-dispositivo').value = datos.dispositivo.id;
       invalidarPlan();
-      estado('Conectado a ' + datos.dispositivo.alias + '. Podés revisar el envío.');
-    } catch (error) { estado(error.message); }
-    finally { el('wifi-conectar').disabled = false; }
+      texto('wifi-busqueda-estado', 'Conectado con ' + nombreApp(receptor) + '. El destino está listo para revisar.');
+    } catch (error) { texto('wifi-busqueda-estado', error.message); }
+    finally { conectando = false; dibujarConteo(); }
   }
 
   async function preparar() {
-    if (trabajo) return;
+    if (trabajo || enviando || revisando || buscando || conectando) return;
     if (!seleccion.size || !el('wifi-dispositivo').value) {
       estado('Seleccioná al menos un video y elegí el celular receptor.');
       return;
@@ -323,6 +389,9 @@
     el('wifi-preparar').disabled = true;
     estado('Calculando integridad y revisando los destinos…');
     invalidarPlan();
+    const version = revision;
+    revisando = true;
+    dibujarConteo();
     try {
       const personajes = {};
       for (const id of seleccion) {
@@ -332,40 +401,52 @@
           personajes[id] = personajesElegidos.get(id);
         }
       }
-      plan = await peticion('simular', {seleccion: [...seleccion], dispositivo_id: el('wifi-dispositivo').value, personajes});
+      const resultado = await peticion('simular', {seleccion: [...seleccion], dispositivo_id: el('wifi-dispositivo').value, personajes, receptor: appElegida()});
+      if (revision !== version || trabajo) return;
+      if (tipoDispositivo(resultado.dispositivo) !== appElegida()) throw new Error('La app receptora cambió. Buscá y elegí nuevamente el celular.');
+      plan = resultado;
       const cont = el('wifi-plan');
       cont.style.display = 'block';
       const titulo = document.createElement('h3');
-      titulo.textContent = 'Revisar envío a ' + plan.dispositivo.alias + ' (' + plan.dispositivo.ip + ') · ' + bytes(plan.total_bytes);
+      titulo.textContent = nombreApp(plan.dispositivo.receptor || appElegida()) + ' · ' + aliasDispositivo(plan.dispositivo) + ' · ' + bytes(plan.total_bytes);
       const detalle = document.createElement('ul');
       for (const archivo of plan.archivos) {
         const item = document.createElement('li');
-        item.textContent = archivo.nombre + ' · ' + bytes(archivo.tamano) + ' · después de recibir: ' + archivo.destino_rel;
+        item.textContent = archivo.nombre + ' · ' + bytes(archivo.tamano);
+        const destino = document.createElement('details'); destino.className = 'wifi-detalles';
+        const resumen = document.createElement('summary'); resumen.textContent = 'Ubicación después de recibir';
+        const ruta = document.createElement('p'); ruta.textContent = archivo.destino_rel;
+        destino.append(resumen, ruta); item.append(destino);
         detalle.append(item);
       }
-      const aviso = document.createElement('p');
+      const aviso = document.createElement('div'); aviso.className = 'wifi-ayuda';
       aviso.textContent = plan.aviso;
       if (plan.dispositivo.protocol === 'https' && plan.dispositivo.fingerprint) {
-        aviso.textContent += ' · Huella HTTPS del receptor: ' + plan.dispositivo.fingerprint + '. Comparala con Lucie Recibir antes del primer envío.';
-        aviso.style.overflowWrap = 'anywhere';
+        const identidad = document.createElement('details'); identidad.className = 'wifi-detalles';
+        const tituloIdentidad = document.createElement('summary'); tituloIdentidad.textContent = 'Comparar identidad HTTPS del celular';
+        const huella = document.createElement('p'); huella.textContent = plan.dispositivo.fingerprint;
+        identidad.append(tituloIdentidad, huella); aviso.append(identidad);
       }
       const confirmar = document.createElement('button');
       confirmar.className = 'btn-sm';
       confirmar.textContent = 'Confirmar y enviar al celular';
-      confirmar.addEventListener('click', iniciar);
+      const token = plan.token;
+      confirmar.addEventListener('click', () => iniciar(token));
       const cancelar = document.createElement('button');
       cancelar.className = 'btn-sm btn-secundario';
       cancelar.textContent = 'Cancelar revisión';
       cancelar.addEventListener('click', invalidarPlan);
       cont.replaceChildren(titulo, detalle, aviso, confirmar, cancelar);
+      cont.scrollIntoView?.({behavior: 'smooth', block: 'nearest'});
       estado('Revisá los archivos y destinos. Todavía no se envió ni movió ningún video.');
     } catch (error) { estado(error.message); }
-    finally { el('wifi-preparar').disabled = false; }
+    finally { revisando = false; dibujarConteo(); }
   }
 
-  async function iniciar() {
-    if (!plan || trabajo) return;
+  async function iniciar(tokenEsperado) {
+    if (!plan || plan.token !== tokenEsperado || trabajo || enviando) return;
     const token = plan.token;
+    enviando = true;
     invalidarPlan();
     el('wifi-preparar').disabled = true;
     try {
@@ -376,26 +457,40 @@
       el('wifi-cancelar').style.display = 'inline-block';
       el('wifi-progreso').style.display = 'block';
       dibujarArchivos();
-      estado('Aceptá la recepción en Lucie Recibir o LocalSend en el celular.');
+      estado('Aceptá la recepción en ' + nombreApp(appElegida()) + ' en el celular.');
       await seguir();
-    } catch (error) { estado(error.message); el('wifi-preparar').disabled = false; }
+    } catch (error) { estado(error.message); }
+    finally { enviando = false; dibujarConteo(); }
   }
 
   async function seguir() {
     if (!trabajo) return;
     try {
       const datos = await apiFetch('/api/publicacion/estado?id=' + encodeURIComponent(trabajo));
+      if (datos.dispositivo) {
+        const d = datos.dispositivo;
+        dispositivos.set(d.id, d);
+        el('wifi-app').value = tipoDispositivo(d);
+        el('wifi-puerto').value = String(d.port);
+        dibujarDispositivos();
+        el('wifi-dispositivo').value = d.id;
+        dibujarConteo();
+      }
       el('wifi-progreso').value = Math.min(100, datos.total_bytes ? datos.bytes_enviados * 100 / datos.total_bytes : 0);
       let diagnostico = datos.etapa ? ' · Etapa: ' + datos.etapa : '';
       if (datos.codigo_http) diagnostico += ' · HTTP ' + datos.codigo_http;
       if (datos.cancelacion_confirmada === false) diagnostico += ' · El celular no confirmó la cancelación: revisá su recepción antes de reintentar.';
       if (datos.codigo_http === 409 && datos.etapa === 'preparacion') diagnostico += ' · Revisá o cancelá la recepción pendiente desde el celular; no se cancelará una sesión ajena.';
+      texto('wifi-diagnostico-texto', diagnostico);
+      el('wifi-diagnostico').style.display = diagnostico ? 'block' : 'none';
       estado(datos.mensaje + (datos.error ? ': ' + datos.error : '') +
-        ' · Recibidos: ' + (datos.recibidos || []).length + ' · Archivados: ' + datos.publicados.length + diagnostico);
+        ' · Recibidos: ' + (datos.recibidos || []).length + ' · Archivados: ' + datos.publicados.length +
+        (datos.cancelacion_confirmada === false ? ' · Verificá la recepción en el celular antes de reintentar.' : ''));
       if (datos.estado === 'en_curso') {
         timer = setTimeout(seguir, 1000);
       } else {
         trabajo = null;
+        if (!el('wifi-app').value) el('wifi-app').value = 'lucie';
         try { sessionStorage.removeItem('lucie-envio-wifi'); } catch (_) { /* Sin almacenamiento disponible. */ }
         el('wifi-preparar').disabled = false;
         el('wifi-cancelar').style.display = 'none';
@@ -405,6 +500,7 @@
     } catch (error) {
       if (error.message === 'Envío no encontrado.') {
         trabajo = null;
+        if (!el('wifi-app').value) el('wifi-app').value = 'lucie';
         try { sessionStorage.removeItem('lucie-envio-wifi'); } catch (_) { /* Sin almacenamiento disponible. */ }
         el('wifi-preparar').disabled = false;
         el('wifi-cancelar').style.display = 'none';
@@ -418,6 +514,14 @@
   }
 
   window.cargarPublicacionWifi = cargar;
+  for (const vista of ['envio', 'historial', 'organizacion']) el('wifi-tab-' + vista).addEventListener('click', () => mostrarVista(vista));
+  el('wifi-historial-filtro').addEventListener('input', dibujarHistorial);
+  el('wifi-app').addEventListener('change', () => {
+    if (trabajo) return;
+    dispositivos.clear(); dibujarDispositivos(); invalidarPlan();
+    el('wifi-puerto').value = appElegida() === 'lucie' ? '53318' : '53317';
+    texto('wifi-busqueda-estado', 'Abrí ' + nombreApp(appElegida()) + ' en el celular y buscá nuevamente.');
+  });
   el('wifi-actualizar').addEventListener('click', cargar);
   el('wifi-personaje').addEventListener('change', cambiarFiltro);
   el('wifi-filtro').addEventListener('input', cambiarFiltro);
@@ -435,6 +539,9 @@
     finally { el('wifi-cancelar').disabled = false; }
   });
   if (trabajo) {
+    // Hasta recibir el estado del servidor no se adivina qué app tiene el envío.
+    el('wifi-app').value = '';
+    dibujarConteo();
     el('wifi-preparar').disabled = true;
     el('wifi-cancelar').style.display = 'inline-block';
     el('wifi-progreso').style.display = 'block';
