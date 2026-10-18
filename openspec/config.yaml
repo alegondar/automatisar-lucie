@@ -40,3 +40,10 @@ context: |
 # conservando carpetas/nombres. Numéricos sin personaje requieren elección explícita.
 # Organización histórica manual seleccionada/simulada/confirmada, sin fusión ni borrado,
 # con estructura/hash, actualización de rutas, registro append-only y deshacer.
+
+# Ampliación autorizada 2026-10-18: tras un envío completo verificado y registrado,
+# _limpiar_carpetas_vacias_enviadas revisa también proyectos de envíos anteriores
+# registrados en la bitácora local de la misma sala. Solo os.rmdir de directorios
+# vacíos; conservar archivos, raíces/personajes, capítulos ajenos sin registro,
+# respaldos, ocultos y enlaces/junctions. No al arrancar/listar ni ante fallos o
+# envíos parciales. No se limpia el pendrive. Deshacer recrea padres originales.

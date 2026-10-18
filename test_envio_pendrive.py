@@ -729,6 +729,76 @@ class TestEjecucionEnvioPendrive(unittest.TestCase):
         self.assertTrue(os.path.exists(self.vid_path))
         self.assertTrue(os.path.exists(self.fot_path))
 
+    def test_envio_videos_fotos_limpia_tres_personajes_y_deshacer_recrea(self):
+        """Envío real en temporales: limpieza y reversión para los tres personajes."""
+        originales = {self.vid_path: self.vid_hash, self.fot_path: self.fot_hash}
+        capitulos = [self.cap_dir]
+        for personaje in ("roli", "mailen"):
+            cap = os.path.join(self.destino_base, personaje, "Proyecto con espacios")
+            capitulos.append(cap)
+            for sub, nombre in (("videos", "clip.mp4"), ("fotos", "foto.jpg")):
+                ruta = os.path.join(cap, sub, nombre)
+                os.makedirs(os.path.dirname(ruta), exist_ok=True)
+                with open(ruta, "wb") as f:
+                    f.write((personaje + nombre).encode())
+                originales[ruta] = calcular_sha256(ruta)
+        res = ejecutar_envio_pendrive(config=self.config, simulacion_o_capitulos=None,
+                                     db=self.db, movimientos=self.movimientos)
+        self.assertEqual(res["total_transferidos"], 6)
+        for cap in capitulos:
+            self.assertFalse(os.path.exists(cap))
+            self.assertIn(cap, res["carpetas_vacias_eliminadas"])
+            self.assertTrue(os.path.isdir(os.path.dirname(cap)))
+        deshacer_envio_pendrive(res["id_envio"], config=self.config, db=self.db,
+                               ruta_bitacora=self.bitacora_path)
+        for ruta, sha in originales.items():
+            self.assertEqual(calcular_sha256(ruta), sha)
+
+    def test_envio_revisa_huerfanas_previas_sin_tocar_contenido_nuevo(self):
+        anterior = os.path.join(self.destino_base, 'roli', 'Proyecto anterior')
+        nueva_foto = os.path.join(anterior, 'fotos', 'nueva.jpg')
+        os.makedirs(os.path.dirname(nueva_foto))
+        registro = {'personaje': 'roli', 'capitulo': 'Proyecto anterior',
+                    'ruta_origen_espera': os.path.join(anterior, 'videos', 'anterior.mp4')}
+        with open(nueva_foto, 'wb') as f:
+            f.write(b'No enviado')
+        with open(self.bitacora_path, 'w') as f:
+            f.write(json.dumps({'evento': 'envio_pendrive', 'archivos': [registro]}) + '\n')
+        huerfana = os.path.join(self.destino_base, 'mailen', 'Proyecto enviado')
+        os.makedirs(os.path.join(huerfana, 'videos'))
+        with open(self.bitacora_path, 'a') as f:
+            f.write(json.dumps({'evento': 'envio_pendrive', 'archivos': [
+                {'personaje': 'mailen', 'capitulo': 'Proyecto enviado',
+                 'ruta_origen_espera': os.path.join(huerfana, 'videos', 'clip.mp4')}]}) + '\n')
+        ajena = os.path.join(self.destino_base, 'lucie', 'Proyecto no enviado')
+        os.makedirs(ajena)
+        res = ejecutar_envio_pendrive(['lucie/capitulo1'], self.config, self.db, self.movimientos)
+        self.assertIn(huerfana, res['carpetas_vacias_eliminadas'])
+        self.assertFalse(os.path.exists(huerfana))
+        self.assertTrue(os.path.isdir(ajena))
+        with open(nueva_foto, 'rb') as f:
+            self.assertEqual(f.read(), b'No enviado')
+
+    def test_fallo_parcial_o_de_registro_no_inicia_limpieza(self):
+        for fallo in ('segunda_copia', 'registro'):
+            with self.subTest(fallo=fallo):
+                # Cada escenario mantiene su propia sala y pendrive temporales.
+                caso = TestEjecucionEnvioPendrive()
+                caso.setUp()
+                sim = simular_envio_capitulos(['lucie/capitulo1'], caso.config, caso.db)
+                original_open = open
+                def abrir(ruta, modo='r', *args, **kwargs):
+                    if (fallo == 'segunda_copia' and str(ruta) == sim['archivos_a_copiar'][1]['ruta_origen']
+                            and modo == 'rb') or (fallo == 'registro' and str(ruta) == caso.bitacora_path):
+                        raise OSError('Fallo simulado')
+                    return original_open(ruta, modo, *args, **kwargs)
+                with patch('builtins.open', side_effect=abrir), patch(
+                        'bandeja.pendrive._limpiar_carpetas_vacias_enviadas') as limpiar:
+                    with self.assertRaises((OSError, RuntimeError)):
+                        ejecutar_envio_pendrive(sim, caso.config, caso.db, caso.movimientos)
+                    limpiar.assert_not_called()
+                self.assertTrue(os.path.isdir(caso.cap_dir))
+
     def test_preservacion_enviados_sufijo_numerico_si_ya_existe(self):
         """Verifica que si ya existe un archivo con idéntico nombre en _enviados, se use sufijo numérico."""
         env_vid = os.path.join(self.destino_base, "_enviados", "lucie", "capitulo1", "videos", "lucievideo1.mp4")

@@ -1,4 +1,41 @@
-# Estado actual del sistema — 2026-10-17
+# Estado actual del sistema — 2026-10-18
+
+## Huérfanas del host después de enviar al pendrive (2026-10-18)
+
+El usuario solicitó retirar las carpetas de proyectos que quedan vacías dentro
+de Lucie, Roli y Mailen después del envío. La limpieza existente ya retiraba
+los capítulos de la operación actual, pero no volvía a revisar envíos anteriores.
+Ahora `_limpiar_carpetas_vacias_enviadas` consulta también los eventos
+`envio_pendrive` de la bitácora local y revisa sus carpetas de origen, solo si
+pertenecen a la misma sala. No barre proyectos vacíos sin registro de envío.
+La ampliación se ejecuta únicamente después de completar, verificar y registrar
+un nuevo envío; no al arrancar/listar ni ante fallos parciales o de registro.
+
+Solo se usa `os.rmdir`: cualquier archivo, incluso oculto, conserva su carpeta.
+Se protegen raíces, personajes, respaldos y directorios ocultos anidados,
+enlaces/junctions y capítulos ajenos. Un historial ilegible no impide finalizar
+el envío nuevo; se informa en el log y se mantiene la limpieza de la operación.
+El resultado API conserva `carpetas_vacias_eliminadas`. Deshacer recrea los padres
+para restaurar los archivos originales; las copias de `_enviados` se conservan.
+No se ejecutó limpieza retroactiva sobre Descargas ni sobre el pendrive real.
+
+Validación **Kali/Linux, Python 3.13.12: 447 pruebas, OK, 11 omisiones**, en
+**58.715 s**. Las omisiones requieren capacidades nativas Windows de archivos,
+sockets, iconos o accesos directos; guardia y aserciones conservadas.
+**21 pruebas específicas OK**: tres personajes, video/foto, Deshacer con hash,
+huérfanas registradas, carpetas ajenas/otra sala, contenido nuevo, ocultos,
+respaldos, enlaces/junctions, historial inválido y fallos parciales/de registro.
+Manifiesto real exclusivamente contado: **385 / 385**, estable.
+Log externo: `/tmp/tests_huerfanas_20261018.log`. AST **0/31**, auditoría de
+**243 archivos** e historial y diff correctos. Windows nativo no ejecutado.
+No había bandeja activa y no se inició para pruebas; todo fixture fue temporal.
+
+Rama `feat/lucie-recibir`, base `96e73b9`; fetch sin novedades y sin commits
+locales pendientes. Se preservan la documentación y los planes de sesiones
+anteriores. El usuario autorizó expresamente el commit y push de este lote
+el 2026-10-18 en `feat/lucie-recibir`. La revisión previa no encontró novedades
+remotas ni commits anteriores pendientes de subir. Para aplicar al uso normal,
+iniciar la bandeja actualizada; la revisión se ejecutará al próximo envío exitoso.
 
 ## Envío guiado y búsqueda independiente de Lucie (2026-10-17)
 

@@ -273,6 +273,20 @@ documentados en [Dashboard: eliminación y MP3](docs/dashboard-eliminacion-y-mp3
 
 Los `.mp3` se detectan como multimedia. Con alias conocido o capítulo en foco se incorporan a lotes; los demás aparecen en «Sin identificar» y pueden adoptarse con «Del proyecto». Se trasladan a `audios/` conservando su nombre, sin sobrescribir, y se envían al pendrive bajo `audios/<personaje>/<capítulo>/`.
 
+## Huérfanas de envíos anteriores en el host (2026-10-18)
+
+Tras cada envío completo al pendrive, con integridad y registros confirmados,
+revisar también las carpetas de proyectos de envíos anteriores que consten en
+la bitácora local de esa misma sala de espera. Retirar únicamente directorios
+vacíos mediante `os.rmdir` en `_limpiar_carpetas_vacias_enviadas`; no borrar
+archivos ni sobrescribir. Conservar raíces, personajes, carpetas ajenas sin
+registro, áreas `_enviados`/`_revertidos`/`_a_revisar`, directorios ocultos,
+enlaces/junctions y cualquier contenido nuevo. No ejecutar al arrancar, listar,
+ni después de fallos o envíos parciales. No limpiar automáticamente el pendrive.
+El resultado API incluye las carpetas retiradas; Deshacer recrea los padres
+necesarios usando las rutas originales registradas. Esta ampliación sustituye
+la limitación anterior que solo revisaba los capítulos del envío actual.
+
 ## Carpetas vacías después del envío (2026-10-12)
 
 Desde el 2026-10-14, finalizar una edición y completar un envío al celular también
@@ -289,7 +303,8 @@ archivos, raíz de espera, personajes, respaldos `_enviados`, capítulos ajenos
 ni enlaces/junctions. Si hay contenido nuevo o un error, la carpeta se conserva.
 Un envío fallido no inicia esta limpieza. El resultado API informa las carpetas
 retiradas. Deshacer recrea los directorios necesarios para restaurar los archivos.
-No se aplica una limpieza retroactiva al material real.
+Las huérfanas anteriores del host se revisan solo si tienen registro de envío,
+según la ampliación del 2026-10-18; no se limpia material del pendrive.
 
 
 ## Nombres documentados de carpetas nuevas (2026-10-12)

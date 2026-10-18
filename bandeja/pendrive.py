@@ -1439,20 +1439,42 @@ def ejecutar_envio_pendrive(simulacion_o_capitulos: Any,
         return _ejecutar_envio_pendrive_interno(simulacion_o_capitulos, config, db, movimientos)
 
 
-def _limpiar_carpetas_vacias_enviadas(base_origen, archivos_transferidos):
+def _limpiar_carpetas_vacias_enviadas(base_origen, archivos_transferidos, ruta_bitacora=None):
     """Excepción autorizada: rmdir de carpetas vacías de capítulos enviados.
 
+    Incluye huérfanas de envíos anteriores registrados en la misma sala.
     Nunca elimina archivos, la sala de espera, personajes, áreas de respaldo
     ni capítulos ajenos. Un contenido nuevo o un error conserva la carpeta.
+    Solo se invoca tras un envío completo, verificado y registrado.
     """
+    if not archivos_transferidos:
+        return []
+    registros = list(archivos_transferidos)
+    if ruta_bitacora:
+        try:
+            with open(ruta_bitacora, "r", encoding="utf-8") as historial:
+                for linea in historial:
+                    try:
+                        evento = json.loads(linea)
+                    except (ValueError, TypeError):
+                        continue
+                    if not isinstance(evento, dict) or evento.get("evento") != "envio_pendrive":
+                        continue
+                    archivos = evento.get("archivos")
+                    if isinstance(archivos, list):
+                        registros.extend(r for r in archivos if isinstance(r, dict))
+        except (OSError, UnicodeError) as error:
+            logger.warning("No se pudo revisar el historial de carpetas enviadas: %s", error)
     base = os.path.abspath(base_origen)
     eliminadas = []
     capitulos = set()
-    for registro in archivos_transferidos:
+    for registro in registros:
         origen = registro.get("ruta_origen_espera")
-        if not isinstance(origen, str):
+        personaje = registro.get("personaje")
+        nombre_capitulo = registro.get("capitulo")
+        if not all(isinstance(valor, str) and valor for valor in (origen, personaje, nombre_capitulo)):
             continue
-        capitulo = os.path.join(base, registro["personaje"], registro["capitulo"])
+        capitulo = os.path.join(base, personaje, nombre_capitulo)
         if (esta_confinado_en_raiz(origen, capitulo)
                 and os.path.abspath(origen) != os.path.abspath(capitulo)):
             capitulos.add(capitulo)
@@ -1478,7 +1500,8 @@ def _limpiar_carpetas_vacias_enviadas(base_origen, archivos_transferidos):
             continue
         candidatas = []
         for ruta, dirs, files in os.walk(capitulo, topdown=True, followlinks=False):
-            dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(ruta, d))
+            dirs[:] = [d for d in dirs if not d.startswith(("_", "."))
+                       and not os.path.islink(os.path.join(ruta, d))
                        and not (hasattr(os.path, "isjunction") and os.path.isjunction(os.path.join(ruta, d)))]
             if esta_confinado_en_raiz(ruta, capitulo):
                 candidatas.append(ruta)
@@ -1684,7 +1707,7 @@ def _ejecutar_envio_pendrive_interno(simulacion_o_capitulos: Any,
     os.makedirs(os.path.dirname(os.path.abspath(ruta_bitacora)), exist_ok=True)
     evento_bitacora = {
         "evento": "envio_pendrive",
-        "limpieza_carpetas_vacias": "solo capitulos enviados, despues de verificar y registrar",
+        "limpieza_carpetas_vacias": "capitulos del envio e huerfanas de envios anteriores registrados, despues de verificar y registrar",
         "id_operacion": id_envio,
         "fecha": fecha_iso,
         "pendrive_id": pendrive_id,
@@ -1699,7 +1722,7 @@ def _ejecutar_envio_pendrive_interno(simulacion_o_capitulos: Any,
         f_bit.flush()
 
     # Solo después de las copias verificadas y de ambos registros exitosos.
-    carpetas_vacias_eliminadas = _limpiar_carpetas_vacias_enviadas(base_origen, archivos_transferidos)
+    carpetas_vacias_eliminadas = _limpiar_carpetas_vacias_enviadas(base_origen, archivos_transferidos, ruta_bitacora)
 
     return {
         "exito": True,

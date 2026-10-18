@@ -1,4 +1,6 @@
 """Excepción de carpetas vacías: fixtures exclusivamente temporales."""
+import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -63,6 +65,82 @@ class TestCarpetasVaciasEnviadas(unittest.TestCase):
         self.assertEqual(_limpiar_carpetas_vacias_enviadas(str(self.base), [registro]), [])
         self.assertTrue(otro.is_dir())
         self.assertTrue(self.cap.is_dir())
+
+    def _historial(self, registros):
+        ruta = Path(self.tmp.name) / 'bitacora.jsonl'
+        ruta.write_text(json.dumps({'evento': 'envio_pendrive', 'archivos': registros}) + '\n')
+        return str(ruta)
+
+    def test_huerfanas_anteriores_registradas_de_tres_personajes(self):
+        registros = []
+        carpetas = []
+        for personaje in ('lucie', 'roli', 'mailen'):
+            cap = self.base / personaje / 'Proyecto anterior con espacios'
+            (cap / 'fotos' / 'anidada').mkdir(parents=True)
+            carpetas.append(cap)
+            registros.append({'personaje': personaje, 'capitulo': cap.name,
+                              'ruta_origen_espera': str(cap / 'fotos' / 'foto.jpg')})
+        historial = self._historial(registros)
+        resultado = _limpiar_carpetas_vacias_enviadas(str(self.base), self.enviados, historial)
+        for cap in carpetas:
+            self.assertIn(str(cap), resultado)
+            self.assertFalse(cap.exists())
+            self.assertTrue(cap.parent.is_dir())
+        # El historial es append-only: la limpieza solo lo lee.
+        self.assertEqual(json.loads(Path(historial).read_text())['archivos'], registros)
+
+    def test_huerfanas_sin_historial_o_de_otra_sala_se_conservan(self):
+        ajeno = self.base / 'lucie' / 'no enviado'; ajeno.mkdir()
+        fuera = Path(self.tmp.name) / 'otra_sala' / 'lucie' / 'no enviado'
+        fuera.mkdir(parents=True)
+        historial = self._historial([{'personaje': 'lucie', 'capitulo': ajeno.name,
+                                     'ruta_origen_espera': str(fuera / 'video.mp4')}])
+        _limpiar_carpetas_vacias_enviadas(str(self.base), self.enviados, historial)
+        self.assertTrue(ajeno.is_dir())
+        self.assertTrue(fuera.is_dir())
+
+    def test_historial_incompleto_no_habilita_otros_capitulos(self):
+        otro = self.base / 'lucie' / 'otro'; otro.mkdir()
+        historial = self._historial([{'personaje': None, 'capitulo': 'otro'},
+                                     {'personaje': 'lucie', 'capitulo': [], 'ruta_origen_espera': 'x'}])
+        with open(historial, 'a') as f:
+            f.write('incompleto\n[]\n')
+            f.write(json.dumps({'evento': 'otro', 'archivos': [
+                {'personaje': 'lucie', 'capitulo': 'otro', 'ruta_origen_espera': str(otro / 'clip.mp4')}]}))
+        _limpiar_carpetas_vacias_enviadas(str(self.base), self.enviados, historial)
+        self.assertTrue(otro.is_dir())
+
+    def test_sin_envio_actual_no_revisa_historicos(self):
+        historial = self._historial(self.enviados)
+        self.assertEqual(_limpiar_carpetas_vacias_enviadas(str(self.base), [], historial), [])
+        self.assertTrue(self.cap.is_dir())
+
+    def test_resguardos_ocultos_y_enlaces_se_conservan(self):
+        for nombre in ('_enviados', '_revertidos', '_a_revisar', '.oculto'):
+            (self.cap / nombre / 'vacia').mkdir(parents=True)
+        destino = Path(self.tmp.name) / 'afuera'; destino.mkdir()
+        enlace = self.cap / 'enlace'
+        try:
+            enlace.symlink_to(destino, target_is_directory=True)
+        except OSError:
+            # La protección junction se comprueba también mediante mock abajo.
+            enlace = None
+        _limpiar_carpetas_vacias_enviadas(str(self.base), self.enviados)
+        for nombre in ('_enviados', '_revertidos', '_a_revisar', '.oculto'):
+            self.assertTrue((self.cap / nombre / 'vacia').is_dir())
+        self.assertTrue(destino.is_dir())
+        if enlace is not None:
+            self.assertTrue(enlace.is_symlink())
+
+    def test_junction_y_error_de_historial_conservan_datos(self):
+        with patch('bandeja.pendrive.os.path.isjunction', create=True,
+                   side_effect=lambda p: os.path.abspath(p) == str(self.cap)):
+            self.assertEqual(_limpiar_carpetas_vacias_enviadas(str(self.base), self.enviados), [])
+        self.assertTrue(self.cap.is_dir())
+        # La falta de historial no convierte en fallido un envío ya registrado.
+        resultado = _limpiar_carpetas_vacias_enviadas(str(self.base), self.enviados,
+                                                     str(Path(self.tmp.name) / 'ausente'))
+        self.assertIn(str(self.cap), resultado)
 
     def test_ast_excepcion_solo_rmdir_en_funcion_autorizada(self):
         permitido = 'def _limpiar_carpetas_vacias_enviadas():\n    os.rmdir(ruta)\n'
