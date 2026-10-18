@@ -47,3 +47,9 @@ context: |
 # vacíos; conservar archivos, raíces/personajes, capítulos ajenos sin registro,
 # respaldos, ocultos y enlaces/junctions. No al arrancar/listar ni ante fallos o
 # envíos parciales. No se limpia el pendrive. Deshacer recrea padres originales.
+
+# Envío incremental 2026-10-18: deduplicación por destino relativo y SHA-256,
+# nunca por hash global. Si el nombre existe, informar y ofrecer Renombrar y
+# agregar (sufijo libre y simulación nueva) o No agregar por archivo. La elección
+# no copia ni renombra archivos reales. Requiere confirmar el plan; conservar
+# existentes y registrar nombre/ruta efectivos para Deshacer. .part con modo xb.

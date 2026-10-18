@@ -143,6 +143,15 @@ en el proyecto, incluidos cambios de documentación o de estas instrucciones.
   sobre el mismo lote. Volver a preguntar al terminar un nuevo lote de cambios.
 - Si no hubo cambios ni commits pendientes, no ofrecer un commit vacío.
 
+## Archivos ya existentes al enviar (2026-10-18)
+
+El plan compara destino relativo y SHA-256, sin omitir contenido reutilizado en
+otro nombre/proyecto. Si ya existe, informar y permitir elegir por archivo
+«Renombrar y agregar» (proponer sufijo libre y volver a simular) o «No agregar».
+No cambiar archivos del host ni del pendrive al elegir. Enviar solo tras la
+confirmación del plan con destinos efectivos; nunca sobrescribir. Deshacer
+restaura el origen registrado y conserva las versiones anteriores del pendrive.
+
 ## Huérfanas de envíos anteriores en el host (2026-10-18)
 
 Tras cada envío completo al pendrive, con integridad y registros confirmados,

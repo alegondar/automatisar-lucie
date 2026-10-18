@@ -2457,7 +2457,8 @@
     function formatearBytes(b) {
       if (b < 1024) return b + ' B';
       if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
-      return (b / 1048576).toFixed(1) + ' MB';
+      if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
+      return (b / 1073741824).toFixed(1) + ' GB';
     }
 
     function iniciarEnvioCapituloActivo() {
@@ -2470,13 +2471,31 @@
     }
 
     let planEnvioActivo = null;
+    let revisionPlanEnvio = 0;
 
-    async function abrirModalPlanEnvio(capitulo = null) {
+    function opcionesArchivoExistente(archivo) {
+      if (!archivo.id_archivo) return '';
+      return `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;">
+        <button type="button" class="btn-sm" data-envio-archivo="${escapeHTML(archivo.id_archivo)}" data-envio-accion="renombrar">Renombrar y agregar</button>
+        <button type="button" class="btn-sm" data-envio-archivo="${escapeHTML(archivo.id_archivo)}" data-envio-accion="omitir">No agregar</button>
+      </div>`;
+    }
+
+    async function resolverColisionPendrive(id, accion) {
+      if (!planEnvioActivo) return;
+      const seleccion = planEnvioActivo.carpetas_seleccionadas;
+      const resoluciones = {...(planEnvioActivo.resoluciones_colisiones || {}), [id]: accion};
+      await abrirModalPlanEnvio(seleccion, resoluciones);
+    }
+
+    async function abrirModalPlanEnvio(capitulo = null, resoluciones = {}) {
+      const revision = ++revisionPlanEnvio;
       try {
         const modal = document.getElementById('modal-plan-envio');
         const cont = document.getElementById('contenido-plan-envio');
         const btnConfirm = document.getElementById('btn-confirmar-envio-pendrive');
 
+        planEnvioActivo = null;
         btnConfirm.disabled = true;
         btnConfirm.style.cursor = 'not-allowed';
         btnConfirm.style.opacity = '0.5';
@@ -2490,14 +2509,25 @@
         } else if (typeof capitulo === 'string' && capitulo.trim()) {
           body = { carpetas: [capitulo.trim()] };
         }
+        if (Object.keys(resoluciones).length) body.resoluciones_colisiones = resoluciones;
         const sim = await apiFetch('/api/pendrive/envio-simular', {
           method: 'POST',
           body: JSON.stringify(body)
         });
 
+        if (revision !== revisionPlanEnvio) return;
         planEnvioActivo = sim;
 
+        const pendientes = sim.archivos_a_copiar || sim.archivos || [];
+        const archivos = [...pendientes, ...(sim.archivos_conflictos || []), ...(sim.archivos_bloqueados || [])];
+        const pen = sim.pendrive || sim;
         let alertasHtml = '';
+        if ((sim.archivos_conflictos || []).length || (sim.archivos_omitidos || []).some(a => a.estado === 'ya_enviado')) {
+          alertasHtml += '<div role="alert" style="padding:12px; border:1px solid var(--teal); margin-bottom:12px;"><strong>Estos archivos ya existen en el pendrive.</strong> Elegí «Renombrar y agregar» para conservar ambas versiones o «No agregar». El plan mostrará el nombre nuevo antes de confirmar.</div>';
+        }
+        if (sim.motivo_bloqueo || sim.error) {
+          alertasHtml += `<p role="status" style="color:var(--danger)">${escapeHTML(sim.motivo_bloqueo || sim.error)}</p>`;
+        }
         if (sim.capitulo_abierto) {
           alertasHtml += `
             <div style="background:rgba(245, 158, 11, 0.15); border:1px solid #f59e0b; color:#fef3c7; padding:10px 14px; border-radius:6px; margin-bottom:12px; font-weight:500;">
@@ -2520,9 +2550,9 @@
         if (sim.archivos_omitidos && sim.archivos_omitidos.length > 0) {
           alertasHtml += `
             <div style="background:rgba(14, 165, 233, 0.15); border:1px solid #0ea5e9; color:#bae6fd; padding:10px 14px; border-radius:6px; margin-bottom:12px; font-size:0.9rem;">
-              <strong>ℹ️ Archivos omitidos (ya enviados anteriormente o no multimedia):</strong>
+              <strong>ℹ️ Archivos que no se agregarán:</strong>
               <ul style="margin:6px 0 0 18px;">
-                ${sim.archivos_omitidos.map(o => `<li><code>${escapeHTML(o.nombre)}</code>: ${escapeHTML(o.motivo)}</li>`).join('')}
+                ${sim.archivos_omitidos.map(o => `<li><code>${escapeHTML(o.nombre)}</code>: ${escapeHTML(o.aviso || o.motivo || o.estado || "Ya enviado")}${["ya_enviado", "omitido_usuario"].includes(o.estado) ? opcionesArchivoExistente(o) : ""}</li>`).join('')}
               </ul>
             </div>
           `;
@@ -2532,14 +2562,14 @@
           <div style="display:flex; flex-wrap:wrap; gap:16px; background:var(--card-alt); padding:12px 16px; border-radius:6px; margin-bottom:14px; font-size:0.85rem;">
             <div><strong>Pendrive ID:</strong> <code>${escapeHTML((sim.pendrive_id || '').slice(0, 8))}...</code></div>
             <div><strong>Punto montaje:</strong> <code>${escapeHTML(sim.punto_montaje || '')}</code></div>
-            <div><strong>Filesystem:</strong> <code>${escapeHTML(sim.sistema_archivos || '')}</code></div>
-            <div><strong>Espacio libre:</strong> ${escapeHTML(sim.espacio_libre_fmt || '0 B')} (Margen: ${escapeHTML(sim.margen_libre_fmt || '1 GiB')})</div>
-            <div><strong>Total a enviar:</strong> <strong>${sim.total_archivos_a_enviar} archivo(s)</strong> (${escapeHTML(sim.bytes_a_enviar_fmt || '0 B')})</div>
+            <div><strong>Filesystem:</strong> <code>${escapeHTML(pen.sistema_archivos || '')}</code></div>
+            <div><strong>Espacio libre:</strong> ${escapeHTML(sim.espacio_libre_fmt || (pen.espacio_libre_bytes == null ? 'No disponible' : formatearBytes(pen.espacio_libre_bytes)))} (Margen: ${escapeHTML(sim.margen_libre_fmt || (pen.margen_libre_bytes == null ? 'No disponible' : formatearBytes(pen.margen_libre_bytes)))})</div>
+            <div><strong>Total a enviar:</strong> <strong>${sim.total_archivos_a_enviar ?? pendientes.length} archivo(s)</strong> (${escapeHTML(sim.bytes_a_enviar_fmt || '0 B')})</div>
           </div>
         `;
 
         let tablaArchivos = '';
-        if (sim.archivos && sim.archivos.length > 0) {
+        if (archivos.length > 0) {
           tablaArchivos = `
             <table class="modal-tabla">
               <thead>
@@ -2552,17 +2582,18 @@
                 </tr>
               </thead>
               <tbody>
-                ${sim.archivos.map(a => {
-                  const tagTipo = a.tipo === 'video' ? '<span class="tag-tipo tag-video">VIDEO</span>' : '<span class="tag-tipo tag-imagen">IMAGEN</span>';
-                  const badgeEstado = a.conflicto
-                    ? '<span style="color:var(--danger); font-weight:bold;">⚠️ Conflicto (hash distinto)</span>'
+                ${archivos.map(a => {
+                  const tagTipo = a.tipo === 'audio' ? '<span class="tag-tipo">AUDIO</span>' : ['video', 'crudo'].includes(a.tipo) ? '<span class="tag-tipo tag-video">VIDEO</span>' : '<span class="tag-tipo tag-imagen">IMAGEN</span>';
+                  const bloqueado = a.conflicto || ['conflicto', 'bloqueado_fat32'].includes(a.estado);
+                  const badgeEstado = bloqueado
+                    ? `<span style="color:var(--danger); font-weight:bold;">${escapeHTML(a.aviso || 'Conflicto (hash distinto)')}</span>`
                     : '<span style="color:var(--teal); font-weight:600;">Listo para enviar</span>';
                   return `
-                    <tr style="${a.conflicto ? 'background:rgba(207, 102, 121, 0.1);' : ''}">
-                      <td><strong>${escapeHTML(a.nombre)}</strong></td>
+                    <tr style="${bloqueado ? 'background:rgba(207, 102, 121, 0.1);' : ''}">
+                      <td><strong>${escapeHTML(a.nombre)}</strong>${bloqueado || a.nombre_destino ? opcionesArchivoExistente(a) : ""}</td>
                       <td>${tagTipo}</td>
                       <td>${escapeHTML(a.tamanio_fmt || formatearBytes(a.tamanio_bytes))}</td>
-                      <td class="ruta-celda"><code style="color:var(--teal)">${escapeHTML(a.destino_relativo)}</code></td>
+                      <td class="ruta-celda"><code style="color:var(--teal)">${escapeHTML(a.ruta_relativa_pendrive || a.destino_relativo)}</code></td>
                       <td>${badgeEstado}</td>
                     </tr>
                   `;
@@ -2575,6 +2606,9 @@
         }
 
         cont.innerHTML = alertasHtml + infoPendrive + tablaArchivos;
+        cont.querySelectorAll('[data-envio-archivo]').forEach(boton => {
+          boton.addEventListener('click', () => resolverColisionPendrive(boton.dataset.envioArchivo, boton.dataset.envioAccion));
+        });
 
         if (sim.puede_enviar && sim.total_archivos_a_enviar > 0) {
           btnConfirm.disabled = false;
@@ -2586,12 +2620,14 @@
           btnConfirm.style.opacity = '0.5';
         }
       } catch (e) {
+        if (revision !== revisionPlanEnvio) return;
         mostrarError(e.message);
         cerrarModalPlanEnvio();
       }
     }
 
     function cerrarModalPlanEnvio() {
+      revisionPlanEnvio += 1;
       const modal = document.getElementById('modal-plan-envio');
       if (modal) modal.style.display = 'none';
       planEnvioActivo = null;

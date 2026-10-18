@@ -1,5 +1,56 @@
 # Estado actual del sistema — 2026-10-18
 
+## Envío incremental y elección ante archivos existentes (2026-10-18)
+
+El plan omitía las fotos nuevas por un hash global, aunque estuvieran guardadas
+con otro nombre o en otro proyecto. Ahora plan y listado comparan destino relativo
+(normalizado sin distinguir mayúsculas) y SHA-256. El contenido reutilizado en
+otro nombre/personaje/proyecto puede enviarse; un mismo destino y hash se omite.
+
+El usuario pidió avisar cuando el nombre ya existe y permitir elegir. El modal
+muestra **Renombrar y agregar** y **No agregar** por archivo, tanto para copias
+idénticas como para nombres ocupados con otro contenido. Renombrar propone un
+sufijo libre `_1`, `_2`, etc., sin colisionar con nombres del pendrive, `.part`
+o del mismo plan, y genera una nueva simulación. No agregar conserva el existente
+y excluye el nuevo. Sin elegir, un conflicto de contenido sigue bloqueando.
+Las decisiones no copian ni renombran archivos reales: el envío exige confirmar
+el plan con los destinos efectivos. Las respuestas tardías no sustituyen la
+última elección y cambiar una resolución invalida la revisión anterior.
+
+El modal se alinea con el contrato API actual (`archivos_a_copiar`, `aviso`,
+`ruta_relativa_pendrive`, datos de `pendrive`), mostrando los archivos/destinos,
+razones de omisión, conflictos, espacio real y motivo del bloqueo. Se mantienen
+los campos anteriores como compatibilidad de presentación. El manifiesto y la
+respuesta registran el nombre de destino efectivo; la bitácora conserva el
+origen y backup originales para Deshacer. Los `.part` usan creación exclusiva
+`xb`: un parcial previo se conserva. Deshacer de un envío incremental no toca
+las versiones anteriores del pendrive.
+
+Validación final **Kali/Linux, Python 3.13.12: 454 pruebas, OK, 11 omisiones**, en
+**61.122 s**; omisiones por capacidades nativas Windows. Guardia y aserciones
+conservadas. **20 específicas OK**: envío incremental de tres fotos, contenido
+reutilizado, mismo nombre/hash, renombrar/no agregar, sufijos ocupados sin
+distinguir mayúsculas, parciales previos, listado, integridad y Deshacer.
+UI incremental con botones, resolución sin enviar y revisión tardía, más UI de
+edición/publicación/CSRF y sintaxis JS correctas. AST **0/31**; auditoría de
+repo/historial y diff correctos. Log externo:
+`/tmp/tests_opciones_colision_20261018.log`. Suite previa al ajuste de opciones:
+451 pruebas OK, 11 omisiones, 58.713 s. Windows nativo no ejecutado.
+
+Manifiesto real durante ambas suites: **414 / 414**, estable; solo contado.
+Bandeja real detenida con SIGINT antes de probar; fixtures exclusivamente
+temporales. Diagnóstico y simulaciones reales separados de las pruebas, en
+solo lectura, sin enviar material. Al terminar se reanudó para uso normal con
+`--sin-navegador`, panel HTTP 200 y JS actualizado verificados. La simulación
+del proyecto afectado muestra una foto nueva y seis nombres ocupados con
+contenido distinto, todos con elección individual. Recargar con Ctrl+F5 para
+ver el cartel y elegir qué renombrar o no agregar; no se confirmó ese envío.
+
+Rama `feat/lucie-recibir`, desde `993eed8`; fetch sin novedades ni commits
+locales previos pendientes. El usuario autorizó el commit y push de este lote
+el 2026-10-18. Se preservan fuera del commit los registros locales del 16/17
+y los planes de sesiones anteriores.
+
 ## Huérfanas del host después de enviar al pendrive (2026-10-18)
 
 El usuario solicitó retirar las carpetas de proyectos que quedan vacías dentro

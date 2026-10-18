@@ -8,6 +8,7 @@ Valida las 7 Reglas de Oro, detección multiplataforma, vinculación, simulació
 preservación de originales en _enviados, manifiesto append-only, reversión a _revertidos y robustez.
 """
 
+from pathlib import Path
 import datetime
 import json
 import os
@@ -511,6 +512,34 @@ class TestSimulacionEnvio(unittest.TestCase):
         self.assertEqual(len(sim["archivos_a_copiar"]), 1)
         self.assertEqual(sim["archivos_a_copiar"][0]["nombre"], "lucievideo1.mp4")
 
+    def test_listado_distingue_hash_igual_en_destinos_distintos(self):
+        from bandeja.pendrive import escanear_sala_espera_carpetas
+        db = GestorBaseDatosBandeja(str(Path(self.tmp_root) / 'listado.sqlite'))
+        sha = calcular_sha256(self.foto_file)
+        db.registrar_o_actualizar(hash_val=sha, ruta_actual=self.foto_file,
+                                 estado='clasificado', personaje='lucie', escena='capitulo_01')
+        envios = {(sha, 'imagenes/roli/otro/foto1.jpg')}
+        def foto():
+            carpetas = escanear_sala_espera_carpetas(self.config.ruta_destino_base, db=db, envios_manifiesto=envios)
+            return next(a for c in carpetas for a in c['archivos'] if a['nombre'] == 'foto1.jpg')
+        self.assertFalse(foto()['ya_enviado'])
+        envios.add((sha, 'imagenes/lucie/capitulo_01/foto1.jpg'))
+        self.assertTrue(foto()['ya_enviado'])
+
+    def test_hash_en_otro_destino_no_oculta_colision_local(self):
+        destino = Path(self.pendrive_dir) / 'LucieSinReglas' / 'imagenes' / 'lucie' / 'capitulo_01' / 'foto1.jpg'
+        destino.parent.mkdir(parents=True)
+        destino.write_bytes(b'foto distinta que debe conservarse')
+        manifiesto = Path(self.pendrive_dir) / 'LucieSinReglas' / '.lucie' / 'manifiesto.jsonl'
+        with manifiesto.open('a') as f:
+            f.write(json.dumps({'sha256': calcular_sha256(self.foto_file), 'estado': 'enviado',
+                                'ruta_relativa': 'imagenes/roli/otro/foto.jpg'}) + '\n')
+        plan = simular_envio_capitulos(config=self.config)
+        self.assertFalse(plan['puede_enviar'])
+        self.assertEqual([a['nombre'] for a in plan['archivos_conflictos']], ['foto1.jpg'])
+        self.assertEqual(plan['archivos_omitidos'], [])
+        self.assertEqual(destino.read_bytes(), b'foto distinta que debe conservarse')
+
     def test_simular_envio_conflicto_distinto_hash_bloquea_copia(self):
         """
         Requisito 3: Si en el destino existe un archivo con distinto hash, se marca como conflicto
@@ -728,6 +757,112 @@ class TestEjecucionEnvioPendrive(unittest.TestCase):
         # O bien el destino final quedó corrupto y el origen sigue en sala de espera intacto
         self.assertTrue(os.path.exists(self.vid_path))
         self.assertTrue(os.path.exists(self.fot_path))
+
+    def test_part_preexistente_no_se_sobrescribe(self):
+        plan = simular_envio_capitulos(['lucie/capitulo1'], self.config, self.db)
+        part = Path(plan['archivos_a_copiar'][0]['ruta_destino_absoluta'] + '.part')
+        part.parent.mkdir(parents=True, exist_ok=True)
+        part.write_bytes(b'copia parcial anterior a conservar')
+        with self.assertRaises(RuntimeError):
+            ejecutar_envio_pendrive(plan, self.config, self.db, self.movimientos)
+        self.assertEqual(part.read_bytes(), b'copia parcial anterior a conservar')
+        self.assertTrue(Path(self.vid_path).exists())
+        self.assertTrue(Path(self.fot_path).exists())
+
+    def test_cartel_colisiones_renombrar_o_no_agregar_con_deshacer(self):
+        primero = ejecutar_envio_pendrive(None, self.config, self.db, self.movimientos)
+        raiz = Path(self.pendrive_dir) / 'LucieSinReglas'
+        anteriores = {r['ruta_relativa']: (raiz / r['ruta_relativa']).read_bytes() for r in primero['archivos']}
+        Path(self.videos_dir).mkdir(parents=True)
+        Path(self.fotos_dir).mkdir()
+        Path(self.vid_path).write_bytes(b'video nuevo con nombre ocupado')
+        Path(self.fot_path).write_bytes(b'foto nueva con nombre ocupado')
+        sufijo_ocupado = raiz / 'imagenes' / 'lucie' / 'capitulo1' / 'LUCIEFOTO1_1.JPG'
+        sufijo_ocupado.write_bytes(b'otro archivo que se conserva')
+        bloqueado = simular_envio_capitulos(['lucie/capitulo1'], self.config, self.db)
+        self.assertFalse(bloqueado['puede_enviar'])
+        ids = {a['nombre']: a['id_archivo'] for a in bloqueado['archivos_conflictos']}
+        decisiones = {ids['lucievideo1.mp4']: 'omitir', ids['luciefoto1.jpg']: 'renombrar'}
+        plan = simular_envio_capitulos(['lucie/capitulo1'], self.config, self.db,
+                                      resoluciones_colisiones=decisiones)
+        self.assertTrue(plan['puede_enviar'])
+        self.assertEqual(plan['total_archivos_a_enviar'], 1)
+        self.assertEqual(plan['archivos_a_copiar'][0]['nombre_destino'], 'luciefoto1_2.jpg')
+        self.assertEqual(plan['archivos_omitidos'][0]['estado'], 'omitido_usuario')
+        destino = raiz / plan['archivos_a_copiar'][0]['ruta_relativa_pendrive']
+        self.assertFalse(destino.exists(), 'La simulación no debe copiar')
+        res = ejecutar_envio_pendrive(plan, self.config, self.db, self.movimientos)
+        self.assertEqual(destino.read_bytes(), b'foto nueva con nombre ocupado')
+        self.assertEqual(Path(self.vid_path).read_bytes(), b'video nuevo con nombre ocupado')
+        for relativa, contenido in anteriores.items():
+            self.assertEqual((raiz / relativa).read_bytes(), contenido)
+        self.assertEqual(sufijo_ocupado.read_bytes(), b'otro archivo que se conserva')
+        deshacer_envio_pendrive(res['id_envio'], config=self.config, db=self.db, ruta_bitacora=self.bitacora_path)
+        self.assertEqual(Path(self.fot_path).read_bytes(), b'foto nueva con nombre ocupado')
+        for relativa, contenido in anteriores.items():
+            self.assertEqual((raiz / relativa).read_bytes(), contenido)
+
+    def test_copia_identica_permite_elegir_renombrar_o_no_agregar(self):
+        video = Path(self.vid_path).read_bytes()
+        foto = Path(self.fot_path).read_bytes()
+        ejecutar_envio_pendrive(None, self.config, self.db, self.movimientos)
+        Path(self.videos_dir).mkdir(parents=True)
+        Path(self.fotos_dir).mkdir()
+        Path(self.vid_path).write_bytes(video)
+        Path(self.fot_path).write_bytes(foto)
+        sim = simular_envio_capitulos(['lucie/capitulo1'], self.config, self.db)
+        self.assertEqual(len(sim['archivos_omitidos']), 2)
+        decisiones = {a['id_archivo']: 'omitir' for a in sim['archivos_omitidos']}
+        no = simular_envio_capitulos(['lucie/capitulo1'], self.config, self.db, resoluciones_colisiones=decisiones)
+        self.assertFalse(no['puede_enviar'])
+        self.assertEqual(no['archivos_a_copiar'], [])
+        foto_id = next(a['id_archivo'] for a in sim['archivos_omitidos'] if a['nombre'].endswith('.jpg'))
+        decisiones[foto_id] = 'renombrar'
+        si = simular_envio_capitulos(['lucie/capitulo1'], self.config, self.db, resoluciones_colisiones=decisiones)
+        self.assertTrue(si['puede_enviar'])
+        self.assertEqual(si['archivos_a_copiar'][0]['nombre_destino'], 'luciefoto1_1.jpg')
+        self.assertEqual(si['resoluciones_colisiones'], decisiones)
+        for invalida in ([], 'renombrar', {'id': 'sobrescribir'}):
+            with self.assertRaises(ValueError):
+                simular_envio_capitulos(['lucie/capitulo1'], self.config, self.db, resoluciones_colisiones=invalida)
+
+    def test_agregar_tres_fotos_a_proyecto_enviado_reutilizando_contenido(self):
+        """Mismo contenido en otro destino no bloquea las tres fotos nuevas."""
+        video_original = Path(self.vid_path).read_bytes()
+        foto14 = Path(self.fotos_dir) / 'lucietehicistepolicia14.jpg'
+        foto14.write_bytes(b'foto reutilizada en el mismo proyecto')
+        foto_otro = Path(self.destino_base) / 'roli' / 'Otro proyecto' / 'fotos' / 'roli1.jpg'
+        foto_otro.parent.mkdir(parents=True)
+        foto_otro.write_bytes(b'foto reutilizada de otro proyecto')
+        primero = ejecutar_envio_pendrive(None, self.config, self.db, self.movimientos)
+        self.assertEqual(primero['total_transferidos'], 4)
+        iniciales = {r['ruta_relativa']: calcular_sha256(os.path.join(
+            self.pendrive_dir, 'LucieSinReglas', *r['ruta_relativa'].split('/'))) for r in primero['archivos']}
+        Path(self.videos_dir).mkdir(parents=True)
+        Path(self.vid_path).write_bytes(video_original)
+        Path(self.fotos_dir).mkdir()
+        fotos = {
+            'lucietehicistepolicia9.jpg': b'foto reutilizada de otro proyecto',
+            'lucietehicistepolicia10.jpg': b'foto reutilizada en el mismo proyecto',
+            'lucietehicistepolicia11.jpg': b'foto reutilizada en el mismo proyecto',
+        }
+        for nombre, contenido in fotos.items():
+            (Path(self.fotos_dir) / nombre).write_bytes(contenido)
+        plan = simular_envio_capitulos(['lucie/capitulo1'], self.config, self.db)
+        self.assertTrue(plan['puede_enviar'])
+        self.assertEqual(plan['total_archivos_a_enviar'], 3)
+        self.assertEqual({a['nombre'] for a in plan['archivos_a_copiar']}, set(fotos))
+        self.assertEqual([a['nombre'] for a in plan['archivos_omitidos']], ['lucievideo1.mp4'])
+        segundo = ejecutar_envio_pendrive(plan, self.config, self.db, self.movimientos)
+        self.assertEqual(segundo['total_transferidos'], 3)
+        for relativa, sha in iniciales.items():
+            self.assertEqual(calcular_sha256(os.path.join(self.pendrive_dir, 'LucieSinReglas', *relativa.split('/'))), sha)
+        for nombre, contenido in fotos.items():
+            destino = Path(self.pendrive_dir) / 'LucieSinReglas' / 'imagenes' / 'lucie' / 'capitulo1' / nombre
+            self.assertEqual(destino.read_bytes(), contenido)
+        deshacer_envio_pendrive(segundo['id_envio'], config=self.config, db=self.db, ruta_bitacora=self.bitacora_path)
+        for nombre, contenido in fotos.items():
+            self.assertEqual((Path(self.fotos_dir) / nombre).read_bytes(), contenido)
 
     def test_envio_videos_fotos_limpia_tres_personajes_y_deshacer_recrea(self):
         """Envío real en temporales: limpieza y reversión para los tres personajes."""
@@ -1203,6 +1338,15 @@ class TestVigilanteYEstadoPendrive(unittest.TestCase):
 
 
 class TestInterfazUsuarioPendrive(unittest.TestCase):
+    def test_modal_incremental_contrato_api(self):
+        import subprocess
+        import shutil
+        if not shutil.which('node'):
+            self.skipTest('Node.js no disponible para ejecutar la regresión UI')
+        res = subprocess.run(['node', 'test_envio_incremental_ui.js'], capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+
+
     """Pruebas de la Interfaz de Usuario y SPA para el envío a pendrive (Grupo 7)."""
 
     def setUp(self):

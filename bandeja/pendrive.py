@@ -362,7 +362,7 @@ def _es_extension_multimedia(ext: str) -> bool:
 
 def escanear_sala_espera_carpetas(ruta_destino_base: str,
                                    db: Optional[GestorBaseDatosBandeja] = None,
-                                   hashes_manifiesto: Optional[Set[str]] = None,
+                                   envios_manifiesto: Optional[Set[Tuple[str, str]]] = None,
                                    vigilante: Optional[Any] = None) -> List[Dict[str, Any]]:
     """
     Escanea recursivamente la sala de espera ~/Descargas/_lucie/<personaje>/<carpeta>/
@@ -401,7 +401,7 @@ def escanear_sala_espera_carpetas(ruta_destino_base: str,
         except Exception as e:
             logger.warning(f"Error al consultar base de datos para escanear sala de espera: {e}")
 
-    hashes_man_set = {h.lower() for h in (hashes_manifiesto or set())}
+    envios_man_set = envios_manifiesto or set()
     resultado = []
 
     for pers in sorted(os.listdir(ruta_real_base)):
@@ -485,8 +485,10 @@ def escanear_sala_espera_carpetas(ruta_destino_base: str,
                     # Chequeo contra manifiesto si está disponible
                     h_archivo = mapa_hashes_db.get(p_file)
                     ya_env = False
-                    if h_archivo and hashes_man_set:
-                        ya_env = (h_archivo in hashes_man_set)
+                    if h_archivo and envios_man_set:
+                        categoria = {"video": "videos sin editar", "foto": "imagenes", "audio": "audios"}.get(tipo_arch)
+                        destino_relativo = normalizar_ruta_relativa_posix(os.path.join(categoria, pers, cap, f)) if categoria else ""
+                        ya_env = (h_archivo.lower(), destino_relativo.lower()) in envios_man_set
                     if ya_env:
                         cant_enviados += 1
 
@@ -1188,12 +1190,19 @@ def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
     - Espacio libre suficiente con margen de seguridad (1 GiB).
     - Límite de 4 GiB en particiones FAT32/vfat (bloqueo preventivo).
     - Colisiones case-insensitive y conflictos de hash (distinto hash bloquea la copia).
-    - Deduplicación contra el manifiesto append-only (mismo hash se omite e informa 'ya enviado').
+    - Deduplicación por destino y SHA-256; reutilizar contenido en otro destino es válido.
     - Exclusión y aviso de archivos sueltos no multimedia en la raíz del capítulo.
     - Advertencia si algún capítulo sigue abierto en la sala de espera.
     """
     cfg = config or ConfiguracionBandeja()
     carpeta_raiz = cfg.carpeta_raiz_pendrive
+    resoluciones = kwargs.get("resoluciones_colisiones")
+    if resoluciones is None:
+        resoluciones = {}
+    if (not isinstance(resoluciones, dict) or len(resoluciones) > 1000
+            or any(not isinstance(k, str) or v not in ("renombrar", "omitir") for k, v in resoluciones.items())):
+        raise ValueError("Elegí renombrar o no agregar para cada archivo existente.")
+    destinos_reservados = set()
     carpetas_arg = kwargs.get("carpetas")
     capitulos_lista = capitulos_filtro if capitulos_filtro is not None else (carpetas_arg if carpetas_arg is not None else kwargs.get("capitulos"))
 
@@ -1224,14 +1233,15 @@ def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
 
     # 1. Leer manifiesto del pendrive para deduplicación por SHA-256
     entradas_manifiesto = leer_manifiesto_pendrive(pendrive_montaje, carpeta_raiz)
-    hashes_manifiesto: Set[str] = set()
+    envios_manifiesto = set()
     for e in entradas_manifiesto:
         h = e.get("sha256")
-        if h and e.get("estado") != "revertido":
-            hashes_manifiesto.add(h.lower())
+        ruta = e.get("ruta_relativa")
+        if h and ruta and e.get("estado") != "revertido":
+            envios_manifiesto.add((h.lower(), normalizar_ruta_relativa_posix(ruta).lower()))
 
     # 2. Obtener carpetas candidatas en la sala de espera
-    todas_carpetas = escanear_sala_espera_carpetas(cfg.ruta_destino_base, db=db, hashes_manifiesto=hashes_manifiesto)
+    todas_carpetas = escanear_sala_espera_carpetas(cfg.ruta_destino_base, db=db, envios_manifiesto=envios_manifiesto)
     carpetas_seleccionadas = []
 
     if capitulos_lista:
@@ -1315,7 +1325,9 @@ def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
 
             sha_orig = calcular_sha256(ruta_orig)
 
+            id_archivo = hashlib.sha256(ruta_orig.encode("utf-8")).hexdigest()[:32]
             item_info = {
+                "id_archivo": id_archivo,
                 "personaje": pers,
                 "capitulo": cap,
                 "nombre": nombre,
@@ -1330,34 +1342,59 @@ def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
                 "aviso": ""
             }
 
-            # 1. Chequeo contra manifiesto append-only: mismo sha256 -> ya enviado
-            if sha_orig.lower() in hashes_manifiesto:
-                item_info["estado"] = "ya_enviado"
-                item_info["aviso"] = "ya enviado (mismo SHA-256 en manifiesto)"
+            # Un archivo ya registrado o físicamente existente requiere una elección.
+            mismo_registro = (sha_orig.lower(), ruta_rel_pendrive.lower()) in envios_manifiesto
+            archivo_colisionante = None
+            nombres_ocupados = set()
+            if os.path.isdir(dir_dest_pendrive):
+                nombres = os.listdir(dir_dest_pendrive)
+                nombres_ocupados = {n.lower() for n in nombres}
+                archivo_colisionante = next((n for n in nombres if n.lower() == nombre.lower()), None)
+            ya_planificado = ruta_rel_pendrive.lower() in destinos_reservados
+            hay_existente = mismo_registro or archivo_colisionante is not None or ya_planificado
+            accion = resoluciones.get(id_archivo)
+            if hay_existente and accion == "omitir":
+                item_info["estado"] = "omitido_usuario"
+                item_info["aviso"] = "No se agrega por elección del usuario; el existente se conserva."
                 archivos_omitidos.append(item_info)
                 continue
-
-            # 2. Chequeo de colisión en destino físico (case-insensitive para FAT/exFAT)
-            archivo_colisionante = None
-            if os.path.isdir(dir_dest_pendrive):
-                for f_dest in os.listdir(dir_dest_pendrive):
-                    if f_dest.lower() == nombre.lower():
-                        archivo_colisionante = f_dest
+            if hay_existente and accion == "renombrar":
+                base_nombre, extension = os.path.splitext(nombre)
+                numero = 1
+                while True:
+                    nombre_nuevo = f"{base_nombre}_{numero}{extension}"
+                    relativa_nueva = normalizar_ruta_relativa_posix(os.path.join(sub_dest, pers, cap, nombre_nuevo))
+                    if (nombre_nuevo.lower() not in nombres_ocupados
+                            and (nombre_nuevo + ".part").lower() not in nombres_ocupados
+                            and relativa_nueva.lower() not in destinos_reservados):
                         break
-
-            if archivo_colisionante:
+                    numero += 1
+                item_info["nombre_destino"] = nombre_nuevo
+                item_info["ruta_relativa_pendrive"] = relativa_nueva
+                item_info["ruta_destino_absoluta"] = os.path.join(dir_dest_pendrive, nombre_nuevo)
+                item_info["aviso"] = f"Se agrega como '{nombre_nuevo}'; el existente se conserva."
+            elif mismo_registro:
+                item_info["estado"] = "ya_enviado"
+                item_info["aviso"] = "Ya enviado: ya existe el mismo destino y SHA-256 en manifiesto."
+                archivos_omitidos.append(item_info)
+                continue
+            elif archivo_colisionante:
                 ruta_colision = os.path.join(dir_dest_pendrive, archivo_colisionante)
                 sha_dest = calcular_sha256(ruta_colision)
                 if sha_dest == sha_orig:
                     item_info["estado"] = "ya_enviado"
-                    item_info["aviso"] = f"ya enviado (archivo idéntico preexistente en destino: '{archivo_colisionante}')"
+                    item_info["aviso"] = f"Ya enviado: ya existe una copia idéntica '{archivo_colisionante}'."
                     archivos_omitidos.append(item_info)
                     continue
-                else:
-                    item_info["estado"] = "conflicto"
-                    item_info["aviso"] = f"Conflicto: en pendrive ya existe '{archivo_colisionante}' con distinto hash ({sha_dest[:8]}... vs {sha_orig[:8]}...). No se copia ni pisa."
-                    archivos_conflictos.append(item_info)
-                    continue
+                item_info["estado"] = "conflicto"
+                item_info["aviso"] = f"Ya existe '{archivo_colisionante}' con distinto contenido. Elegí renombrar o no agregar; no se sobrescribe."
+                archivos_conflictos.append(item_info)
+                continue
+            elif ya_planificado:
+                item_info["estado"] = "conflicto"
+                item_info["aviso"] = "Otro archivo del plan usa ese destino. Elegí renombrar o no agregar."
+                archivos_conflictos.append(item_info)
+                continue
 
             # 3. Chequeo límite FAT32 > 4 GiB
             if es_fat and tam > 4294967296:
@@ -1366,7 +1403,8 @@ def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
                 archivos_bloqueados.append(item_info)
                 continue
 
-            # Archivo nuevo listo para enviar
+            # Archivo nuevo listo para enviar; reservar también el destino propuesto.
+            destinos_reservados.add(item_info["ruta_relativa_pendrive"].lower())
             archivos_a_copiar.append(item_info)
 
     bytes_a_copiar = sum(a["tamanio_bytes"] for a in archivos_a_copiar)
@@ -1381,7 +1419,9 @@ def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
 
     motivo_bloqueo = None
     if len(archivos_a_copiar) == 0:
-        if len(archivos_omitidos) > 0:
+        if any(a.get("estado") == "omitido_usuario" for a in archivos_omitidos):
+            motivo_bloqueo = "No hay archivos nuevos seleccionados para enviar. Los existentes se conservan."
+        elif len(archivos_omitidos) > 0:
             motivo_bloqueo = "Todos los archivos del capítulo ya fueron enviados al pendrive."
         else:
             motivo_bloqueo = "No se encontraron archivos para transferir."
@@ -1404,6 +1444,7 @@ def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
             "espacio_total_bytes": info_pendrive["espacio_total_bytes"],
             "margen_libre_bytes": margen_libre
         },
+        "resoluciones_colisiones": resoluciones,
         "capitulos_seleccionados": [f"{c['personaje']}/{c.get('carpeta') or c.get('capitulo')}" for c in carpetas_seleccionadas],
         "carpetas_seleccionadas": [f"{c['personaje']}/{c.get('carpeta') or c.get('capitulo')}" for c in carpetas_seleccionadas],
         "archivos_a_copiar": archivos_a_copiar,
@@ -1600,7 +1641,7 @@ def _ejecutar_envio_pendrive_interno(simulacion_o_capitulos: Any,
         h_orig = hashlib.sha256()
         h_part = hashlib.sha256()
         try:
-            with open(ruta_orig, "rb") as f_in, open(ruta_part, "wb") as f_out:
+            with open(ruta_orig, "rb") as f_in, open(ruta_part, "xb") as f_out:
                 while True:
                     bloque = f_in.read(1048576)
                     if not bloque:
@@ -1668,6 +1709,7 @@ def _ejecutar_envio_pendrive_interno(simulacion_o_capitulos: Any,
             "capitulo": item["capitulo"],
             "tipo": item["tipo"],
             "nombre": nombre_arch,
+            "nombre_destino": item.get("nombre_destino", nombre_arch),
             "subcarpeta_origen": sub_orig,
             "ruta_relativa": rel_dest,
             "sha256": sha_esperado,
@@ -1692,7 +1734,7 @@ def _ejecutar_envio_pendrive_interno(simulacion_o_capitulos: Any,
                 "personaje": r["personaje"],
                 "capitulo": r["capitulo"],
                 "tipo": r["tipo"],
-                "nombre": r["nombre"],
+                "nombre": r.get("nombre_destino", r["nombre"]),
                 "ruta_relativa": r["ruta_relativa"],
                 "sha256": r["sha256"],
                 "bytes": r["bytes"],
@@ -1736,7 +1778,7 @@ def _ejecutar_envio_pendrive_interno(simulacion_o_capitulos: Any,
         "capitulos": sorted(list({r["capitulo"] for r in archivos_transferidos})),
         "archivos": [
             {
-                "nombre": r["nombre"],
+                "nombre": r.get("nombre_destino", r["nombre"]),
                 "personaje": r["personaje"],
                 "capitulo": r["capitulo"],
                 "ruta_relativa": r["ruta_relativa"],

@@ -26,7 +26,7 @@ from urllib.parse import parse_qs, urlparse
 
 logger = logging.getLogger("bandeja_descargas")
 
-from bandeja.plataforma import esta_confinado_en_raiz, validar_longitud_ruta, abrir_carpeta_windows
+from bandeja.plataforma import esta_confinado_en_raiz, validar_longitud_ruta, abrir_carpeta_windows, normalizar_ruta_relativa_posix
 from bandeja.config import (
     ConfiguracionBandeja,
     ErrorSeguridadBandeja,
@@ -357,7 +357,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
     def _handle_pendrive_carpetas(self, solo_cabeceras: bool = False):
         try:
-            hashes_manifiesto = set()
+            envios_manifiesto = set()
             try:
                 info_pen = detectar_pendrive(self.config)
                 if info_pen and info_pen.get("conectado"):
@@ -365,15 +365,16 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
                     entradas_m = leer_manifiesto_pendrive(punto, getattr(self.config, "carpeta_raiz_pendrive", "LucieSinReglas"))
                     for ent in entradas_m:
                         h = ent.get("sha256")
-                        if h and ent.get("estado") != "revertido":
-                            hashes_manifiesto.add(h.lower())
+                        ruta = ent.get("ruta_relativa")
+                        if h and ruta and ent.get("estado") != "revertido":
+                            envios_manifiesto.add((h.lower(), normalizar_ruta_relativa_posix(ruta).lower()))
             except Exception:
                 pass
 
             carpetas = escanear_sala_espera_carpetas(
                 self.config.ruta_destino_base,
                 db=self.db,
-                hashes_manifiesto=hashes_manifiesto,
+                envios_manifiesto=envios_manifiesto,
                 vigilante=self.vigilante
             )
             self._enviar_json({"carpetas": carpetas, "total_carpetas": len(carpetas)}, solo_cabeceras=solo_cabeceras)
@@ -819,7 +820,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         elif not isinstance(seleccion, list):
             seleccion = None
         try:
-            res = simular_envio_capitulos(seleccion, self.config, self.db, carpetas=carpetas)
+            res = simular_envio_capitulos(seleccion, self.config, self.db, carpetas=carpetas,
+                                          resoluciones_colisiones=body.get("resoluciones_colisiones"))
             self._enviar_json(res)
         except Exception as e:
             self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al simular envío: {e}")

@@ -273,6 +273,22 @@ documentados en [Dashboard: eliminación y MP3](docs/dashboard-eliminacion-y-mp3
 
 Los `.mp3` se detectan como multimedia. Con alias conocido o capítulo en foco se incorporan a lotes; los demás aparecen en «Sin identificar» y pueden adoptarse con «Del proyecto». Se trasladan a `audios/` conservando su nombre, sin sobrescribir, y se envían al pendrive bajo `audios/<personaje>/<capítulo>/`.
 
+## Agregar archivos a proyectos ya enviados (2026-10-18)
+
+Se puede volver a seleccionar el mismo proyecto para enviar nuevos videos,
+fotos o audios. La simulación omite únicamente archivos con el mismo destino
+relativo y SHA-256 ya registrado, o con copia idéntica en ese destino. El mismo
+contenido bajo otro nombre o en otro proyecto puede enviarse; no se bloquea por
+un hash global. Si el nombre ya existe, el modal informa el caso y permite
+**Renombrar y agregar** o **No agregar** por archivo. La primera opción propone
+un sufijo libre (`_1`, `_2`, etc.) y recalcula el plan; no cambia el archivo del
+host ni envía hasta confirmar. La segunda conserva el existente y excluye el
+nuevo. Sin elegir, un conflicto de contenido sigue bloqueando el envío.
+El modal muestra los archivos nuevos y sus destinos,
+las razones de omisión, los conflictos y el espacio libre real. Confirmar sigue
+requiriendo un plan habilitado con archivos pendientes. Deshacer de un envío
+incremental conserva los envíos anteriores.
+
 ## Huérfanas de envíos anteriores en el host (2026-10-18)
 
 Tras cada envío completo al pendrive, con integridad y registros confirmados,
