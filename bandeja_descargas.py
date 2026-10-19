@@ -58,6 +58,9 @@ def crear_vigilante_capcut(config, db, ruta_bitacora):
 
     def procesar_pendientes():
         punto = punto_montaje()
+        if punto:
+            from bandeja.edicion import procesar_retiros_edicion_pendientes
+            procesar_retiros_edicion_pendientes(db, punto, config.carpeta_raiz_pendrive, ruta_bitacora)
         if config.envio_exports_capcut == "automatico":
             from bandeja.edicion import (retomar_export_actual_sin_asignar, revisar_export_terminado,
                                         registrar_exports_revision_ambigua)

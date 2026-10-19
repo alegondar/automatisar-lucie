@@ -51,6 +51,14 @@ material existente; reintentos y Deshacer respetan las rutas registradas.
 CapCut conserva sus originales. Ver el mapa de módulos, API, estados, modo manual,
 reintentos, reversión y validaciones en `ESTADO_ACTUAL.md`.
 
+Retiro de crudos retenidos (2026-10-19): Terminé de editar registra el retiro
+pendiente cuando Windows obliga a copiar un clip en uso. Tras liberarse, verificar
+origen/copia por SHA-256, resguardar el original redundante en `_enviados/edicion`
+sin sobrescribir y retirar solo sus padres vacíos, después de registrar. Mantener
+Deshacer y las rutas históricas. El sondeo solo procesa solicitudes explícitas
+registradas; los históricos sin indicador requieren Completar traslado y confirmar
+su plan. Listar no mueve archivos. No cerrar CapCut ni forzar sus bloqueos.
+
 Inicio Windows (2026-10-17): el usuario solicitó habilitar el inicio de Lucie al
 entrar a su sesión, en segundo plano con icono junto al reloj. El acceso de Inicio
 es local al equipo; `instalar_inicio_windows.ps1` simula antes de instalarlo sin

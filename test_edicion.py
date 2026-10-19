@@ -32,6 +32,7 @@ from bandeja.edicion import (
     sumar_videos_sesion,
     cancelar_sesion,
     finalizar_edicion_crudos,
+    procesar_retiros_edicion_pendientes,
     deshacer_finalizar_edicion,
     copiar_export_a_videos_completos,
     deshacer_copia_completo,
@@ -243,6 +244,164 @@ class TestEdicionCapCut(unittest.TestCase):
             self.assertTrue(os.path.isfile(origen))
             self.assertFalse(os.path.exists(destino))
         self.assertEqual(self.db.obtener_sesion_por_id(sesion["id"])["estado"], "en_edicion")
+
+    def _preparar_retiro_pendiente(self, capitulo="cafe", nombre="clip.mp4"):
+        origen = self._crear_clip_crudo("lucie", capitulo, nombre, b"video original")
+        sesion = crear_sesion(self.db, [f"lucie/{capitulo}/{nombre}"], "lucie", capitulo, capitulo)
+        args = (self.db, sesion["id"], self.pendrive_montaje, self.carpeta_raiz, self.bitacora_path)
+        renombrar = os.rename
+        def bloqueado(desde, hacia):
+            if desde == origen:
+                error = OSError("CapCut mantiene el original abierto")
+                error.winerror = 32
+                raise error
+            return renombrar(desde, hacia)
+        with patch("bandeja.edicion.os.rename", side_effect=bloqueado), \
+                patch("bandeja.edicion.verificar_archivo_exclusivo", return_value=False):
+            resultado = finalizar_edicion_crudos(*args)
+        self.assertTrue(resultado["exito"], resultado)
+        self.assertEqual(len(resultado["retiro_originales"]["pendientes"]), 1)
+        return sesion, args, origen, resultado["movidos"][0]["destino"]
+
+    def test_retiro_diferido_tras_liberar_original_integridad_limpieza_y_deshacer(self):
+        sesion, args, origen, destino = self._preparar_retiro_pendiente()
+        self.assertTrue(os.path.isfile(origen))
+        planes = obtener_secciones_edicion(self.pendrive_montaje, self.db)["traslados_pendientes"]
+        self.assertEqual(planes[0]["id"], sesion["id"])
+        self.assertTrue(planes[0]["archivos"][0]["automatico"])
+        resultado = procesar_retiros_edicion_pendientes(self.db, self.pendrive_montaje, self.carpeta_raiz, self.bitacora_path)
+        self.assertEqual(resultado["pendientes"], [])
+        resguardo = resultado["retirados"][0]["resguardo"]
+        self.assertFalse(os.path.exists(os.path.dirname(origen)))
+        self.assertEqual(calcular_sha256(destino), calcular_sha256(resguardo))
+        self.assertTrue(os.path.isdir(os.path.dirname(os.path.dirname(origen))))
+        self.assertEqual(obtener_secciones_edicion(self.pendrive_montaje, self.db)["traslados_pendientes"], [])
+        self.assertEqual(procesar_retiros_edicion_pendientes(self.db, self.pendrive_montaje)["retirados"], [])
+        self.assertTrue(deshacer_finalizar_edicion(*args)["exito"])
+        self.assertEqual(calcular_sha256(origen), calcular_sha256(resguardo))
+        self.assertFalse(os.path.exists(destino))
+        self.assertEqual(procesar_retiros_edicion_pendientes(self.db, self.pendrive_montaje)["retirados"], [])
+
+    def test_retiro_bloqueado_conserva_original_copia_y_archivo_ajeno(self):
+        _, _, origen, destino = self._preparar_retiro_pendiente()
+        with patch("bandeja.edicion.verificar_archivo_exclusivo", return_value=False):
+            resultado = procesar_retiros_edicion_pendientes(self.db, self.pendrive_montaje)
+        self.assertEqual(resultado["retirados"], [])
+        self.assertEqual(len(resultado["pendientes"]), 1)
+        self.assertEqual(calcular_sha256(origen), calcular_sha256(destino))
+        ajeno = os.path.join(os.path.dirname(origen), "nota.txt")
+        with open(ajeno, "xb") as f: f.write(b"conservar")
+        procesar_retiros_edicion_pendientes(self.db, self.pendrive_montaje, self.carpeta_raiz, self.bitacora_path)
+        self.assertTrue(os.path.isfile(ajeno))
+        self.assertTrue(os.path.isfile(destino))
+
+    def test_retiro_rechaza_copia_o_original_cambiados(self):
+        for cambiado in ("original", "editado"):
+            with self.subTest(cambiado=cambiado):
+                sesion, _, origen, destino = self._preparar_retiro_pendiente(cambiado)
+                with open(origen if cambiado == "original" else destino, "wb") as f: f.write(b"contenido nuevo")
+                resultado = procesar_retiros_edicion_pendientes(self.db, self.pendrive_montaje,
+                    self.carpeta_raiz, self.bitacora_path, sesion["id"])
+                self.assertEqual(resultado["retirados"], [])
+                self.assertEqual(len(resultado["pendientes"]), 1)
+                self.assertTrue(os.path.isfile(origen))
+                self.assertTrue(os.path.isfile(destino))
+
+    def test_retiro_resguardo_ocupado_no_sobrescribe(self):
+        _, _, origen, _ = self._preparar_retiro_pendiente()
+        plan = obtener_secciones_edicion(self.pendrive_montaje, self.db)["traslados_pendientes"][0]["archivos"][0]
+        os.makedirs(os.path.dirname(plan["resguardo"]), exist_ok=True)
+        with open(plan["resguardo"], "xb") as f: f.write(b"archivo anterior")
+        resultado = procesar_retiros_edicion_pendientes(self.db, self.pendrive_montaje)
+        self.assertEqual(resultado["retirados"], [])
+        self.assertTrue(os.path.isfile(origen))
+        with open(plan["resguardo"], "rb") as f: self.assertEqual(f.read(), b"archivo anterior")
+
+    def test_retiro_sin_copia_o_sin_registro_previo_no_mueve_original(self):
+        _, _, origen, destino = self._preparar_retiro_pendiente()
+        fuera = destino + ".conservado"
+        os.rename(destino, fuera)
+        resultado = procesar_retiros_edicion_pendientes(self.db, self.pendrive_montaje)
+        self.assertEqual(resultado["retirados"], [])
+        self.assertTrue(os.path.isfile(origen))
+        os.rename(fuera, destino)
+        with patch("bandeja.edicion.registrar_bitacora_edicion", side_effect=OSError("registro bloqueado")):
+            resultado = procesar_retiros_edicion_pendientes(self.db, self.pendrive_montaje)
+        self.assertEqual(resultado["retirados"], [])
+        self.assertTrue(os.path.isfile(origen))
+
+    def test_retiro_retoma_con_db_reabierta_sin_afectar_otras_sesiones(self):
+        _, _, origen, _ = self._preparar_retiro_pendiente()
+        ajeno = self._crear_clip_crudo("lucie", "otro", "nuevo.mp4", b"nuevo sin editar")
+        crear_sesion(self.db, ["lucie/otro/nuevo.mp4"], "lucie", "otro")
+        reabierta = GestorBaseDatosBandeja(self.db_path)
+        resultado = procesar_retiros_edicion_pendientes(reabierta, self.pendrive_montaje,
+            self.carpeta_raiz, self.bitacora_path)
+        self.assertEqual(len(resultado["retirados"]), 1)
+        self.assertFalse(os.path.exists(origen))
+        with open(ajeno, "rb") as f: self.assertEqual(f.read(), b"nuevo sin editar")
+
+    def test_historicos_exigen_reintento_explicito_y_no_alteran_fecha_cierre(self):
+        sesion, args, origen, _ = self._preparar_retiro_pendiente()
+        manifiesto = os.path.join(self.pendrive_raiz, ".lucie", "manifiesto.jsonl")
+        with open(manifiesto, encoding="utf-8") as f: eventos = [json.loads(l) for l in f]
+        for evento in eventos: evento.pop("retiro_origen_solicitado", None)
+        with open(manifiesto, "w", encoding="utf-8") as f:
+            for evento in eventos: f.write(json.dumps(evento) + "\n")
+        cierre = self.db.obtener_sesion_por_id(sesion["id"])["fecha_cierre"]
+        self.assertEqual(procesar_retiros_edicion_pendientes(self.db, self.pendrive_montaje)["retirados"], [])
+        plan = obtener_secciones_edicion(self.pendrive_montaje, self.db)["traslados_pendientes"]
+        self.assertFalse(plan[0]["archivos"][0]["automatico"])
+        self.assertTrue(os.path.isfile(origen))
+        resultado = finalizar_edicion_crudos(*args)
+        self.assertEqual(len(resultado["retiro_originales"]["retirados"]), 1)
+        self.assertFalse(os.path.exists(origen))
+        self.assertEqual(self.db.obtener_sesion_por_id(sesion["id"])["fecha_cierre"], cierre)
+
+    def test_deshacer_antes_de_liberar_cancela_retiro_diferido(self):
+        _, args, origen, _ = self._preparar_retiro_pendiente()
+        self.assertTrue(deshacer_finalizar_edicion(*args)["exito"])
+        self.assertEqual(procesar_retiros_edicion_pendientes(self.db, self.pendrive_montaje)["retirados"], [])
+        self.assertTrue(os.path.isfile(origen))
+
+    def test_retiro_recupera_interrupcion_de_registro_sin_mover_dos_veces(self):
+        _, _, origen, destino = self._preparar_retiro_pendiente()
+        with patch("bandeja.edicion.registrar_evento_manifiesto_edicion", side_effect=OSError("sin registro")):
+            resultado = procesar_retiros_edicion_pendientes(self.db, self.pendrive_montaje,
+                self.carpeta_raiz, self.bitacora_path)
+        self.assertEqual(len(resultado["pendientes"]), 1)
+        self.assertFalse(os.path.exists(origen))
+        resultado = procesar_retiros_edicion_pendientes(self.db, self.pendrive_montaje,
+            self.carpeta_raiz, self.bitacora_path)
+        self.assertEqual(len(resultado["retirados"]), 1)
+        self.assertEqual(resultado["pendientes"], [])
+        self.assertEqual(calcular_sha256(destino), calcular_sha256(resultado["retirados"][0]["resguardo"]))
+        self.assertFalse(os.path.exists(os.path.dirname(origen)))
+
+    def test_sondeo_completa_retiro_aun_en_modo_export_manual(self):
+        from bandeja_descargas import crear_vigilante_capcut
+        _, _, origen, _ = self._preparar_retiro_pendiente()
+        config = ConfiguracionBandeja(ruta_config=os.path.join(self.tmp_dir, "config.json"))
+        config.envio_exports_capcut = "manual"
+        config.ruta_exportacion_capcut = os.path.join(self.tmp_dir, "exports")
+        vigilante = crear_vigilante_capcut(config, self.db, self.bitacora_path)
+        with patch("bandeja_descargas.detectar_pendrive", return_value={"conectado": True, "punto_montaje": self.pendrive_montaje}):
+            vigilante.callback_sondeo()
+        self.assertFalse(os.path.exists(origen))
+
+    @unittest.skipUnless(os.name == "nt", "Requiere bloqueo nativo de renombrado de Windows")
+    def test_retiro_nativo_windows_espera_cierre_del_lector(self):
+        origen = self._crear_clip_crudo("lucie", "nativo", "clip.mp4", b"video original")
+        sesion = crear_sesion(self.db, ["lucie/nativo/clip.mp4"], "lucie", "nativo")
+        with open(origen, "rb"):
+            resultado = finalizar_edicion_crudos(self.db, sesion["id"], self.pendrive_montaje,
+                self.carpeta_raiz, self.bitacora_path)
+            self.assertEqual(len(resultado["retiro_originales"]["pendientes"]), 1)
+            self.assertTrue(os.path.isfile(origen))
+        resultado = procesar_retiros_edicion_pendientes(self.db, self.pendrive_montaje,
+            self.carpeta_raiz, self.bitacora_path)
+        self.assertEqual(len(resultado["retirados"]), 1)
+        self.assertFalse(os.path.exists(os.path.dirname(origen)))
 
     def test_copia_crudo_corrupta_preserva_origen_y_copia_para_revision(self):
         from bandeja.edicion import _copiar_crudo_bloqueado

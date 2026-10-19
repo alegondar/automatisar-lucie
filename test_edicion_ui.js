@@ -16,20 +16,23 @@ function elemento() {
 async function probar() {
   const cont = elemento(); const avisos = []; const llamadas = [];
   let modo = 'copiado';
+  let pendientes = [];
+  const confirmaciones = [];
   const ctx = vm.createContext({
     document: {getElementById: () => cont, createElement: elemento},
-    confirm: () => true, alert: mensaje => { throw Error(mensaje); },
+    confirm: mensaje => {confirmaciones.push(mensaje); return true;}, alert: mensaje => { throw Error(mensaje); },
     escapeHTML: s => String(s).replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
     mostrarAvisoEdicion: mensaje => avisos.push(mensaje), cargarVistaEdicion: async () => {},
     apiFetch: async (ruta, datos) => { llamadas.push({ruta, datos}); return {export_final: {modo, mensaje: 'Esperando export'}}; },
     fetchConCsrf: async (ruta, datos) => {
-      llamadas.push({ruta, datos}); return {json: async () => ({exito: true, movidos: [{}],
+      llamadas.push({ruta, datos}); return {json: async () => ({exito: true, movidos: [{}], retiro_originales: {pendientes},
         export_final: {modo, mensaje: modo === 'copiado' ? 'Video final copiado' : 'Falta copiar: sin espacio',
           destino: modo === 'copiado' ? 'videos completos/videos sin publicar/lucie/Cafe.mp4' : undefined}})};
     }
   });
   vm.runInContext(extraer('renderizarSesionesEsperandoExport', 'renderizarSesionesEnEdicion'), ctx);
   vm.runInContext(extraer('terminarEdicionSesion', 'deshacerTerminarEdicion'), ctx);
+  vm.runInContext(extraer('renderizarTrasladosPendientes', 'renderizarSesionesEsperandoExport'), ctx);
   ctx.renderizarSesionesEsperandoExport([{id: 7, nombre: '<img>', personaje: 'lucie', capitulo: 'Cafe'}], []);
   assert.equal(cont.children.length, 1);
   assert.ok(cont.children[0].children[0].textContent.includes('<img>'));
@@ -45,6 +48,29 @@ async function probar() {
   assert.ok(avisos.at(-1).includes('sin espacio'));
   assert.ok(!avisos.at(-1).includes('Video final copiado'));
   assert.equal(llamadas.filter(c => c.ruta === '/api/edicion/terminar').length, 2);
+  pendientes = [{clip: 'clip.mp4'}];
+  await ctx.terminarEdicionSesion(7);
+  assert.ok(avisos.at(-1).includes('siguen en Sin editar'));
+  assert.ok(avisos.at(-1).includes('automáticamente'));
+  assert.ok(!avisos.at(-1).includes('Traslado completado'));
+  const historico = {id: 7, nombre: '<Cafe>', archivos: [{origen: 'sin editar/clip.mp4', destino: 'ya editados/clip.mp4', resguardo: '_enviados/edicion/clip.mp4', automatico: false}]};
+  const antes = llamadas.length;
+  ctx.renderizarTrasladosPendientes([historico]);
+  assert.equal(llamadas.length, antes, 'Mostrar pendientes no debe mover archivos');
+  assert.ok(cont.children[0].children[0].textContent.includes('edición anterior'));
+  const completar = cont.children[0].children[1];
+  assert.equal(completar.textContent, 'Completar traslado');
+  ctx.confirm = () => false;
+  await completar.eventos.click();
+  assert.equal(llamadas.length, antes);
+  ctx.confirm = mensaje => {confirmaciones.push(mensaje); return true;};
+  await completar.eventos.click();
+  assert.equal(llamadas.length, antes + 1);
+  assert.ok(confirmaciones.at(-1).includes(historico.archivos[0].origen));
+  assert.ok(confirmaciones.at(-1).includes(historico.archivos[0].destino));
+  assert.ok(confirmaciones.at(-1).includes(historico.archivos[0].resguardo));
+  ctx.renderizarTrasladosPendientes([]);
+  assert.equal(cont.children.length, 0);
   ctx.renderizarSesionesEsperandoExport([], []);
   assert.equal(cont.children.length, 0);
   const campos = new Map();

@@ -1,4 +1,54 @@
-# Estado actual del sistema — 2026-10-18
+# Estado actual del sistema — 2026-10-19
+
+## Retiro pendiente de originales retenidos por CapCut (2026-10-19)
+
+Diagnóstico de solo lectura: la sesión más reciente tenía sus dos clips en
+`videos ya editados`, pero los eventos `editado` registraban
+`original_preservado=true`. CapCut había impedido renombrarlos y el algoritmo
+anterior solo hacía la copia verificada; no completaba el retiro al liberarlos.
+Se encontraron también sesiones anteriores con originales retenidos. No se
+movió ni reorganizó ese material durante el diagnóstico.
+
+Ahora Terminé de editar registra `retiro_origen_solicitado` si debe copiar por
+WinError 32/33. El sondeo, también con exports en modo manual, espera que el
+archivo quede libre, verifica original y copia por SHA-256 y mueve el original
+redundante a `_enviados/edicion/<sesión>/<versión>_<archivo>`, sin sobrescribir.
+La copia verificada queda directamente en su carpeta de `videos ya editados`.
+Tras registrar la operación se retiran únicamente los padres vacíos del origen;
+se conservan personajes, material ajeno, enlaces y junctions. No se cierra CapCut
+ni se fuerza el bloqueo de Windows. Destino ausente/cambiado, original cambiado,
+resguardo ocupado o fallo de registro conservan los archivos para revisión.
+
+El estado sobrevive al reinicio mediante el manifiesto. Una interrupción después
+del traslado y antes del registro puede completarse validando el resguardo.
+Finalización, retiro y Deshacer se serializan; deshacer antes de liberar cancela
+el retiro y después de retirarlo restaura las rutas originales, conservando el
+resguardo. Reintentar no modifica la fecha de cierre ni la ventana de exports.
+
+Edición muestra los originales pendientes y no anuncia traslado completo mientras
+queden retiros. Los históricos sin indicador nunca se retiran automáticamente:
+Completar traslado presenta origen, copia editada y resguardo, y exige confirmar
+la sesión seleccionada. Listar no mueve material. Los originales de exports de
+CapCut permanecen fuera de esta operación. Rama `feat/lucie-recibir`, base
+`d2b74b5`; fetch sin novedades. El usuario autorizó el commit y push de esta
+corrección el 2026-10-19 en `feat/lucie-recibir`.
+
+Validación Windows/Python 3.13.0: **465 pruebas OK, 11 omisiones**, **89.090 s**.
+Las omisiones existentes requieren Linux o privilegios de symlinks; guardia y
+aserciones conservadas. Once regresiones nuevas cubren bloqueo nativo Windows,
+liberación, retiro, hashes cambiados, copia ausente, colisiones, fallo de registro,
+reinicio, aislamiento de otras sesiones, historial sin permiso y Deshacer.
+Específicas previas: 58 OK. UI de edición, publicación, envío incremental, CSRF
+y sintaxis JS correctas; AST **0/31**, auditoría repo/historial **0/244**.
+Manifiesto real exclusivamente contado durante las pruebas: **447 / 447**,
+estable. Log externo `%TEMP%/tests_retiro_crudos_windows_20261019_8bd35366.log`.
+La bandeja real se cerró normalmente antes de probar; fixtures temporales,
+sin iniciar vigilantes reales como pruebas. Linux nativo no ejecutado.
+Después de validar se reanudó Lucie para uso normal desde su acceso de Inicio.
+Panel HTTP 200, HTML y JS nuevos confirmados. La consulta de diagnóstico muestra
+diez sesiones con originales retenidos; los dos clips de la edición más reciente
+quedan visibles para Completar traslado, sin indicador automático. No se confirmó
+ni ejecutó ese retiro real y no se reorganizaron las sesiones históricas.
 
 ## Envío incremental y elección ante archivos existentes (2026-10-18)
 
@@ -787,7 +837,9 @@ un export `sin_asignar` si es el único vigente generado desde el inicio de la
    `_revertidos` si el original aún existe y coincide; si cambió, rechaza la
    reversión sin sobrescribir. Las copias fallidas quedan en `_a_revisar` con
    registro. Un bloqueo que también impida leer no puede evitarse: se informa
-   el conflicto y no se cierra la sesión. No se elimina el original al cerrar CapCut.
+   el conflicto y no se cierra la sesión. Desde 2026-10-19, cerrar el proyecto
+   permite completar el retiro solicitado hacia `_enviados/edicion`, conservando
+   los bytes y la copia editada; los históricos requieren confirmación explícita.
    Un export enviado antes del cierre no oculta la sesión: permanece visible
    como **Export enviado · Crudos pendientes** hasta finalizar el tratamiento
    de los crudos. Al cerrar se conserva su estado completado y destino final.

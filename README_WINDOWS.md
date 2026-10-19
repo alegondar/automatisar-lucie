@@ -122,6 +122,15 @@ Este script evaluará el sistema, rutas, nombres reservados, codificación y exc
 
 ## 7. Edición, CapCut y reproducción
 
+Al confirmar **Terminé de editar**, los clips pasan a `videos ya editados`.
+Si CapCut bloquea un original, se crea una copia verificada y el dashboard
+muestra **traslado pendiente**. Cerrá el proyecto de CapCut: el sondeo completa
+automáticamente el retiro de `videos sin editar` y retira sus padres vacíos.
+El original redundante se conserva en `_enviados/edicion`, con SHA-256 y registro;
+no se elimina ni se sobrescribe material. Deshacer restaura las rutas originales.
+Las ediciones anteriores a esta corrección requieren pulsar **Completar traslado**
+y revisar/confirmar las rutas: no se reorganizan históricos al listar o arrancar.
+
 **Terminé de editar** organiza los clips y revisa el export final para copiarlo
 automáticamente a `videos completos/videos sin publicar` cuando sea inequívoco
 y esté libre de escritura. Si aún falta, la sesión terminada queda visible con

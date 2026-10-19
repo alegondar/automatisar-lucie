@@ -15,6 +15,7 @@ Cumple estrictamente las 7 Reglas de Oro del proyecto:
 """
 
 import datetime
+import functools
 import hashlib
 import json
 import logging
@@ -28,12 +29,21 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from bandeja.config import ConfiguracionBandeja, NOMBRES_RESERVADOS_WINDOWS, calcular_sha256
 from bandeja.db import GestorBaseDatosBandeja
-from bandeja.carpetas_vacias import retirar_carpetas_vacias_traslado
+from bandeja.carpetas_vacias import retirar_carpetas_vacias_traslado, _sin_enlaces
 from bandeja.pendrive import NOMBRE_MANIFIESTO_PENDRIVE, operacion_pendrive_exclusiva
 from bandeja.plataforma import esta_confinado_en_raiz, verificar_archivo_exclusivo, mover_sin_sobrescribir
 
 logger = logging.getLogger("bandeja_edicion")
 _lock_manifiesto_edicion = threading.Lock()
+_lock_crudos_edicion = threading.RLock()
+
+
+def _serializar_crudos(funcion):
+    @functools.wraps(funcion)
+    def ejecutar(*args, **kwargs):
+        with _lock_crudos_edicion:
+            return funcion(*args, **kwargs)
+    return ejecutar
 
 
 def nombre_video_legible(nombre: str) -> str:
@@ -118,7 +128,103 @@ def _destinos_editados_sesion(pendrive_raiz: str, identificador: str, incluir_pr
             elif evento.get("tipo_evento") == "deshacer_editado":
                 destinos.pop(clip, None)
                 preservados.discard(clip)
+            elif evento.get("tipo_evento") == "original_editado_resguardado":
+                preservados.discard(clip)
     return (destinos, preservados) if incluir_preservados else destinos
+
+
+def _originales_pendientes(pendrive_raiz, sesion):
+    """Plan de originales retenidos; listar nunca ejecuta traslados."""
+    ruta = os.path.join(pendrive_raiz, ".lucie", NOMBRE_MANIFIESTO_PENDRIVE)
+    pendientes = {}
+    if not os.path.isfile(ruta):
+        return []
+    with open(ruta, encoding="utf-8") as archivo:
+        for linea in archivo:
+            try:
+                evento = json.loads(linea)
+            except ValueError:
+                continue
+            if not isinstance(evento, dict) or evento.get("sesion_id") != sesion["identificador"]:
+                continue
+            clip, tipo = evento.get("clip"), evento.get("tipo_evento")
+            if clip not in sesion.get("clips", []):
+                continue
+            if tipo == "editado" and evento.get("original_preservado"):
+                pendientes[clip] = evento
+            elif tipo == "solicitar_retiro_original" and clip in pendientes:
+                pendientes[clip] = {**pendientes[clip], "retiro_origen_solicitado": True}
+            elif tipo in ("editado", "original_editado_resguardado", "deshacer_editado"):
+                pendientes.pop(clip, None)
+    planes = []
+    for clip, evento in pendientes.items():
+        base, origen = _origen_clip(pendrive_raiz, clip)
+        destino = os.path.join(pendrive_raiz, evento.get("ruta_destino", ""))
+        referencia = str(evento.get("id_evento") or (evento.get("fecha", ""), clip, evento.get("sha256")))
+        version = hashlib.sha256(referencia.encode("utf-8")).hexdigest()[:16]
+        respaldo = os.path.join(pendrive_raiz, "_enviados", "edicion", sesion["identificador"],
+                                version + "_" + os.path.basename(origen))
+        if (not esta_confinado_en_raiz(origen, base)
+                or not esta_confinado_en_raiz(destino, os.path.join(pendrive_raiz, "videos ya editados"))
+                or not esta_confinado_en_raiz(respaldo, os.path.join(pendrive_raiz, "_enviados", "edicion"))
+                or not all(_sin_enlaces(p) for p in (origen, destino, respaldo))):
+            continue
+        planes.append({"clip": clip, "origen": origen, "destino": destino, "resguardo": respaldo,
+                       "sha256": evento.get("sha256"), "automatico": evento.get("retiro_origen_solicitado") is True})
+    return planes
+
+
+@_serializar_crudos
+def procesar_retiros_edicion_pendientes(db, pendrive_montaje, carpeta_raiz="LucieSinReglas",
+                                      ruta_bitacora="bitacora_bandeja.jsonl", sesion_id=None):
+    """Completa solo retiros solicitados: copia editada verificada y original a resguardo.
+
+    Los históricos sin autorización se muestran para revisión, nunca se retiran
+    al listar ni por arrancar esta versión. Windows conserva los archivos en uso.
+    """
+    raiz = os.path.join(pendrive_montaje, carpeta_raiz)
+    retirados, pendientes = [], []
+    for sesion in db.obtener_sesiones_edicion():
+        if (sesion_id is not None and sesion["id"] != sesion_id) or not sesion.get("fecha_cierre"):
+            continue
+        if sesion["estado"] not in ("editado", "completado"):
+            continue
+        origenes = []
+        for plan in _originales_pendientes(raiz, sesion):
+            if not plan["automatico"]:
+                continue
+            try:
+                origen_existe = os.path.exists(plan["origen"])
+                if origen_existe and not verificar_archivo_exclusivo(plan["origen"]):
+                    raise ValueError("CapCut u otra aplicación mantiene el original en uso.")
+                if not plan["sha256"] or calcular_sha256(plan["destino"]) != plan["sha256"]:
+                    raise ValueError("La copia editada falta o cambió; se conserva el original.")
+                if origen_existe:
+                    if calcular_sha256(plan["origen"]) != plan["sha256"]:
+                        raise ValueError("El original cambió; requiere revisión manual.")
+                    if os.path.lexists(plan["resguardo"]):
+                        raise ValueError("El resguardo está ocupado; no se sobrescribe.")
+                    evento = {**plan, "sesion_id": sesion["identificador"],
+                              "fecha": datetime.datetime.now().isoformat()}
+                    registrar_bitacora_edicion(ruta_bitacora, {**evento, "tipo_operacion": "preparar_retiro_original_editado"})
+                    os.makedirs(os.path.dirname(plan["resguardo"]), exist_ok=True)
+                    mover_sin_sobrescribir(plan["origen"], plan["resguardo"])
+                # Recuperación si se interrumpió después de mover y antes de registrar.
+                if calcular_sha256(plan["resguardo"]) != plan["sha256"]:
+                    raise ValueError("No se confirmó la integridad del resguardo.")
+                registrar_bitacora_edicion(ruta_bitacora, {**plan, "sesion_id": sesion["identificador"],
+                    "tipo_operacion": "retiro_original_editado", "fecha": datetime.datetime.now().isoformat()})
+                registrar_evento_manifiesto_edicion(raiz, {"tipo_evento": "original_editado_resguardado",
+                    "sesion_id": sesion["identificador"], "clip": plan["clip"], "sha256": plan["sha256"],
+                    "ruta_resguardo": os.path.relpath(plan["resguardo"], raiz).replace(os.sep, "/"),
+                    "fecha": datetime.datetime.now().isoformat()})
+                retirados.append(plan)
+                origenes.append(plan["origen"])
+            except (OSError, ValueError) as error:
+                pendientes.append({**plan, "error": str(error)})
+        if origenes:
+            retirar_carpetas_vacias_traslado(raiz, origenes)
+    return {"retirados": retirados, "pendientes": pendientes}
 
 
 def _copiar_crudo_bloqueado(origen, destino, sha_esperado, pendrive_raiz):
@@ -334,6 +440,10 @@ def obtener_secciones_edicion(
         "sesiones_para_export": obtener_sesiones_para_export(db),
         "sesiones_esperando_export": [s for s in db.obtener_sesiones_edicion()
                                      if s["estado"] == "editado" and not s.get("video_completo_ruta")],
+        "traslados_pendientes": [{"id": s["id"], "nombre": s["nombre"], "archivos": planes}
+                                 for s in db.obtener_sesiones_edicion()
+                                 if s.get("fecha_cierre") and s["estado"] in ("editado", "completado")
+                                 if (planes := _originales_pendientes(pendrive_raiz, s))],
     }
 
 
@@ -462,6 +572,7 @@ def cancelar_sesion(
 # Transición "Terminé de editar" (videos sin editar -> videos ya editados)
 # =========================================================================
 
+@_serializar_crudos
 def finalizar_edicion_crudos(
     db: GestorBaseDatosBandeja,
     sesion_id: int,
@@ -483,7 +594,7 @@ def finalizar_edicion_crudos(
     dir_ya_editados = os.path.join(pendrive_raiz, "videos ya editados")
 
     clips = sesion.get("clips", [])
-    destinos_registrados = _destinos_editados_sesion(pendrive_raiz, sesion["identificador"])
+    destinos_registrados, preservados = _destinos_editados_sesion(pendrive_raiz, sesion["identificador"], incluir_preservados=True)
     fecha_traslado = datetime.datetime.now()
     movidos = []
     conflictos = []
@@ -539,6 +650,10 @@ def finalizar_edicion_crudos(
             sha_orig = calcular_sha256(ruta_orig)
             sha_dest = calcular_sha256(ruta_dest)
             if sha_orig and sha_orig == sha_dest:
+                if rel_clip in preservados:
+                    registrar_evento_manifiesto_edicion(pendrive_raiz, {
+                        "tipo_evento": "solicitar_retiro_original", "sesion_id": sesion["identificador"],
+                        "clip": rel_clip, "fecha": datetime.datetime.now().isoformat()})
                 omisiones.append({"clip": rel_clip, "detalle": "Destino ya existe con contenido idéntico"})
                 continue
             else:
@@ -585,6 +700,7 @@ def finalizar_edicion_crudos(
                 "ruta_destino": os.path.relpath(ruta_dest, pendrive_raiz).replace(os.sep, "/"),
                 "sha256": sha_orig,
                 "original_preservado": original_preservado,
+                "retiro_origen_solicitado": original_preservado,
             }
         )
 
@@ -606,13 +722,15 @@ def finalizar_edicion_crudos(
         db.actualizar_sesion_edicion(
             sesion_id,
             estado="completado" if sesion.get("video_completo_ruta") else "editado",
-            fecha_cierre=datetime.datetime.now().isoformat(),
+            fecha_cierre=sesion.get("fecha_cierre") or datetime.datetime.now().isoformat(),
             revision_export_solicitada=1,
         )
 
     carpetas_retiradas = retirar_carpetas_vacias_traslado(
         pendrive_raiz, [m["origen"] for m in movidos if not m["original_preservado"]]
     ) if not conflictos else []
+    retiros = (procesar_retiros_edicion_pendientes(db, pendrive_montaje, carpeta_raiz, ruta_bitacora, sesion_id)
+               if not conflictos else {"retirados": [], "pendientes": []})
 
     return {
         "exito": len(conflictos) == 0,
@@ -622,9 +740,11 @@ def finalizar_edicion_crudos(
         "conflictos": conflictos,
         "omisiones": omisiones,
         "carpetas_vacias_retiradas": carpetas_retiradas,
+        "retiro_originales": retiros,
     }
 
 
+@_serializar_crudos
 def deshacer_finalizar_edicion(
     db: GestorBaseDatosBandeja,
     sesion_id: int,
