@@ -1,5 +1,66 @@
 # Estado actual del sistema — 2026-10-19
 
+## Organización mensual de capítulos (2026-10-19)
+
+El usuario pidió agrupar por mes/año tanto nuevas salidas como capítulos
+existentes, conservando sus nombres. Se usa personaje/mes/capítulo, por ejemplo
+`videos sin editar/lucie/octubre - 2026/<capítulo>/`. Ya editados mantiene el
+nombre `videoyaeditado_...` bajo el mes. Completos conserva cola/personaje antes
+del mes; los envíos Wi-Fi conservan el mes de origen. Fotos y audios no cambian.
+Los exports sin sesión van a Sin publicar/sin asignar/mes con su nombre y versión,
+sin inventar personaje ni edición. Se mantiene la compatibilidad de rutas viejas.
+
+`bandeja/organizacion_mensual.py` ofrece simulación, confirmación y reversión de
+carpetas seleccionadas. Solo usa meses explícitos del nombre o de registros
+inequívocos; no deduce meses históricos del mtime. Verifica identidad del pendrive,
+estructura/hash, archivos libres y destinos desocupados antes del primer traslado.
+Registra preparación/finalización y puede completar un registro interrumpido.
+No renombra capítulos, no fusiona destinos ni borra archivos. El plan inverso
+rechaza origen ocupado o contenido añadido/cambiado. Listar/arrancar no migra.
+
+Los prefijos trasladados se resuelven desde el manifiesto para sesiones, clips,
+ediciones previas, retiros pendientes e historial Wi-Fi. Se actualizan las rutas
+locales de exports/completos y caché; los registros históricos se conservan.
+La lectura admite carpetas mensuales y antiguas sin confundir el mes con capítulo.
+Una sesión anterior puede continuar, abrir su carpeta, finalizar y deshacer.
+
+La corrección anterior de retiro de originales fue publicada como `486f177`.
+El usuario autorizó publicar la organización mensual de videos el 2026-10-19
+en la rama `feat/lucie-recibir`.
+
+Validación Windows/Python 3.13.0: **481 pruebas OK, 12 omisiones**, **85.160 s**.
+La omisión adicional requiere privilegios para crear symlinks; se conservaron
+guardia y aserciones. Dieciséis pruebas mensuales cubren selección, meses,
+registros ambiguos, colisiones, cambios, bloqueo, identidad, recuperación,
+sesiones antiguas, historial Wi-Fi, caché y reversión. Se adaptaron únicamente
+las rutas esperadas de pruebas anteriores al nuevo contrato mensual.
+UI de edición/envío/publicación/CSRF correcta; AST **0/33**, auditoría de
+repo/historial y archivos nuevos sin infracciones. Manifiesto real durante la
+suite: **454 / 454**, estable; fixtures temporales y bandeja real detenida.
+Log externo `%TEMP%/tests_meses_final_windows_20261019_4f77a3e6.log`.
+Linux nativo no ejecutado.
+
+Aplicación real, separada de las pruebas y solicitada expresamente para los
+existentes: plan de **40 carpetas / 193 archivos / 1.950.296.656 bytes**, todas
+de octubre de 2026. Once carpetas de sin editar, quince de ya editados, seis de
+Sin publicar y ocho de Publicados. Dos meses faltantes en nombres se recuperaron
+de fechas de sesiones locales inequívocas. El plan completo se mostró antes de
+actuar; cuatro archivos inicialmente en uso quedaron libres antes de ejecutar.
+Se incluyeron las cuarenta carpetas, conservando todos los nombres y verificando
+estructura/hashes después de cada traslado. No quedaron carpetas bloqueadas.
+Planes y revisión externos `%TEMP%/lucie-plan-meses{,-libres}-20261019.json` y
+`%TEMP%/lucie-plan-meses-20261019.md`; copia SQLite previa fuera del repositorio.
+La operación agregó sus ochenta eventos de preparación/finalización al manifiesto.
+El grupo existente estaba autorizado por la solicitud del usuario; no es una
+migración de arranque ni un fixture sobre material real.
+Comprobación posterior: cuarenta destinos presentes, cero orígenes antiguos y
+cero capítulos pendientes de organizar. Nueve referencias locales de completos
+se compararon con la copia SQLite previa y apuntan a sus archivos existentes.
+Lucie reanudada para uso normal: Edición y Publicación HTTP 200, con títulos de
+capítulos correctos (el mes no se usa como título). Se amplió y repitió la prueba
+mensual de Deshacer Wi-Fi después de migrar: **16 OK, una omisión**, **1.514 s**;
+manifiesto real solo contado **534 / 534**, estable. La omisión requiere symlinks.
+
 ## Retiro pendiente de originales retenidos por CapCut (2026-10-19)
 
 Diagnóstico de solo lectura: la sesión más reciente tenía sus dos clips en

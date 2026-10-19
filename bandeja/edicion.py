@@ -32,6 +32,7 @@ from bandeja.db import GestorBaseDatosBandeja
 from bandeja.carpetas_vacias import retirar_carpetas_vacias_traslado, _sin_enlaces
 from bandeja.pendrive import NOMBRE_MANIFIESTO_PENDRIVE, operacion_pendrive_exclusiva
 from bandeja.plataforma import esta_confinado_en_raiz, verificar_archivo_exclusivo, mover_sin_sobrescribir
+from bandeja.organizacion_mensual import nombre_mes, carpeta_capitulo, partes_capitulo, resolver_ruta
 
 logger = logging.getLogger("bandeja_edicion")
 _lock_manifiesto_edicion = threading.Lock()
@@ -120,7 +121,7 @@ def _destinos_editados_sesion(pendrive_raiz: str, identificador: str, incluir_pr
                 continue
             clip = evento.get("clip")
             if evento.get("tipo_evento") == "editado" and evento.get("ruta_destino"):
-                destinos[clip] = os.path.join(pendrive_raiz, evento["ruta_destino"].replace("/", os.sep))
+                destinos[clip] = resolver_ruta(pendrive_raiz, os.path.join(pendrive_raiz, evento["ruta_destino"].replace("/", os.sep)))
                 if evento.get("original_preservado"):
                     preservados.add(clip)
                 else:
@@ -159,7 +160,7 @@ def _originales_pendientes(pendrive_raiz, sesion):
     planes = []
     for clip, evento in pendientes.items():
         base, origen = _origen_clip(pendrive_raiz, clip)
-        destino = os.path.join(pendrive_raiz, evento.get("ruta_destino", ""))
+        destino = resolver_ruta(pendrive_raiz, os.path.join(pendrive_raiz, evento.get("ruta_destino", "")))
         referencia = str(evento.get("id_evento") or (evento.get("fecha", ""), clip, evento.get("sha256")))
         version = hashlib.sha256(referencia.encode("utf-8")).hexdigest()[:16]
         respaldo = os.path.join(pendrive_raiz, "_enviados", "edicion", sesion["identificador"],
@@ -334,11 +335,11 @@ def obtener_secciones_edicion(
     clips_finalizados = set()
     for s in db.obtener_sesiones_edicion():
         if s["estado"] in ("editado", "completado") and s.get("fecha_cierre"):
-            clips_finalizados.update(c for c, ruta in _destinos_editados_sesion(pendrive_raiz, s["identificador"]).items() if os.path.isfile(ruta))
+            clips_finalizados.update(_clip_efectivo(pendrive_raiz, c) for c, ruta in _destinos_editados_sesion(pendrive_raiz, s["identificador"]).items() if os.path.isfile(ruta))
     clips_en_sesion: Set[str] = set()
     for s in sesiones_activas:
         for c in s.get("clips", []):
-            clips_en_sesion.add(c)
+            clips_en_sesion.add(_clip_efectivo(pendrive_raiz, c))
 
     para_editar: List[Dict[str, Any]] = []
     conteos_capitulo: Dict[str, Dict[str, int]] = {}
@@ -360,8 +361,7 @@ def obtener_secciones_edicion(
                     ruta_abs = os.path.join(raiz, arch)
                     rel = os.path.relpath(ruta_abs, base_crudos)
                     partes = rel.split(os.sep)
-                    personaje = partes[0] if len(partes) > 1 else "general"
-                    capitulo = partes[1] if len(partes) > 2 else "sin_capitulo"
+                    personaje, capitulo, _ = partes_capitulo(partes)
                     _asegurar_conteo(capitulo)
 
                     identificador_clip = prefijo + rel.replace(os.sep, "/")
@@ -410,7 +410,7 @@ def obtener_secciones_edicion(
                     ruta_abs = os.path.join(raiz, arch)
                     rel = os.path.relpath(ruta_abs, dir_ya_editados)
                     partes = rel.split(os.sep)
-                    capitulo = capitulos_por_ruta.get(os.path.normcase(os.path.abspath(ruta_abs))) or (partes[1] if len(partes) > 2 else "sin_capitulo")
+                    capitulo = capitulos_por_ruta.get(os.path.normcase(os.path.abspath(ruta_abs))) or partes_capitulo(partes)[1]
                     _asegurar_conteo(capitulo)
                     conteos_capitulo[capitulo]["ya_editados"] += 1
 
@@ -424,7 +424,7 @@ def obtener_secciones_edicion(
                     partes = rel.split(os.sep)
                     if partes[0] in ("videos sin publicar", "videosPublicados"):
                         partes = partes[1:]
-                    capitulo = capitulos_por_ruta.get(os.path.normcase(os.path.abspath(ruta_abs))) or (partes[1] if len(partes) > 2 else "sin_capitulo")
+                    capitulo = capitulos_por_ruta.get(os.path.normcase(os.path.abspath(ruta_abs))) or partes_capitulo(partes)[1]
                     _asegurar_conteo(capitulo)
                     conteos_capitulo[capitulo]["completos"] += 1
 
@@ -495,7 +495,13 @@ def _origen_clip(pendrive_raiz, clip):
     audio = clip.startswith("audios/")
     base = os.path.join(pendrive_raiz, "audios" if audio else "videos sin editar")
     relativa = clip[len("audios/"):] if audio else clip
-    return base, os.path.join(base, relativa.replace("/", os.sep))
+    ruta = os.path.join(base, relativa.replace("/", os.sep))
+    return base, resolver_ruta(pendrive_raiz, ruta) if esta_confinado_en_raiz(ruta, pendrive_raiz) else ruta
+
+
+def _clip_efectivo(raiz, clip):
+    base, ruta = _origen_clip(raiz, clip)
+    return ("audios/" if clip.startswith("audios/") else "") + os.path.relpath(ruta, base).replace(os.sep, "/")
 
 
 def obtener_carpeta_edicion(sesion, punto_montaje, carpeta_raiz="LucieSinReglas"):
@@ -508,11 +514,12 @@ def obtener_carpeta_edicion(sesion, punto_montaje, carpeta_raiz="LucieSinReglas"
     relativa = partes[1:] if partes[0] == "audios" else partes
     if len(relativa) < 3 or any(p in ("", ".", "..") or "\\" in p or ":" in p for p in partes):
         raise ValueError("Ruta de edición inválida.")
-    if relativa[:2] != [sesion["personaje"], sesion["capitulo"]]:
+    personaje, capitulo, indice = partes_capitulo(relativa)
+    if (personaje, capitulo) != (sesion["personaje"], sesion["capitulo"]):
         raise ValueError("El archivo no corresponde al capítulo de la sesión.")
     raiz = os.path.join(punto_montaje, carpeta_raiz)
     base, _ = _origen_clip(raiz, clip)
-    carpeta = os.path.join(base, *relativa[:2])
+    carpeta = resolver_ruta(raiz, os.path.join(base, *relativa[:indice + 1]))
     actual = carpeta
     while True:
         if os.path.islink(actual) or (hasattr(os.path, "isjunction") and os.path.isjunction(actual)):
@@ -547,7 +554,14 @@ def sumar_videos_sesion(db, sesion_id, clips, punto_montaje, carpeta_raiz="Lucie
             raise ValueError("Video fuera de la carpeta de crudos.")
         if not os.path.isfile(ruta) or not ruta.lower().endswith((".mp4", ".mov", ".mkv", ".webm", ".mp3")):
             raise ValueError("El video ya no está disponible en la carpeta de crudos.")
-    return db.sumar_clips_sesion_edicion(sesion_id, clips)
+    raiz = os.path.join(punto_montaje, carpeta_raiz)
+    sesion = db.obtener_sesion_por_id(sesion_id)
+    anteriores = {_clip_efectivo(raiz, c): c for c in (sesion or {}).get("clips", [])}
+    efectivos = {_clip_efectivo(raiz, c) for c in clips}
+    for otra in db.obtener_sesiones_edicion(estado="en_edicion"):
+        if otra["id"] != sesion_id and efectivos.intersection(_clip_efectivo(raiz, c) for c in otra["clips"]):
+            raise ValueError("Un video seleccionado ya pertenece a otra sesión activa.")
+    return db.sumar_clips_sesion_edicion(sesion_id, [anteriores.get(_clip_efectivo(raiz, c), c) for c in clips])
 
 
 def cancelar_sesion(
@@ -607,8 +621,8 @@ def finalizar_edicion_crudos(
         ruta_anterior = os.path.join(dir_ya_editados, rel_clip.replace("/", os.sep))
         ruta_dest = destinos_registrados.get(rel_clip) or (
             ruta_anterior if os.path.exists(ruta_anterior) else os.path.join(
-                dir_ya_editados, sesion["personaje"],
-                nombre_carpeta_ya_editado(nombre_video_sesion(sesion), fecha_traslado),
+                carpeta_capitulo(pendrive_raiz, "videos ya editados", sesion["personaje"],
+                                 nombre_carpeta_ya_editado(nombre_video_sesion(sesion), fecha_traslado), fecha_traslado),
                 os.path.basename(ruta_anterior)))
         if not esta_confinado_en_raiz(ruta_orig, base_orig) or not esta_confinado_en_raiz(ruta_dest, dir_ya_editados):
             conflictos.append({"clip": rel_clip, "error": "Ruta no confinada en el pendrive"})
@@ -628,8 +642,8 @@ def finalizar_edicion_crudos(
         ruta_dest = destinos_registrados.get(rel_clip)
         if not ruta_dest:
             ruta_dest = ruta_anterior if os.path.exists(ruta_anterior) else os.path.join(
-                dir_ya_editados, sesion["personaje"],
-                nombre_carpeta_ya_editado(nombre_video_sesion(sesion), fecha_traslado),
+                carpeta_capitulo(pendrive_raiz, "videos ya editados", sesion["personaje"],
+                                 nombre_carpeta_ya_editado(nombre_video_sesion(sesion), fecha_traslado), fecha_traslado),
                 os.path.basename(ruta_anterior),
             )
 
@@ -882,7 +896,9 @@ def copiar_export_a_videos_completos(
         raise FileExistsError(f"La sesion ya tiene un video completo en '{ruta_registrada}'. No se sobreescribe.")
     if esta_confinado_en_raiz(ruta_anterior, pendrive_raiz) and os.path.exists(ruta_anterior):
         raise FileExistsError(f"El destino anterior '{ruta_anterior}' ya existe. No se sobreescribe.")
-    dir_completos = os.path.join(pendrive_raiz, "videos completos", "videos sin publicar", personaje, nombre_carpeta_video(nombre_final))
+    fecha_salida = datetime.datetime.now()
+    dir_completos = carpeta_capitulo(pendrive_raiz, os.path.join("videos completos", "videos sin publicar"),
+                                    personaje, nombre_carpeta_video(nombre_final, fecha_salida), fecha_salida)
     ruta_destino = os.path.join(dir_completos, nombre_final)
 
     if not esta_confinado_en_raiz(ruta_destino, pendrive_raiz):
@@ -1347,7 +1363,7 @@ def _resguardar_export_sin_sesion(exp, pendrive_montaje, db, carpeta_raiz, ruta_
     if not verificar_archivo_exclusivo(exp["ruta_origen"]):
         raise OSError("El export sigue en escritura o está ocupado. Se reintentará.")
     raiz = os.path.join(pendrive_montaje, carpeta_raiz)
-    carpeta = os.path.join(raiz, "videos completos", "videos sin publicar")
+    carpeta = os.path.join(raiz, "videos completos", "videos sin publicar", "sin asignar", nombre_mes(datetime.datetime.fromtimestamp(exp["mtime"])))
     if not esta_confinado_en_raiz(carpeta, raiz):
         raise ValueError("Carpeta sin publicar fuera del pendrive.")
     actual = os.path.abspath(carpeta)

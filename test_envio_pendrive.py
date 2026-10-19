@@ -21,6 +21,7 @@ from unittest.mock import patch, MagicMock
 import urllib.request
 import urllib.error
 import uuid
+from bandeja.organizacion_mensual import nombre_mes
 
 from bandeja import (
     montar_unidad_pendrive,
@@ -467,7 +468,7 @@ class TestSimulacionEnvio(unittest.TestCase):
         )
         self.assertEqual(
             nombres_a_copiar["lucievideo1.mp4"]["ruta_relativa_pendrive"],
-            "videos sin editar/lucie/capitulo_01/lucievideo1.mp4"
+            f"videos sin editar/lucie/{nombre_mes()}/capitulo_01/lucievideo1.mp4"
         )
 
         # Verificar que el archivo no multimedia suelto se omitió con advertencia
@@ -683,7 +684,7 @@ class TestEjecucionEnvioPendrive(unittest.TestCase):
         self.assertEqual(res["total_transferidos"], 2)
 
         # 1. Archivos en destino final en pendrive
-        dest_vid = os.path.join(self.pendrive_dir, "LucieSinReglas", "videos sin editar", "lucie", "capitulo1", "lucievideo1.mp4")
+        dest_vid = os.path.join(self.pendrive_dir, "LucieSinReglas", "videos sin editar", "lucie", nombre_mes(), "capitulo1", "lucievideo1.mp4")
         dest_fot = os.path.join(self.pendrive_dir, "LucieSinReglas", "imagenes", "lucie", "capitulo1", "luciefoto1.jpg")
         self.assertTrue(os.path.exists(dest_vid))
         self.assertTrue(os.path.exists(dest_fot))
@@ -1028,14 +1029,14 @@ class TestDeshacerEnvioPendrive(unittest.TestCase):
         # 2. La copia en pendrive se trasladó a _revertidos/<id_envio>/...
         dest_revertido = os.path.join(
             self.pendrive_dir, "LucieSinReglas", "_revertidos", self.id_envio,
-            "videos sin editar", "lucie", "capitulo1", "lucievideo1.mp4"
+            "videos sin editar", "lucie", nombre_mes(), "capitulo1", "lucievideo1.mp4"
         )
         self.assertTrue(os.path.exists(dest_revertido))
         self.assertEqual(calcular_sha256(dest_revertido), self.vid_hash)
 
         # 3. La copia activa en el pendrive ya no existe
         dest_activo = os.path.join(
-            self.pendrive_dir, "LucieSinReglas", "videos sin editar", "lucie", "capitulo1", "lucievideo1.mp4"
+            self.pendrive_dir, "LucieSinReglas", "videos sin editar", "lucie", nombre_mes(), "capitulo1", "lucievideo1.mp4"
         )
         self.assertFalse(os.path.exists(dest_activo))
 
@@ -1078,7 +1079,7 @@ class TestDeshacerEnvioPendrive(unittest.TestCase):
 
         # La copia en pendrive sigue en su lugar original intacta
         dest_activo = os.path.join(
-            self.pendrive_dir, "LucieSinReglas", "videos sin editar", "lucie", "capitulo1", "lucievideo1.mp4"
+            self.pendrive_dir, "LucieSinReglas", "videos sin editar", "lucie", nombre_mes(), "capitulo1", "lucievideo1.mp4"
         )
         self.assertTrue(os.path.exists(dest_activo))
 

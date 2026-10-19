@@ -23,6 +23,7 @@ from bandeja.plataforma import mover_sin_sobrescribir
 
 CARPETA_SIN_PUBLICAR = "videos sin publicar"
 CARPETA_PUBLICADOS = "videosPublicados"
+from bandeja.organizacion_mensual import es_carpeta_mes, mes_del_nombre, nombre_mes, resolver_relativa
 EXTENSIONES_IMAGEN = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp")
 EXTENSIONES_VIDEO = (".mp4", ".mov", ".webm", ".mkv")
 
@@ -181,6 +182,8 @@ class GestorPublicacion:
                 publicados[publicacion["id_operacion"]] = publicacion
         eventos = []
         for evento in list(publicados.values())[::-1]:
+            evento = {**evento, "ruta_destino": resolver_relativa(raiz, evento["ruta_destino"]),
+                      "ruta_origen": resolver_relativa(raiz, evento["ruta_origen"])}
             if evento["tipo_evento"] == "recepcion_wifi_confirmada":
                 # Recuperar el historial si el proceso paró entre el renombrado
                 # y el último registro. No mueve ni modifica archivos al listar.
@@ -257,6 +260,10 @@ class GestorPublicacion:
             partes = relativa.split("/")
             if len(partes) > 1 and personaje_conocido(partes[0]):
                 partes = partes[1:]
+            if partes and partes[0] == "sin asignar":
+                partes = partes[1:]
+            if partes and not es_carpeta_mes(partes[0]):
+                partes.insert(0, mes_del_nombre(partes[0]) or nombre_mes(datetime.datetime.fromtimestamp(entrada["mtime"])))
             destino_rel = "videos completos/" + CARPETA_PUBLICADOS + "/" + personaje + "/" + "/".join(partes)
             destino = self._ruta(identidad[1], destino_rel)
             if destino_rel in destinos or os.path.lexists(destino):

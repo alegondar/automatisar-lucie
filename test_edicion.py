@@ -95,7 +95,7 @@ class TestEdicionCapCut(unittest.TestCase):
         self.assertEqual(repetido["agregados"], [])
         finalizar_edicion_crudos(self.db, sesion["id"], self.pendrive_montaje,
                                 self.carpeta_raiz, self.bitacora_path)
-        destino = os.path.join(self.pendrive_raiz, "videos ya editados", "roli", "videoyaeditado_Mi_edición_semana_2_octubre_2026")
+        destino = os.path.join(self.pendrive_raiz, "videos ya editados", "roli", "octubre - 2026", "videoyaeditado_Mi_edición_semana_2_octubre_2026")
         self.assertEqual(sorted(os.listdir(destino)), ["dos.mp4", "uno.mp4"])
 
     def test_sumar_video_rechaza_lote_ocupado_sin_actualizacion_parcial(self):
@@ -508,7 +508,7 @@ class TestEdicionCapCut(unittest.TestCase):
         copia = copiar_export_a_videos_completos(export, sesion, self.pendrive_montaje, self.db,
                                                self.carpeta_raiz, self.bitacora_path)
         self.assertEqual(copia["destino"], os.path.join(self.pendrive_raiz, "videos completos", "videos sin publicar",
-                                                     "lucie", capitulo, titulo + ".mp4"))
+                                                     "lucie", "octubre - 2026", capitulo, titulo + ".mp4"))
         self.assertEqual(calcular_sha256(export), calcular_sha256(copia["destino"]))
         self.assertTrue(os.path.isfile(export))
         with self.assertRaises(FileExistsError):
@@ -575,7 +575,7 @@ class TestEdicionCapCut(unittest.TestCase):
         resultado = finalizar_edicion_crudos(**argumentos)
         self.assertTrue(resultado["exito"])
         self.assertEqual(len(resultado["movidos"]), 2)
-        carpeta = os.path.join(self.pendrive_raiz, "videos ya editados", "lucie", "videoyaeditado_cap01_semana_2_octubre_2026")
+        carpeta = os.path.join(self.pendrive_raiz, "videos ya editados", "lucie", "octubre - 2026", "videoyaeditado_cap01_semana_2_octubre_2026")
         for movido in resultado["movidos"]:
             self.assertEqual(os.path.dirname(movido["destino"]), carpeta)
             with open(movido["destino"], "rb") as archivo:
@@ -718,7 +718,7 @@ class TestEdicionCapCut(unittest.TestCase):
 
         # Comprobar que se movió en disco
         ruta_orig = os.path.join(self.pendrive_raiz, "videos sin editar", "lucie", "cap01", "toma1.mp4")
-        ruta_dest = os.path.join(self.pendrive_raiz, "videos ya editados", "lucie", "videoyaeditado_toma1_semana_2_octubre_2026", "toma1.mp4")
+        ruta_dest = os.path.join(self.pendrive_raiz, "videos ya editados", "lucie", "octubre - 2026", "videoyaeditado_toma1_semana_2_octubre_2026", "toma1.mp4")
         self.assertFalse(os.path.exists(ruta_orig))
         self.assertTrue(os.path.exists(ruta_dest))
         self.assertEqual(res_fin["carpetas_vacias_retiradas"], [os.path.dirname(ruta_orig)])
@@ -732,7 +732,7 @@ class TestEdicionCapCut(unittest.TestCase):
             lineas = f.readlines()
         self.assertEqual(len(lineas), 1)
         self.assertIn('"tipo_evento": "editado"', lineas[0])
-        self.assertEqual(json.loads(lineas[0])["ruta_destino"], "videos ya editados/lucie/videoyaeditado_toma1_semana_2_octubre_2026/toma1.mp4")
+        self.assertEqual(json.loads(lineas[0])["ruta_destino"], "videos ya editados/lucie/octubre - 2026/videoyaeditado_toma1_semana_2_octubre_2026/toma1.mp4")
 
         # 2. Deshacer
         self.reloj.datetime.now.return_value = datetime.datetime(2027, 1, 3)
@@ -832,7 +832,7 @@ class TestEdicionCapCut(unittest.TestCase):
         self.assertTrue(os.path.isfile(dest_final))
         self.assertEqual(dest_final, os.path.join(
             self.pendrive_raiz, "videos completos", "videos sin publicar", "lucie",
-            "cap01 - domingo - semana 2 - octubre - 2026", "cap01.mp4",
+            "octubre - 2026", "cap01 - domingo - semana 2 - octubre - 2026", "cap01.mp4",
         ))
         self.assertEqual(os.listdir(os.path.dirname(dest_final)), ["cap01.mp4"])
         # El hash obtenido coincide con el origen
@@ -960,7 +960,7 @@ class TestEdicionCapCut(unittest.TestCase):
         self.assertEqual(export["estado"], "copiado")
         self.assertEqual(export["nombre_video"], "Mi video")
         self.assertEqual(export["sesion_id"], sesion["id"])
-        self.assertEqual(export["ruta_destino"], os.path.join(self.pendrive_raiz, "videos completos", "videos sin publicar", "lucie", "Mi video - domingo - semana 2 - octubre - 2026", "Mi video.mp4"))
+        self.assertEqual(export["ruta_destino"], os.path.join(self.pendrive_raiz, "videos completos", "videos sin publicar", "lucie", "octubre - 2026", "Mi video - domingo - semana 2 - octubre - 2026", "Mi video.mp4"))
         self.assertEqual(calcular_sha256(origen), calcular_sha256(export["ruta_destino"]))
         self.assertTrue(os.path.isfile(origen))
         self.assertEqual(len(self.db.obtener_exports_pendientes()), 1)

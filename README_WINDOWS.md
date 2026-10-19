@@ -122,6 +122,26 @@ Este script evaluará el sistema, rutas, nombres reservados, codificación y exc
 
 ## 7. Edición, CapCut y reproducción
 
+Los nuevos capítulos de video se agrupan por mes y año:
+`videos sin editar/lucie/octubre - 2026/<capítulo>/` y
+`videos ya editados/lucie/octubre - 2026/<carpeta de edición>/`.
+Los completos conservan las colas, por ejemplo:
+`videos completos/videos sin publicar/lucie/octubre - 2026/<capítulo>/`.
+Después de recibirlos por Wi-Fi conservan ese mes dentro de `videosPublicados`.
+Fotos/audios conservan su organización. Los nombres de capítulos no cambian.
+
+Para organizar los existentes, revisar primero un plan nuevo, sin mover material:
+
+```powershell
+py -3 organizar_meses.py --raiz '<pendrive>\LucieSinReglas' --simular --salida '<temporal>\plan-meses.json'
+```
+
+La ejecución requiere el mismo plan y confirmación explícita (`--ejecutar
+--plan ... --confirmar`). `--deshacer <id> --salida ...` genera primero el plan
+inverso; también exige confirmar su ejecución. Una carpeta sin mes inequívoco
+queda pendiente de elección. No se fusionan destinos ni se fuerzan archivos
+abiertos por CapCut. El registro mantiene operativas las referencias históricas.
+
 Al confirmar **Terminé de editar**, los clips pasan a `videos ya editados`.
 Si CapCut bloquea un original, se crea una copia verificada y el dashboard
 muestra **traslado pendiente**. Cerrá el proyecto de CapCut: el sondeo completa

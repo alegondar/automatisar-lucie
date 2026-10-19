@@ -8,6 +8,7 @@ from bandeja.config import ConfiguracionBandeja, calcular_sha256
 from bandeja.db import GestorBaseDatosBandeja
 from bandeja.edicion import crear_sesion, registrar_evento_manifiesto_edicion, obtener_secciones_edicion
 from bandeja.publicacion import GestorPublicacion
+from bandeja.organizacion_mensual import nombre_mes
 
 
 def setUpModule():
@@ -54,7 +55,7 @@ class TestOrganizacionPublicacion(unittest.TestCase):
         archivos = self.gestor.listar()["archivos"]
         plan = self.gestor.simular([a["id"] for a in archivos], self.dispositivo["id"])
         for a in plan["archivos"]:
-            self.assertEqual(a["destino_rel"], "videos completos/videosPublicados/" + a["personaje"] + "/Capitulo - lunes - semana 2 - octubre - 2026/video.mp4")
+            self.assertEqual(a["destino_rel"], "videos completos/videosPublicados/" + a["personaje"] + "/octubre - 2026/Capitulo - lunes - semana 2 - octubre - 2026/video.mp4")
             self.assertTrue(os.path.isfile(a["origen"]))
             self.assertFalse(os.path.exists(a["destino"]))
 
@@ -64,7 +65,7 @@ class TestOrganizacionPublicacion(unittest.TestCase):
         self.assertEqual(a["personaje"], "sin_asignar")
         with self.assertRaises(ValueError): self.gestor.simular([a["id"]], self.dispositivo["id"])
         plan = self.gestor.simular([a["id"]], self.dispositivo["id"], {a["id"]: "roli"})
-        self.assertEqual(plan["archivos"][0]["destino_rel"], "videos completos/videosPublicados/roli/1010(7).mp4")
+        self.assertEqual(plan["archivos"][0]["destino_rel"], f"videos completos/videosPublicados/roli/{nombre_mes()}/1010(7).mp4")
         self.assertTrue(os.path.isfile(ruta))
         for valor in ("../../afuera", "sin_asignar", 1):
             with self.subTest(valor=valor), self.assertRaises(ValueError):

@@ -30,6 +30,7 @@ import unittest
 import urllib.parse
 from typing import Dict, List, Optional, Set, Tuple, Any
 from unittest.mock import patch
+from bandeja.organizacion_mensual import nombre_mes
 
 from bandeja_descargas import (
     ConfiguracionBandeja,
@@ -5802,7 +5803,7 @@ class TestListaEnvioPendrivePorCarpetas(unittest.TestCase):
             self.assertEqual(res.get("total_archivos_enviados"), 2)
 
             # Verificar que los archivos llegaron a LucieSinReglas/ en el pendrive
-            dest_vid = os.path.join(punto_pen, "LucieSinReglas", "videos sin editar", "lucie", "capA", "videoA.mp4")
+            dest_vid = os.path.join(punto_pen, "LucieSinReglas", "videos sin editar", "lucie", nombre_mes(), "capA", "videoA.mp4")
             dest_fot = os.path.join(punto_pen, "LucieSinReglas", "imagenes", "lucie", "capB", "fotoB.jpg")
             self.assertTrue(os.path.isfile(dest_vid))
             self.assertTrue(os.path.isfile(dest_fot))
@@ -6260,7 +6261,7 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
             self.assertEqual(status_term, 200)
             self.assertTrue(res_term.get("exito"))
             dest_esperado = os.path.join(self.raiz_pen, "videos ya editados", "lucie",
-                                         "videoyaeditado_capitulo_01_semana_2_octubre_2026", "toma_01.mp4")
+                                         "octubre - 2026", "videoyaeditado_capitulo_01_semana_2_octubre_2026", "toma_01.mp4")
             self.assertTrue(os.path.isfile(dest_esperado))
             self.assertFalse(os.path.isfile(self.clip_path))
 
@@ -6373,7 +6374,7 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
                 "dispositivo_id": descubiertos["dispositivos"][0]["id"],
                 "personajes": {listado["archivos"][0]["id"]: "roli"}})
             self.assertEqual(status, 200)
-            self.assertEqual(plan["archivos"][0]["destino_rel"], "videos completos/videosPublicados/roli/wifi-api.mp4")
+            self.assertEqual(plan["archivos"][0]["destino_rel"], f"videos completos/videosPublicados/roli/{nombre_mes()}/wifi-api.mp4")
             status, _ = self._post("/api/publicacion/simular", {"seleccion": [listado["archivos"][0]["id"]],
                 "dispositivo_id": descubiertos["dispositivos"][0]["id"], "receptor": "lucie",
                 "personajes": {listado["archivos"][0]["id"]: "roli"}})
@@ -6441,7 +6442,7 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
             self.assertEqual(status, 200, datos)
             destino = datos["resultado_copia"]["destino"]
             self.assertEqual(destino, os.path.join(self.raiz_pen, "videos completos", "videos sin publicar", "lucie",
-                                                 "Mi video - domingo - semana 2 - octubre - 2026", "Mi video.mp4"))
+                                                 "octubre - 2026", "Mi video - domingo - semana 2 - octubre - 2026", "Mi video.mp4"))
             with open(destino, "rb") as archivo:
                 self.assertEqual(archivo.read(), contenido)
             status, datos, _ = self._get("/api/capcut/exports")

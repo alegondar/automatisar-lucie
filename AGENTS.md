@@ -32,9 +32,12 @@ ESTADO_ACTUAL.md. Los nuevos lotes siguen sujetos a la regla de publicación.
   subirla cuando el usuario lo autorice; no versionar bases, configuraciones
   locales, exports, logs ni informes generados.
 
-La estructura final de salidas es `<categoria>/<personaje>/<nombre - día - semana del mes - mes - año>/`
+La estructura de nuevas salidas de video (2026-10-19) es
+`<categoria>/<personaje>/<mes - año>/<nombre - día - semana del mes - mes - año>/`.
+Completos conserva primero `videos sin publicar` o `videosPublicados`, luego
+personaje/mes/capítulo. «Videos en edición» se refiere a videos sin editar.
 Excepción vigente para nuevas salidas en `videos ya editados` (2026-10-12):
-`<personaje>/videoyaeditado_<nombre del video>_semana_<del mes>_<mes>_<año>/`.
+`<personaje>/<mes - año>/videoyaeditado_<nombre del video>_semana_<del mes>_<mes>_<año>/`.
 Se elimina del nombre base el sufijo `videocompleto` o `video completo` si existe;
 se usan guiones bajos como separadores. Las salidas de `videos completos` y los
 capítulos conservan su formato vigente; no renombrar rutas históricas automáticamente.
@@ -227,3 +230,15 @@ buscar. No fusiona destinos existentes ni atraviesa enlaces/junctions. Verifica
 estructura/hash, actualiza rutas locales y registra preparación/finalización.
 Deshacer organización rechaza destinos ocupados o contenido añadido/cambiado;
 conserva archivos y directorios. No borrar ni renombrar automáticamente históricos.
+
+## Organización mensual (2026-10-19)
+
+El usuario pidió agrupar también los capítulos existentes por mes y año,
+conservando íntegros sus nombres. `bandeja.organizacion_mensual` simula carpetas
+seleccionadas, exige confirmación, verifica estructura/SHA-256/identidad, rechaza
+archivos en uso, enlaces, colisiones y contenido cambiado, registra y permite
+simular Deshacer. Nunca se ejecuta al arrancar/listar. Usar mes explícito del
+nombre o un registro inequívoco; si falta fecha, exigir elección, sin usar mtime
+como adivinación. La migración registra prefijos de rutas para que sesiones,
+reintentos, retiro de originales y Deshacer sigan resolviendo referencias viejas.
+No reescribir registros históricos ni mover material sin revisar su plan.

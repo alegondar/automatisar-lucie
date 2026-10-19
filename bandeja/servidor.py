@@ -55,6 +55,7 @@ from bandeja.pendrive import (
 from bandeja.vigilante import VigilanteBandeja
 from bandeja.eliminacion import GestorEliminacionPendrive
 from bandeja.publicacion import GestorPublicacion
+from bandeja.organizacion_mensual import resolver_relativa
 from bandeja.edicion import (
     obtener_secciones_edicion,
     obtener_sesiones_con_crudos_pendientes,
@@ -367,7 +368,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
                         h = ent.get("sha256")
                         ruta = ent.get("ruta_relativa")
                         if h and ruta and ent.get("estado") != "revertido":
-                            envios_manifiesto.add((h.lower(), normalizar_ruta_relativa_posix(ruta).lower()))
+                            raiz = os.path.join(punto, getattr(self.config, "carpeta_raiz_pendrive", "LucieSinReglas"))
+                            envios_manifiesto.add((h.lower(), resolver_relativa(raiz, normalizar_ruta_relativa_posix(ruta)).lower()))
             except Exception:
                 pass
 
