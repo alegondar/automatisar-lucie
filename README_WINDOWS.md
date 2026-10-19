@@ -128,7 +128,11 @@ Los nuevos capítulos de video se agrupan por mes y año:
 Los completos conservan las colas, por ejemplo:
 `videos completos/videos sin publicar/lucie/octubre - 2026/<capítulo>/`.
 Después de recibirlos por Wi-Fi conservan ese mes dentro de `videosPublicados`.
-Fotos/audios conservan su organización. Los nombres de capítulos no cambian.
+Las imágenes y los audios usan el mismo esquema:
+`imagenes/lucie/octubre - 2026/<capítulo>/` y
+`audios/lucie/octubre - 2026/<capítulo>/`.
+Los nombres de capítulos no cambian. Las sesiones de audio anteriores siguen
+resolviendo sus archivos después de organizar, también al finalizar y Deshacer.
 
 Para organizar los existentes, revisar primero un plan nuevo, sin mover material:
 

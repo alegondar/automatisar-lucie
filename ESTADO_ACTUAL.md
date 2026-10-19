@@ -1,12 +1,51 @@
 # Estado actual del sistema — 2026-10-19
 
+## Organización mensual de imágenes y audio (2026-10-19)
+
+El usuario amplió la organización mensual a `imagenes` y `audios`, también para
+los capítulos existentes. Los próximos envíos usan categoría/personaje/mes/capítulo
+con los mismos nombres; los destinos históricos se continúan por su ruta hasta
+organizarlos explícitamente. Se reutilizan simulación, hashes, identidad,
+exclusividad, registro de prefijos y reversión del organizador mensual.
+Las sesiones de audio anteriores conservan selección, apertura, finalización
+y Deshacer después del traslado. Las colisiones se siguen resolviendo por archivo
+y la deduplicación compara destino efectivo y SHA-256.
+
+La organización mensual de videos fue publicada como `661628d` en
+`feat/lucie-recibir`. El usuario autorizó también el commit y la publicación de
+la ampliación a imágenes/audio el 2026-10-19 en esa misma rama.
+
+Validación Windows/Python 3.13.0: **485 pruebas OK, 12 omisiones**, **83.831 s**;
+guardia y aserciones conservadas, manifiesto real **537 / 537**. Las omisiones
+son las mismas capacidades de SO/privilegios documentadas en el lote de videos.
+Se cubren envíos mixtos, fotos/audio migrados con deduplicación e incrementales,
+apertura/finalización/reversión de sesiones de audio y Deshacer de la organización.
+Una expectativa de MP3 se adaptó al nuevo destino mensual; una corrida intermedia
+tuvo un aborto de socket HTTP local WinError 10053. La corrida completa posterior
+pasó sin cambios adicionales de código. Log externo:
+`%TEMP%/tests_imagenes_audio_windows_reintento_b7dd8d25.log`.
+Auditoría AST **0/33**, repo/historial sin infracciones; Linux nativo no ejecutado.
+
+Aplicación real solicitada, separada de las pruebas: **22 carpetas de imágenes
+y 5 de audio**, **97 archivos / 71.685.322 bytes**, agrupadas bajo octubre de 2026
+por fecha explícita o registro inequívoco. Plan revisado sin archivos bloqueados:
+`%TEMP%/lucie-plan-meses-imagenes-audios-4a7b5ef2.json`.
+Respaldo SQLite consistente anterior:
+`%TEMP%/lucie-db-antes-meses-imagenes-audios-a8e436c5.sqlite`.
+Los 27 traslados se completaron con hashes verificados, sin borrar ni sobrescribir;
+no quedan candidatos de imágenes/audio fuera del mes. El manifiesto pasó de
+537 a 591 por preparación/finalización de estas operaciones, fuera de la suite.
+Se reanudó la bandeja normal desde el acceso de Inicio; edición y publicación
+responden HTTP 200 y los audios se muestran con su capítulo, sin confundir el mes.
+
 ## Organización mensual de capítulos (2026-10-19)
 
 El usuario pidió agrupar por mes/año tanto nuevas salidas como capítulos
 existentes, conservando sus nombres. Se usa personaje/mes/capítulo, por ejemplo
 `videos sin editar/lucie/octubre - 2026/<capítulo>/`. Ya editados mantiene el
 nombre `videoyaeditado_...` bajo el mes. Completos conserva cola/personaje antes
-del mes; los envíos Wi-Fi conservan el mes de origen. Fotos y audios no cambian.
+del mes; los envíos Wi-Fi conservan el mes de origen. La ampliación posterior
+a fotos y audios se describe arriba.
 Los exports sin sesión van a Sin publicar/sin asignar/mes con su nombre y versión,
 sin inventar personaje ni edición. Se mantiene la compatibilidad de rutas viejas.
 

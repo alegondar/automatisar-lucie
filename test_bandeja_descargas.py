@@ -5804,7 +5804,7 @@ class TestListaEnvioPendrivePorCarpetas(unittest.TestCase):
 
             # Verificar que los archivos llegaron a LucieSinReglas/ en el pendrive
             dest_vid = os.path.join(punto_pen, "LucieSinReglas", "videos sin editar", "lucie", nombre_mes(), "capA", "videoA.mp4")
-            dest_fot = os.path.join(punto_pen, "LucieSinReglas", "imagenes", "lucie", "capB", "fotoB.jpg")
+            dest_fot = os.path.join(punto_pen, "LucieSinReglas", "imagenes", "lucie", nombre_mes(), "capB", "fotoB.jpg")
             self.assertTrue(os.path.isfile(dest_vid))
             self.assertTrue(os.path.isfile(dest_fot))
 

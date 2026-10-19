@@ -11,6 +11,7 @@ from bandeja.config import ConfiguracionBandeja, calcular_sha256
 from bandeja.db import GestorBaseDatosBandeja
 from bandeja.lotes import AgrupadorLotes, DetectorDescargasActivas
 from bandeja.movimientos import GestorMovimientosBandeja
+from bandeja.organizacion_mensual import nombre_mes
 from bandeja.pendrive import escanear_sala_espera_carpetas, simular_envio_capitulos, ejecutar_envio_pendrive
 from bandeja.vigilante import VigilanteBandeja
 
@@ -91,7 +92,7 @@ class TestAudioMP3(unittest.TestCase):
         self.assertEqual(envio['totales']['a_copiar_cantidad'], 2)
         resultado = ejecutar_envio_pendrive(envio, self.config, self.db, self.mov)
         self.assertTrue(resultado['exito'])
-        final = montaje / 'LucieSinReglas' / 'audios' / 'lucie' / 'dialogo' / 'lucie_dialogo (1).mp3'
+        final = montaje / 'LucieSinReglas' / 'audios' / 'lucie' / nombre_mes() / 'dialogo' / 'lucie_dialogo (1).mp3'
         self.assertEqual(final.read_bytes(), b'audio original')
 
 

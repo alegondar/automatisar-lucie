@@ -489,7 +489,7 @@ def escanear_sala_espera_carpetas(ruta_destino_base: str,
                     if h_archivo and envios_man_set:
                         categoria = {"video": "videos sin editar", "foto": "imagenes", "audio": "audios"}.get(tipo_arch)
                         destino_relativo = normalizar_ruta_relativa_posix(os.path.join(categoria, pers, cap, f)) if categoria else ""
-                        mensual = normalizar_ruta_relativa_posix(os.path.join(categoria, pers, mes_del_nombre(cap) or nombre_mes(), cap, f)) if categoria == "videos sin editar" else destino_relativo
+                        mensual = normalizar_ruta_relativa_posix(os.path.join(categoria, pers, mes_del_nombre(cap) or nombre_mes(), cap, f)) if categoria else ""
                         ya_env = any((h_archivo.lower(), r.lower()) in envios_man_set for r in (destino_relativo, mensual))
                     if ya_env:
                         cant_enviados += 1
@@ -1322,8 +1322,7 @@ def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
         for ruta_orig, sub_orig, nombre, tipo_media, sub_dest, tam in candidatos_archivos:
 
             raiz_salida = os.path.join(pendrive_montaje, carpeta_raiz)
-            carpeta_salida = (carpeta_capitulo(raiz_salida, sub_dest, pers, cap) if sub_dest == "videos sin editar"
-                              else os.path.join(raiz_salida, sub_dest, pers, cap))
+            carpeta_salida = carpeta_capitulo(raiz_salida, sub_dest, pers, cap)
             ruta_rel_pendrive = normalizar_ruta_relativa_posix(os.path.relpath(os.path.join(carpeta_salida, nombre), raiz_salida))
             ruta_abs_pendrive = os.path.join(pendrive_montaje, carpeta_raiz, convertir_ruta_relativa_a_local(ruta_rel_pendrive))
             dir_dest_pendrive = os.path.dirname(ruta_abs_pendrive)

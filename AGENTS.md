@@ -32,7 +32,7 @@ ESTADO_ACTUAL.md. Los nuevos lotes siguen sujetos a la regla de publicación.
   subirla cuando el usuario lo autorice; no versionar bases, configuraciones
   locales, exports, logs ni informes generados.
 
-La estructura de nuevas salidas de video (2026-10-19) es
+La estructura de nuevas salidas de video, imágenes y audio (2026-10-19) es
 `<categoria>/<personaje>/<mes - año>/<nombre - día - semana del mes - mes - año>/`.
 Completos conserva primero `videos sin publicar` o `videosPublicados`, luego
 personaje/mes/capítulo. «Videos en edición» se refiere a videos sin editar.
@@ -234,7 +234,11 @@ conserva archivos y directorios. No borrar ni renombrar automáticamente histór
 ## Organización mensual (2026-10-19)
 
 El usuario pidió agrupar también los capítulos existentes por mes y año,
-conservando íntegros sus nombres. `bandeja.organizacion_mensual` simula carpetas
+incluidas `imagenes` y `audios`, conservando íntegros sus nombres.
+Los nuevos envíos usan también `imagenes/<personaje>/<mes - año>/<capítulo>/`
+y `audios/<personaje>/<mes - año>/<capítulo>/`. Una carpeta histórica existente
+se continúa en su ruta registrada hasta organizarla explícitamente.
+`bandeja.organizacion_mensual` simula carpetas
 seleccionadas, exige confirmación, verifica estructura/SHA-256/identidad, rechaza
 archivos en uso, enlaces, colisiones y contenido cambiado, registra y permite
 simular Deshacer. Nunca se ejecuta al arrancar/listar. Usar mes explícito del

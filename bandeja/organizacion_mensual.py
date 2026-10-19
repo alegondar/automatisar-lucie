@@ -80,7 +80,8 @@ def resolver_ruta(raiz, ruta):
 class OrganizadorMensual:
     """Migración seleccionada, simulada y reversible; nunca se ejecuta al arrancar."""
     BASES = ("videos sin editar", "videos ya editados", "videos completos",
-             "videos completos/videos sin publicar", "videos completos/videosPublicados")
+             "videos completos/videos sin publicar", "videos completos/videosPublicados",
+             "imagenes", "audios")
     PERSONAJES = ("lucie", "roli", "mailen", "general", "sin asignar")
 
     def __init__(self, raiz, db=None):

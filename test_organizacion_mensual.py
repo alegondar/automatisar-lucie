@@ -60,12 +60,12 @@ class TestOrganizacionMensual(unittest.TestCase):
         with self.assertRaises(ValueError): self.org.ejecutar(plan)
         self.assertTrue(os.path.isfile(original))
 
-    def test_tres_categorias_y_colas_conservan_personajes_nombres_y_hashes(self):
+    def test_categorias_y_colas_conservan_personajes_nombres_y_hashes(self):
         for base in self.org.BASES:
             for personaje in ("lucie", "roli", "mailen"):
                 self.crear(base + "/" + personaje + "/" + self.cap + "/uno.mp4")
         plan = self.org.simular()
-        self.assertEqual(len(plan["acciones"]), 15)
+        self.assertEqual(len(plan["acciones"]), 21)
         self.org.ejecutar(plan, True)
         for a in plan["acciones"]:
             destino = os.path.join(self.raiz, *a["destino"].split("/"))
@@ -206,6 +206,40 @@ class TestOrganizacionMensual(unittest.TestCase):
         self.assertTrue(os.path.isfile(deshecho["destino"]))
         self.assertEqual(self.db.obtener_sesion_por_id(sesion["id"])["video_completo_ruta"], deshecho["destino"])
         self.assertEqual(gestor._historial(self.raiz), [])
+
+    def test_audio_de_sesion_antigua_se_abre_finaliza_y_deshace_tras_organizar(self):
+        clip = "audios/roli/" + self.cap + "/canción.MP3"
+        original = self.crear(clip, b"audio sintetico")
+        sesion = crear_sesion(self.db, [clip], "roli", self.cap, "Canción")
+        self.org.ejecutar(self.org.simular(), True)
+        actual = resolver_ruta(self.raiz, original)
+        self.assertEqual(obtener_carpeta_edicion(sesion, self.tmp), os.path.dirname(actual))
+        self.assertEqual(obtener_secciones_edicion(self.tmp, self.db)["para_editar"], [])
+        args = (self.db, sesion["id"], self.tmp, "LucieSinReglas", self.bitacora)
+        resultado = finalizar_edicion_crudos(*args)
+        self.assertTrue(resultado["exito"], resultado)
+        self.assertEqual(len(resultado["movidos"]), 1)
+        self.assertFalse(os.path.exists(actual))
+        self.assertTrue(deshacer_finalizar_edicion(*args)["exito"])
+        with open(actual, "rb") as f:
+            self.assertEqual(f.read(), b"audio sintetico")
+
+    def test_imagen_y_audio_sin_sesion_se_listan_y_revierten_por_mes(self):
+        imagen = self.crear("imagenes/lucie/" + self.cap + "/foto.jpg", b"foto sintetica")
+        audio = self.crear("audios/lucie/" + self.cap + "/voz.mp3", b"voz sintetica")
+        plan = self.org.simular()
+        self.assertEqual(len(plan["acciones"]), 2)
+        self.org.ejecutar(plan, True)
+        entrada = obtener_secciones_edicion(self.tmp, self.db)["para_editar"][0]
+        self.assertEqual(entrada["capitulo"], self.cap)
+        self.assertEqual(entrada["ruta_relativa"], "audios/lucie/octubre - 2026/" + self.cap + "/voz.mp3")
+        self.assertTrue(os.path.isfile(resolver_ruta(self.raiz, imagen)))
+        for accion in plan["acciones"]:
+            self.org.ejecutar(self.org.simular_deshacer(accion["id"]), True)
+        self.assertEqual(resolver_ruta(self.raiz, imagen), imagen)
+        self.assertEqual(resolver_ruta(self.raiz, audio), audio)
+        self.assertTrue(os.path.isfile(imagen))
+        self.assertTrue(os.path.isfile(audio))
 
     def test_no_sigue_enlaces_a_capitulos_externos(self):
         afuera = os.path.join(self.tmp, "afuera")

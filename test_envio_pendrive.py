@@ -21,7 +21,7 @@ from unittest.mock import patch, MagicMock
 import urllib.request
 import urllib.error
 import uuid
-from bandeja.organizacion_mensual import nombre_mes
+from bandeja.organizacion_mensual import OrganizadorMensual, nombre_mes
 
 from bandeja import (
     montar_unidad_pendrive,
@@ -464,7 +464,7 @@ class TestSimulacionEnvio(unittest.TestCase):
         # Verificar destino relativo
         self.assertEqual(
             nombres_a_copiar["foto1.jpg"]["ruta_relativa_pendrive"],
-            "imagenes/lucie/capitulo_01/foto1.jpg"
+            f"imagenes/lucie/{nombre_mes()}/capitulo_01/foto1.jpg"
         )
         self.assertEqual(
             nombres_a_copiar["lucievideo1.mp4"]["ruta_relativa_pendrive"],
@@ -495,7 +495,7 @@ class TestSimulacionEnvio(unittest.TestCase):
             "capitulo": "capitulo_01",
             "tipo": "imagen",
             "nombre": "foto1.jpg",
-            "ruta_relativa": "imagenes/lucie/capitulo_01/foto1.jpg",
+            "ruta_relativa": f"imagenes/lucie/{nombre_mes()}/capitulo_01/foto1.jpg",
             "sha256": sha_foto,
             "bytes": len(b"contenido_foto_1"),
             "estado": "enviado"
@@ -525,6 +525,9 @@ class TestSimulacionEnvio(unittest.TestCase):
             return next(a for c in carpetas for a in c['archivos'] if a['nombre'] == 'foto1.jpg')
         self.assertFalse(foto()['ya_enviado'])
         envios.add((sha, 'imagenes/lucie/capitulo_01/foto1.jpg'))
+        self.assertTrue(foto()['ya_enviado'])
+        envios.clear()
+        envios.add((sha, f'imagenes/lucie/{nombre_mes()}/capitulo_01/foto1.jpg'))
         self.assertTrue(foto()['ya_enviado'])
 
     def test_hash_en_otro_destino_no_oculta_colision_local(self):
@@ -685,7 +688,7 @@ class TestEjecucionEnvioPendrive(unittest.TestCase):
 
         # 1. Archivos en destino final en pendrive
         dest_vid = os.path.join(self.pendrive_dir, "LucieSinReglas", "videos sin editar", "lucie", nombre_mes(), "capitulo1", "lucievideo1.mp4")
-        dest_fot = os.path.join(self.pendrive_dir, "LucieSinReglas", "imagenes", "lucie", "capitulo1", "luciefoto1.jpg")
+        dest_fot = os.path.join(self.pendrive_dir, "LucieSinReglas", "imagenes", "lucie", nombre_mes(), "capitulo1", "luciefoto1.jpg")
         self.assertTrue(os.path.exists(dest_vid))
         self.assertTrue(os.path.exists(dest_fot))
         self.assertEqual(calcular_sha256(dest_vid), self.vid_hash)
@@ -731,6 +734,52 @@ class TestEjecucionEnvioPendrive(unittest.TestCase):
         self.assertEqual(len(ops), 1)
         self.assertEqual(ops[0]["evento"], "envio_pendrive")
         self.assertEqual(ops[0]["id_operacion"], res["id_envio"])
+
+    def test_nuevo_envio_mixto_agrupa_video_foto_y_audio_y_deshace(self):
+        audio = Path(self.cap_dir) / "audios" / "voz.mp3"
+        audio.parent.mkdir()
+        audio.write_bytes(b"audio sintetico para editar")
+        originales = {self.vid_path: self.vid_hash, self.fot_path: self.fot_hash,
+                      str(audio): calcular_sha256(str(audio))}
+        res = ejecutar_envio_pendrive(None, self.config, self.db, self.movimientos)
+        self.assertTrue(res["exito"])
+        self.assertEqual(res["total_transferidos"], 3)
+        for categoria, archivo in (("videos sin editar", "lucievideo1.mp4"),
+                                   ("imagenes", "luciefoto1.jpg"), ("audios", "voz.mp3")):
+            ruta = Path(self.pendrive_dir) / "LucieSinReglas" / categoria / "lucie" / nombre_mes() / "capitulo1" / archivo
+            self.assertTrue(ruta.is_file(), str(ruta))
+        deshacer_envio_pendrive(res["id_envio"], config=self.config, db=self.db, ruta_bitacora=self.bitacora_path)
+        for ruta, sha in originales.items():
+            self.assertEqual(calcular_sha256(ruta), sha)
+
+    def test_fotos_y_audios_migrados_conservan_deduplicacion_y_admiten_nuevos(self):
+        # El envío anterior usaba la estructura sin mes; conservar su manifiesto.
+        raiz = Path(self.pendrive_dir) / "LucieSinReglas"
+        for categoria in ("imagenes", "audios"):
+            (raiz / categoria / "lucie" / "capitulo1").mkdir(parents=True)
+        audio = Path(self.cap_dir) / "audios" / "voz.mp3"
+        audio.parent.mkdir()
+        audio.write_bytes(b"audio previo")
+        primero = ejecutar_envio_pendrive(None, self.config, self.db, self.movimientos)
+        organizador = OrganizadorMensual(str(raiz), self.db)
+        seleccion = [c["origen"] for c in organizador.candidatos()]
+        plan_mes = organizador.simular(seleccion, {c: "septiembre - 2026" for c in seleccion})
+        organizador.ejecutar(plan_mes, True)
+        self.assertEqual(primero["total_transferidos"], 3)
+        Path(self.fot_path).parent.mkdir(parents=True)
+        Path(self.fot_path).write_bytes(b"PHOTO CONTENT ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        audio.parent.mkdir(parents=True)
+        audio.write_bytes(b"audio previo")
+        nueva = Path(self.fotos_dir) / "nueva.jpg"
+        nueva.write_bytes(b"foto nueva")
+        plan = simular_envio_capitulos(["lucie/capitulo1"], self.config, self.db)
+        self.assertEqual({a["nombre"] for a in plan["archivos_omitidos"]}, {"luciefoto1.jpg", "voz.mp3"})
+        self.assertEqual(len(plan["archivos_a_copiar"]), 1)
+        self.assertIn("/septiembre - 2026/", plan["archivos_a_copiar"][0]["ruta_relativa_pendrive"])
+        segundo = ejecutar_envio_pendrive(plan, self.config, self.db, self.movimientos)
+        deshacer_envio_pendrive(segundo["id_envio"], config=self.config, db=self.db, ruta_bitacora=self.bitacora_path)
+        self.assertEqual(nueva.read_bytes(), b"foto nueva")
+        self.assertEqual((raiz / "audios/lucie/septiembre - 2026/capitulo1/voz.mp3").read_bytes(), b"audio previo")
 
     def test_envio_falla_verificacion_preserva_part_y_no_mueve_origen(self):
         """Si la verificación post-copia falla, el archivo .part se preserva y el origen NO se mueve."""
@@ -778,7 +827,7 @@ class TestEjecucionEnvioPendrive(unittest.TestCase):
         Path(self.fotos_dir).mkdir()
         Path(self.vid_path).write_bytes(b'video nuevo con nombre ocupado')
         Path(self.fot_path).write_bytes(b'foto nueva con nombre ocupado')
-        sufijo_ocupado = raiz / 'imagenes' / 'lucie' / 'capitulo1' / 'LUCIEFOTO1_1.JPG'
+        sufijo_ocupado = raiz / 'imagenes' / 'lucie' / nombre_mes() / 'capitulo1' / 'LUCIEFOTO1_1.JPG'
         sufijo_ocupado.write_bytes(b'otro archivo que se conserva')
         bloqueado = simular_envio_capitulos(['lucie/capitulo1'], self.config, self.db)
         self.assertFalse(bloqueado['puede_enviar'])
@@ -859,7 +908,7 @@ class TestEjecucionEnvioPendrive(unittest.TestCase):
         for relativa, sha in iniciales.items():
             self.assertEqual(calcular_sha256(os.path.join(self.pendrive_dir, 'LucieSinReglas', *relativa.split('/'))), sha)
         for nombre, contenido in fotos.items():
-            destino = Path(self.pendrive_dir) / 'LucieSinReglas' / 'imagenes' / 'lucie' / 'capitulo1' / nombre
+            destino = Path(self.pendrive_dir) / 'LucieSinReglas' / 'imagenes' / 'lucie' / nombre_mes() / 'capitulo1' / nombre
             self.assertEqual(destino.read_bytes(), contenido)
         deshacer_envio_pendrive(segundo['id_envio'], config=self.config, db=self.db, ruta_bitacora=self.bitacora_path)
         for nombre, contenido in fotos.items():
