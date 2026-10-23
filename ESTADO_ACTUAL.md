@@ -1,4 +1,25 @@
-# Estado actual del sistema — 2026-10-19
+# Estado actual del sistema — 2026-10-23
+
+## Clarificación de edición con CapCut abierto y limpieza de crudos (2026-10-23)
+
+Se clarificó el flujo de «Terminé de editar» para que no exija cerrar CapCut ni
+muestre avisos alarmistas de espera: cuando Windows bloquea el original por estar
+en uso, se confirma con éxito la organización en `videos ya editados` y se informa
+que el retiro físico se completará automáticamente en segundo plano.
+En el panel se aisló el bloque de traslados pendientes en un contenedor secundario
+desplegable para mantener limpia la sección «2. En edición», y se filtraron las
+sesiones históricas cuyos archivos ya no existen en `videos sin editar`.
+
+A solicitud explícita del usuario, se ejecutó además la limpieza de originales
+redundantes de ediciones completadas en el pendrive (sesiones 12, 13, 14, 15, 16,
+17, 18 y 19), verificando SHA-256 contra `videos ya editados`, resguardando los
+duplicados en `_enviados/edicion` y retirando las carpetas vacías de
+`videos sin editar` (incluyendo `luciemeando`). En `videos sin editar/lucie/octubre - 2026`
+permanece exclusivamente el material que verdaderamente está pendiente de editar
+(`lucie sin ideas`).
+
+Validación: 60/60 pruebas unitarias OK (`test_edicion.py`, `test_terminar_export.py`),
+UI tests OK (`test_edicion_ui.js`, `test_publicacion_ui.js`), AST 0/33.
 
 ## Cierre de capítulos desde el panel (2026-10-23)
 
