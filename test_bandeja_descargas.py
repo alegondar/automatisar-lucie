@@ -3332,6 +3332,35 @@ class TestCapitulosAbiertosMultiples(unittest.TestCase):
         self.assertEqual(reabierto2["en_foco"], 0)
         self.assertEqual(self.db.obtener_capitulo_en_foco()["id"], cap2["id"])
 
+    def test_terminar_carpeta_existente_conserva_material_y_permite_otro_capitulo(self):
+        """Cerrar por ID solo cambia el estado, aunque la carpeta ya tenga archivos."""
+        self._iniciar_servidor_prueba()
+        cap = self.db.empezar_capitulo(
+            "roli", "roliferne", ruta_destino_base=self.destino,
+            ruta_descargas=self.descargas)
+        ruta = self._crear_archivo(os.path.join(self.destino, "roli", cap["nombre"], "clip.mp4"))
+        hash_antes = calcular_sha256(ruta)
+        headers = {"Host": f"127.0.0.1:{self.config.puerto_servidor}",
+                   "X-CSRF-Token": self.token_csrf, "Content-Type": "application/json"}
+
+        status, resultado, _ = self._request(
+            "POST", "/api/capitulos/terminar", headers=headers,
+            body=json.dumps({"id": cap["id"], "accion": "sin_mover"}))
+        self.assertEqual(status, 200)
+        self.assertTrue(resultado["exito"])
+        status, estado, _ = self._request("GET", "/api/capitulos/estado", headers=headers)
+        self.assertEqual(status, 200)
+        self.assertIsNone(estado["capitulo_foco"])
+        self.assertEqual(estado["cantidad_abiertos"], 0)
+        self.assertEqual(calcular_sha256(ruta), hash_antes)
+
+        status, siguiente, _ = self._request(
+            "POST", "/api/capitulos/empezar", headers=headers,
+            body=json.dumps({"personaje": "roli", "nombre": "capitulo siguiente"}))
+        self.assertEqual(status, 200)
+        self.assertNotEqual(siguiente["capitulo"]["id"], cap["id"])
+        self.assertEqual(calcular_sha256(ruta), hash_antes)
+
     def test_endpoints_capitulos_abiertos_y_en_foco(self):
         """Endpoints /api/capitulos/abiertos y /api/capitulos/en-foco con validación CSRF y Host."""
         self._iniciar_servidor_prueba()

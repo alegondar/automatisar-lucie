@@ -1,5 +1,31 @@
 # Estado actual del sistema — 2026-10-19
 
+## Cierre de capítulos desde el panel (2026-10-23)
+
+Corregido «Terminar capítulo»: sin pendientes cierra por ID directamente,
+libera el foco y permite empezar otro, conservando la carpeta existente y sus
+archivos. Con pendientes mantiene el resumen y las opciones de terminar sin
+mover o simular/confirmar los archivos seleccionados del capítulo elegido.
+El plan de cierre conserva ese ID hasta después del movimiento; cancelar o
+fallar el traslado no cierra el capítulo. Se elimina la llamada a una función
+inexistente y la selección global de lotes ajenos. Los errores de cierre quedan
+visibles; una consulta auxiliar fallida ya no deja pegado un foco cerrado.
+
+Validación Kali/Linux: **486 pruebas OK, 12 omisiones**, **60.156 s**;
+omisiones por capacidades nativas ausentes, guardia y aserciones conservadas.
+Regresión `node test_capitulos_ui.js` y UI CSRF/edición/envío incremental/
+publicación correctas; sintaxis JS y diff correctos. La regresión de cierre
+falla con el panel anterior y pasa con la corrección. API en temporales verifica
+cierre, nuevo capítulo y SHA-256 intacto del archivo de la carpeta existente.
+AST **0/33**, auditoría de **248 archivos** e historial sin infracciones.
+Manifiesto real exclusivamente contado: **620 / 620**, estable. Sin iniciar
+la bandeja real como fixture ni ejecutar el cierre sobre la base real.
+La primera ejecución parcial quedó bloqueada por sockets del sandbox;
+la suite completa con permiso pasó. Log externo
+`/tmp/lucie-cierre-capitulo-tests.log`. Windows nativo no ejecutado.
+Para cargar el JS nuevo en una bandeja que ya esté abierta, recargar con Ctrl+F5.
+
+
 ## Organización mensual de imágenes y audio (2026-10-19)
 
 El usuario amplió la organización mensual a `imagenes` y `audios`, también para

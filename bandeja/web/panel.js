@@ -11,7 +11,7 @@
     let simulacionActiva = null;
     let descarteSimulacionActiva = null;
     let loteActivoId = null;
-    let terminarCapituloTrasMover = false;
+    let terminarCapituloTrasMover = null;
     let pestanaActual = 'lotes';
     let historialActual = [];
     let operacionAvisoActual = null;
@@ -853,15 +853,18 @@
       try {
         capituloATerminarId = (idCap !== undefined && idCap !== null) ? idCap : ((datosEstado.capitulo_foco && datosEstado.capitulo_foco.id) || null);
         const res = await apiFetch('/api/capitulos/estado');
-        let cap = res.capitulo_foco || res.capitulo;
-        let bal = res.balance || { pendientes: 0, movidos: 0 };
+        const cap = (res.capitulos_abiertos || []).find(c => c.id === capituloATerminarId)
+          || (res.capitulo_foco?.id === capituloATerminarId ? res.capitulo_foco : null);
+        const bal = cap?.balance || res.balance || { pendientes: 0, movidos: 0 };
 
-        if (idCap && datosEstado.capitulos_abiertos) {
-          const capObj = datosEstado.capitulos_abiertos.find(c => c.id === idCap);
-          if (capObj) {
-            cap = capObj;
-            bal = capObj.balance || bal;
-          }
+        if (!cap || !cap.id) {
+          throw new Error('No hay un capítulo abierto para terminar. Actualizá el panel.');
+        }
+        capituloATerminarId = cap.id;
+        datosEstado.capitulos_abiertos = res.capitulos_abiertos || [];
+        if (bal.pendientes === 0) {
+          await ejecutarTerminarCapitulo(false);
+          return;
         }
 
         const cont = document.getElementById('modal-terminar-resumen');
@@ -889,20 +892,30 @@
       programarSiguienteSondeo(500);
     }
 
-    async function ejecutarTerminarCapitulo(trasMover) {
+    async function ejecutarTerminarCapitulo(trasMover, idCap = capituloATerminarId) {
       try {
         const payload = {
           accion: trasMover ? 'mover_pendientes' : 'sin_mover'
         };
-        if (capituloATerminarId !== null) {
-          payload.id = capituloATerminarId;
-        }
+        if (idCap === null) throw new Error('Elegí el capítulo que querés terminar.');
+        payload.id = idCap;
         await apiFetch('/api/capitulos/terminar', {
           method: 'POST',
           body: JSON.stringify(payload)
         });
         cerrarModalTerminarCapitulo();
+        datosEstado.capitulos_abiertos = (datosEstado.capitulos_abiertos || []).filter(c => c.id !== idCap);
+        datosEstado.cantidad_abiertos = datosEstado.capitulos_abiertos.length;
+        if (datosEstado.capitulo_foco?.id === idCap) {
+          datosEstado.capitulo_foco = null;
+          datosEstado.capitulo_activo = null;
+          datosEstado.balance_capitulo = {pendientes: 0, movidos: 0};
+          datosEstado.alerta_olvidado = false;
+        }
+        datosEstado.mensaje_carpeta_existente = null;
+        renderCapituloActivo();
         await cargarDatos();
+        mostrarToastLlegada('Capítulo terminado. Ya podés crear otro; su carpeta y archivos se conservan.');
         if (pestanaActual === 'capitulos-abiertos') {
           await cargarCapitulosAbiertos();
         } else if (pestanaActual === 'capitulos-cerrados') {
@@ -926,25 +939,37 @@
     }
 
     async function ejecutarMoverYTerminar() {
-      cerrarModalTerminarCapitulo();
-      const cap = datosEstado.capitulo_activo;
-      if (!cap || !cap.habilitado) {
-        await ejecutarTerminarCapitulo(false);
-        return;
-      }
-      const lotesCapitulo = datosEstado.lotes.filter(l =>
-        (l.personaje_sugerido === cap.personaje || cap.personaje) &&
+      const cap = (datosEstado.capitulos_abiertos || []).find(c => c.id === capituloATerminarId)
+        || (datosEstado.capitulo_foco?.id === capituloATerminarId ? datosEstado.capitulo_foco : null);
+      if (!cap) return mostrarError('Actualizá el panel y elegí el capítulo que querés terminar.');
+      const lotesCapitulo = (datosEstado.lotes || []).filter(l =>
+        !l.es_anterior && l.personaje_sugerido === cap.personaje &&
         (l.escena_sugerida === cap.nombre || l.raiz_escena === `${cap.personaje}::${cap.nombre}`)
       );
       if (!lotesCapitulo.length) {
-        await ejecutarTerminarCapitulo(true);
+        await ejecutarTerminarCapitulo(true, cap.id);
         return;
       }
-      terminarCapituloTrasMover = true;
-      if (lotesCapitulo.length === 1) {
-        await simularMoverLote(lotesCapitulo[0].lote_id);
-      } else {
-        await simularMoverLotesListos();
+      const lotes = lotesCapitulo.map(l => {
+        const seleccionados = new Set(Array.from(document.querySelectorAll(`.chk-lote-${l.lote_id}:checked`))
+          .map(cb => cb.getAttribute('data-id')));
+        return {lote_id: l.lote_id, personaje: cap.personaje, escena: cap.nombre,
+          archivos: l.archivos.filter(a => seleccionados.has(String(a.id_db))), es_existente_descargas: false};
+      }).filter(l => l.archivos.length);
+      if (!lotes.length) {
+        return mostrarError('No hay pendientes seleccionados de este capítulo. Podés terminar sin mover.');
+      }
+      try {
+        const sim = await apiFetch('/api/simular-mover', {
+          method: 'POST', body: JSON.stringify({lotes})
+        });
+        cerrarModalTerminarCapitulo();
+        simulacionActiva = sim;
+        loteActivoId = null;
+        terminarCapituloTrasMover = {id: cap.id};
+        mostrarModalSimulacion(sim);
+      } catch (e) {
+        mostrarError(e.message);
       }
     }
 
@@ -2396,12 +2421,14 @@
       document.getElementById('modal-simulacion').style.display = 'none';
       simulacionActiva = null;
       loteActivoId = null;
-      terminarCapituloTrasMover = false;
+      terminarCapituloTrasMover = null;
       programarSiguienteSondeo(500);
     }
 
     async function ejecutarMoverLote() {
       if (!simulacionActiva) return;
+      const simulacion = simulacionActiva;
+      const capituloTrasMover = terminarCapituloTrasMover;
       try {
         let bodyReq;
         if (simulacionActiva.es_multilote) {
@@ -2417,16 +2444,8 @@
         });
         cerrarModal();
 
-        if (terminarCapituloTrasMover) {
-          terminarCapituloTrasMover = false;
-          try {
-            await apiFetch('/api/capitulos/terminar', {
-              method: 'POST',
-              body: JSON.stringify({ accion: 'mover_pendientes' })
-            });
-          } catch (errTerminar) {
-            console.error('Error al terminar capítulo tras mover:', errTerminar);
-          }
+        if (capituloTrasMover) {
+          await ejecutarTerminarCapitulo(true, capituloTrasMover.id);
         }
 
         if (res.es_multilote) {
@@ -2440,8 +2459,8 @@
         } else {
           mostrarAvisoMover(
             res.total_movidos,
-            res.personaje || simulacionActiva.personaje,
-            res.escena || simulacionActiva.escena,
+            res.personaje || simulacion.personaje,
+            res.escena || simulacion.escena,
             res.id_operacion
           );
         }
