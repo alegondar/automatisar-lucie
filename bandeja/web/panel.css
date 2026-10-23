@@ -1098,3 +1098,11 @@ dialog::backdrop { background: #020712c9; }
   .wifi-historial-fila { grid-template-columns: 1fr; gap: 12px; }
   .wifi-historial-fila button { justify-self: start; }
 }
+.edicion-pendientes-card { padding: 16px 20px; }
+.edicion-pendientes-summary { display: flex; justify-content: space-between; align-items: center; gap: 12px; cursor: pointer; user-select: none; }
+.edicion-pendientes-cuerpo { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
+#contenedor-traslados-pendientes, #contenedor-esperando-export { display: flex; flex-direction: column; gap: 10px; }
+#contenedor-traslados-pendientes:empty, #contenedor-esperando-export:empty { display: none; }
+.edicion-pendiente-fila { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; padding: 12px 14px; background: var(--card-alt); border: 1px solid var(--border); border-radius: 6px; }
+.edicion-pendiente-fila p { flex: 1 1 320px; font-size: 0.9rem; color: var(--text-muted); margin: 0; overflow-wrap: anywhere; }
+.edicion-pendiente-fila button { flex-shrink: 0; }

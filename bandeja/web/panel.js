@@ -3850,10 +3850,12 @@
       cont.replaceChildren();
       for (const sesion of sesiones) {
         const fila = document.createElement('div');
-        fila.style.marginTop = '16px';
+        fila.className = 'edicion-pendiente-fila';
         const texto = document.createElement('p');
-        texto.textContent = `${sesion.nombre}: ${sesion.archivos.length} original(es) siguen en Sin editar. Cerrá el proyecto de CapCut para liberar los archivos. ` +
-          (sesion.archivos.every(a => a.automatico) ? 'Se completará el retiro automáticamente.' : 'Esta edición anterior requiere confirmar el retiro.');
+        const esAuto = sesion.archivos.every(a => a.automatico);
+        texto.textContent = esAuto
+          ? `${sesion.nombre}: ${sesion.archivos.length} original(es) siguen en Sin editar en uso por CapCut. Se completará el retiro automáticamente en segundo plano (no es necesario cerrar CapCut).`
+          : `${sesion.nombre}: ${sesion.archivos.length} original(es) de esta edición anterior siguen en Sin editar (su video editado ya fue guardado). Confirmá el retiro para archivarlos en resguardo.`;
         const boton = document.createElement('button');
         boton.className = 'btn-sm'; boton.textContent = 'Completar traslado';
         boton.addEventListener('click', async () => {
@@ -3865,6 +3867,14 @@
         });
         fila.append(texto, boton); cont.append(fila);
       }
+      const panel = document.getElementById('card-pendientes-edicion');
+      const esp = document.getElementById('contenedor-esperando-export');
+      const total = cont.children.length + (esp?.children ? esp.children.length : 0);
+      if (panel && panel !== cont) {
+        panel.style.display = total > 0 ? 'block' : 'none';
+      }
+      const badge = document.getElementById('conteo-pendientes-edicion');
+      if (badge && badge !== cont) badge.textContent = String(total);
     }
 
     function renderizarSesionesEsperandoExport(sesiones, exports) {
@@ -3873,7 +3883,7 @@
       cont.replaceChildren();
       for (const sesion of sesiones) {
         const fila = document.createElement('div');
-        fila.style.marginTop = '12px';
+        fila.className = 'edicion-pendiente-fila';
         const asociado = exports.find(e => e.sesion_id === sesion.id);
         const texto = document.createElement('p');
         texto.textContent = `${sesion.nombre} (${sesion.personaje} / ${sesion.capitulo}): edición terminada; ${asociado?.error ? asociado.error : 'el video final todavía no está copiado a Sin publicar.'}`;
@@ -3894,6 +3904,12 @@
         });
         fila.append(texto, revisar); cont.append(fila);
       }
+      const panel = document.getElementById('card-pendientes-edicion');
+      const tras = document.getElementById('contenedor-traslados-pendientes');
+      const total = cont.children.length + (tras?.children ? tras.children.length : 0);
+      if (panel && panel !== cont) panel.style.display = total > 0 ? 'block' : 'none';
+      const badge = document.getElementById('conteo-pendientes-edicion');
+      if (badge && badge !== cont) badge.textContent = String(total);
     }
 
     function renderizarSesionesEnEdicion(sesiones) {
@@ -3973,7 +3989,7 @@
     }
 
     async function terminarEdicionSesion(sesionId, confirmacionPrevia = false) {
-      if (!confirmacionPrevia && !confirm("¿Confirmás que terminaste de editar? Los clips quedarán en 'videos ya editados'. Si CapCut los mantiene abiertos, se copiarán y el retiro de 'videos sin editar' quedará pendiente hasta que cierres el proyecto. La copia editada se verifica y el original retenido se conserva en '_enviados/edicion', sin borrar ni sobrescribir. Se revisará el video final exportado para copiarlo a 'videos completos/videos sin publicar' en modo automático. Los exports originales de CapCut se conservan.")) return;
+      if (!confirmacionPrevia && !confirm("¿Confirmás que terminaste de editar? Los clips quedarán organizados en 'videos ya editados'. Si CapCut los mantiene abiertos, se copiarán de forma segura y el retiro de los originales se completará en segundo plano (no es necesario cerrar CapCut). Se revisará el video final exportado para copiarlo automáticamente a 'videos completos/videos sin publicar'. Los exports originales de CapCut se conservan.")) return;
 
       try {
         const res = await fetchConCsrf('/api/edicion/terminar', {
@@ -3986,7 +4002,7 @@
           const pendientes = (data.retiro_originales?.pendientes || []).length;
           const motivos = [...new Set((data.retiro_originales?.pendientes || []).map(p => p.error).filter(Boolean))].join(' ');
           mostrarAvisoEdicion(
-            `${pendientes ? '⏳' : '✅'} ${movidosCount} clip(s) organizados en 'videos ya editados'. ${pendientes ? `${pendientes} original(es) siguen en Sin editar. Si están en uso, cerrá el proyecto de CapCut. El retiro se reintentará automáticamente; el estado sigue visible en Edición. ${escapeHTML(motivos)}` : 'Traslado completado.'} ${escapeHTML(data.export_final?.mensaje || '')} ${data.export_final?.destino ? escapeHTML(data.export_final.destino) : ''}`,
+            `✅ ${movidosCount} clip(s) organizados en 'videos ya editados'. ${pendientes ? `${pendientes} original(es) siguen en Sin editar en uso por CapCut; se retirarán automáticamente en segundo plano (no es necesario cerrar CapCut).` : 'Traslado completado.'} ${escapeHTML(data.export_final?.mensaje || '')} ${data.export_final?.destino ? escapeHTML(data.export_final.destino) : ''}`,
             `<button class="btn-sm" onclick="deshacerTerminarEdicion(${sesionId})" style="background:#f59e0b; color:#000; font-weight:600;">Deshacer</button>`
           );
           await cargarVistaEdicion();

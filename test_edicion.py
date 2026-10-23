@@ -357,6 +357,10 @@ class TestEdicionCapCut(unittest.TestCase):
         self.assertEqual(len(resultado["retiro_originales"]["retirados"]), 1)
         self.assertFalse(os.path.exists(origen))
         self.assertEqual(self.db.obtener_sesion_por_id(sesion["id"])["fecha_cierre"], cierre)
+        # Si un registro histórico conserva original_preservado pero ya no existe ni en Sin editar ni en resguardo, no se lista.
+        with open(manifiesto, "w", encoding="utf-8") as f:
+            for evento in eventos: f.write(json.dumps(evento) + "\n")
+        self.assertEqual(obtener_secciones_edicion(self.pendrive_montaje, self.db)["traslados_pendientes"], [])
 
     def test_deshacer_antes_de_liberar_cancela_retiro_diferido(self):
         _, args, origen, _ = self._preparar_retiro_pendiente()

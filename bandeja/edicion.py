@@ -165,13 +165,15 @@ def _originales_pendientes(pendrive_raiz, sesion):
         version = hashlib.sha256(referencia.encode("utf-8")).hexdigest()[:16]
         respaldo = os.path.join(pendrive_raiz, "_enviados", "edicion", sesion["identificador"],
                                 version + "_" + os.path.basename(origen))
+        automatico = evento.get("retiro_origen_solicitado") is True
         if (not esta_confinado_en_raiz(origen, base)
                 or not esta_confinado_en_raiz(destino, os.path.join(pendrive_raiz, "videos ya editados"))
                 or not esta_confinado_en_raiz(respaldo, os.path.join(pendrive_raiz, "_enviados", "edicion"))
-                or not all(_sin_enlaces(p) for p in (origen, destino, respaldo))):
+                or not all(_sin_enlaces(p) for p in (origen, destino, respaldo))
+                or (not os.path.exists(origen) and not (automatico and os.path.exists(respaldo)))):
             continue
         planes.append({"clip": clip, "origen": origen, "destino": destino, "resguardo": respaldo,
-                       "sha256": evento.get("sha256"), "automatico": evento.get("retiro_origen_solicitado") is True})
+                       "sha256": evento.get("sha256"), "automatico": automatico})
     return planes
 
 

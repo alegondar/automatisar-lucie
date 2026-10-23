@@ -58,6 +58,7 @@ async function probar() {
   ctx.renderizarTrasladosPendientes([historico]);
   assert.equal(llamadas.length, antes, 'Mostrar pendientes no debe mover archivos');
   assert.ok(cont.children[0].children[0].textContent.includes('edición anterior'));
+  assert.ok(!cont.children[0].children[0].textContent.includes('Cerrá el proyecto de CapCut'));
   const completar = cont.children[0].children[1];
   assert.equal(completar.textContent, 'Completar traslado');
   ctx.confirm = () => false;

@@ -486,9 +486,21 @@
           </div>
         </div>
         <div id="contenedor-en-edicion">Cargando sesiones...</div>
-        <div id="contenedor-traslados-pendientes"></div>
-        <div id="contenedor-esperando-export"></div>
       </div>
+
+      <details id="card-pendientes-edicion" class="card edicion-pendientes-card" style="display:none;">
+        <summary class="edicion-pendientes-summary">
+          <div>
+            <strong>Revisiones y traslados pendientes de sesiones terminadas</strong>
+            <small style="display:block; color:var(--text-muted); font-weight:normal; margin-top:2px;">Crudos originales retenidos en «Sin editar» o sesiones antiguas sin export vinculado</small>
+          </div>
+          <span id="conteo-pendientes-edicion" class="badge" style="background:var(--card-alt); color:var(--text); border:1px solid var(--border);">0</span>
+        </summary>
+        <div class="edicion-pendientes-cuerpo">
+          <div id="contenedor-traslados-pendientes"></div>
+          <div id="contenedor-esperando-export"></div>
+        </div>
+      </details>
 
       <!-- 3. Editados y completos (resumen por capítulo) -->
       <div class="card">
