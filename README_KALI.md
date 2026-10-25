@@ -20,6 +20,62 @@ antes de integrar la rama. No descartar modificaciones ni hacer reset, checkout
 forzado o pull a ciegas. La revisión inicial mediante fetch y la confirmación de
 integración están descritas en AGENTS.md. Continuar en una rama de trabajo.
 
+## Inicio automático e icono junto al reloj
+
+Kali con **XFCE/X11** puede iniciar Lucie al entrar a la sesión gráfica, en
+segundo plano, sin abrir una terminal ni el navegador. Usa el área de notificación
+del panel; no es un servicio que arranque antes de iniciar sesión.
+
+Requiere Python con PyGObject y GTK3 (`python3-gi`, `gir1.2-gtk-3.0`) y una
+bandeja de sistema del escritorio. Estas bibliotecas son opcionales para el
+arranque habitual sin icono. Si faltan, el lanzador informa el problema en su log;
+no instala paquetes por su cuenta. Este backend usa `Gtk.StatusIcon`, compatible
+con la bandeja X11 de XFCE; no ofrece compatibilidad Wayland/GNOME sin bandeja.
+
+Desde la carpeta del proyecto, revisar primero la simulación:
+
+```bash
+python3 instalar_inicio_linux.py
+python3 instalar_inicio_linux.py --instalar
+```
+
+El instalador crea exclusivamente
+`$XDG_CONFIG_HOME/autostart/org.lucie.Bandeja.desktop` (por defecto,
+`~/.config/autostart/`). Respeta espacios y caracteres especiales en rutas;
+no usa una shell para ejecutarlas. Si ya existe exactamente el mismo acceso,
+no lo cambia; si hay uno diferente o un enlace, lo conserva y rechaza la
+instalación. `--carpeta-inicio` permite simular/probar en temporales y `--python`
+elegir el intérprete. La ubicación del repositorio queda registrada: si se mueve,
+hay que revisar el acceso anterior en las preferencias de sesión antes de
+configurar otro. El instalador no inicia vigilantes ni cambia configuración local.
+
+Para usarlo ahora, sin esperar al próximo ingreso:
+
+```bash
+python3 iniciar_bandeja_linux.py --sin-navegador
+```
+
+El acceso automático usa ese mismo lanzador sin consola. El icono conserva el
+dibujo de Windows: un clic abre el panel en Chrome; clic derecho ofrece
+**Abrir panel de Lucie** y **Salir de Lucie**. Salir detiene normalmente el servidor
+y sus vigilantes cuando pertenecen a ese proceso. Si ya había una bandeja
+abierta, el lanzador agrega solo el icono, sin nuevos vigilantes; su menú ofrece
+**Cerrar icono**, que conserva la bandeja existente. Un bloqueo por usuario/puerto
+impide dos iconos. Si se reinicia el panel XFCE, el icono X11 puede volver a
+integrarse en su bandeja sin crear otros vigilantes.
+
+El diagnóstico queda en modo append en
+`$XDG_STATE_HOME/lucie/logs/bandeja_linux.log` (por defecto,
+`~/.local/state/lucie/logs/bandeja_linux.log`), fuera del repositorio. Para
+deshabilitar el inicio, desmarcar **Lucie** en **Sesión e inicio → Autoarranque de
+aplicaciones** de XFCE; no hace falta borrar material ni archivos del proyecto.
+No iniciar este lanzador real como fixture: las pruebas usan callbacks falsos,
+accesos temporales y GTK en Xvfb.
+
+Fuentes: [Autoarranque XDG](https://specifications.freedesktop.org/autostart/latest/),
+[Desktop Entry / Exec](https://specifications.freedesktop.org/desktop-entry/latest/exec-variables.html)
+y [GTK StatusIcon](https://docs.gtk.org/gtk3/class.StatusIcon.html).
+
 ## Configuración de cada equipo
 
 El programa utiliza la biblioteca estándar de Python; no necesita pip ni LocalSend

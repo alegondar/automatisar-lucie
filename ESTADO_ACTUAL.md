@@ -1,5 +1,46 @@
 # Estado actual del sistema — 2026-10-23
 
+## Inicio automático e icono en Kali/XFCE (2026-10-25)
+
+A pedido del usuario, Linux/X11 dispone del mismo icono que Windows: clic abre
+el panel; menú Abrir panel de Lucie / Salir de Lucie. El backend GTK3 reutiliza
+los píxeles de `icono_lucie`, ejecuta GTK en su hilo y coordina la salida normal
+con el servidor. El bloqueo flock por usuario/puerto conserva su archivo sin
+borrarlo. Si encuentra una bandeja existente, aporta solo el icono y ofrece
+Cerrar icono, sin base ni vigilantes nuevos. Windows conserva su backend y sus
+regresiones; no se afirmó ejecución Windows nativa.
+
+`iniciar_bandeja_linux.py` fija el directorio, conserva argumentos y guarda logs
+append en XDG_STATE_HOME fuera del repo. `instalar_inicio_linux.py` simula por
+defecto, crea exclusivamente el acceso XDG y respeta accesos distintos/enlaces;
+la repetición idéntica no modifica nada. Exec conserva espacios y caracteres
+especiales sin shell. Inicio al entrar a la sesión gráfica, sin terminal ni
+navegador, no servicio antes del login. Backend acotado a X11 con bandeja;
+GTK StatusIcon es API legacy, no soporte Wayland. GTK3/PyGObject ya disponibles
+en el host; no se instalaron paquetes. Ver README_KALI.md.
+
+Validación Kali/Linux, Python 3.13.12: **498 pruebas OK, 12 omisiones**, en
+**60.748 s**. **26 específicas de inicio/navegador OK**, incluida GTK en Xvfb
+con callbacks falsos. Se adaptó la expectativa anterior de ignorar --icono en
+Linux, conservando sus aserciones de arranque y añadiendo las del icono.
+AST **0/36**, auditoría repo/historial de **249 archivos** y revisión explícita
+de los **4 archivos nuevos** sin infracciones; cinco regresiones UI, sintaxis y
+diff correctos. Guardia y aserciones conservadas. Pruebas en temporales, bandeja
+real detenida normalmente con SIGINT. Manifiesto exclusivamente contado durante
+la validación: **782 / 782**, estable. Suite parcial inicial interrumpida para
+contar antes de la nueva suite completa; ejecución intermedia detectó la prueba
+del contrato anterior. Logs y captura del panel fuera de Git, suite final
+`/tmp/lucie-inicio-linux-suite-correcta.log`.
+
+Uso normal posterior a pruebas: acceso local instalado tras simulación y
+validado mediante desktop-file-validate; repetición idempotente confirmada.
+Icono integrado en XFCE real, menú y dibujo comprobados con callbacks falsos;
+no se iniciaron vigilantes reales como fixture. Después se reanudó Lucie para
+uso habitual mediante el lanzador sin navegador: panel HTTP 200, bloqueo único
+del icono activo y captura del panel. El próximo inicio de sesión queda
+configurado; no se reinició ni cerró la sesión para validarlo. No se hicieron
+operaciones manuales sobre material ni se cambió la configuración de producción.
+
 ## Clarificación de edición con CapCut abierto y limpieza de crudos (2026-10-23)
 
 Se clarificó el flujo de «Terminé de editar» para que no exija cerrar CapCut ni

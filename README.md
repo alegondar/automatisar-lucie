@@ -113,6 +113,11 @@ su panel sin iniciar otra instancia. Si Chrome no está instalado, se informa
 la dirección y el servidor sigue funcionando. Para iniciar sin navegador:
 `python3 bandeja_descargas.py --sin-navegador`.
 
+Kali/XFCE con X11 también admite inicio automático de sesión, sin terminal, con
+icono junto al reloj y las opciones Abrir panel / Salir. Revisar la simulación
+de `python3 instalar_inicio_linux.py` antes de habilitarla con `--instalar`.
+Ver [inicio automático Linux](README_KALI.md#inicio-automático-e-icono-junto-al-reloj).
+
 ### En Windows 10 / 11
 
 1. Hacer doble clic sobre el lanzador [`iniciar_bandeja.bat`](iniciar_bandeja.bat), o ejecutar en PowerShell:

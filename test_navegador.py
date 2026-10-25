@@ -201,15 +201,21 @@ class TestNavegador(unittest.TestCase):
             capcut.iniciar.assert_not_called()
             abrir.assert_not_called()
 
-    def test_icono_no_cambia_arranque_linux(self):
+    def test_icono_linux_inicia_servicio_sin_cargar_backend_windows(self):
         with ExitStack() as stack:
             app, vigilante, _, servidor, _, _ = self.contexto_main(stack, ["--icono", "--sin-navegador"])
             stack.enter_context(patch.object(app.sys, "platform", "linux"))
+            stack.enter_context(patch.object(app, "dashboard_disponible", return_value=False))
             icono = stack.enter_context(patch("bandeja.icono_windows.IconoWindows"))
+            linux = stack.enter_context(patch("bandeja.icono_linux.IconoLinux")).return_value
+            linux.adquirir_instancia.return_value = True
             app.main()
             icono.assert_not_called()
             vigilante.iniciar.assert_called_once()
             servidor.serve_forever.assert_called_once()
+            linux.iniciar.assert_called_once()
+            linux.detener.assert_called_once()
+            self.assertEqual(linux.al_salir, servidor.shutdown)
 
     def test_fallo_icono_libera_servidor_sin_iniciar_vigilantes(self):
         with ExitStack() as stack:

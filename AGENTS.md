@@ -69,6 +69,17 @@ pisar accesos ajenos. Ver README_WINDOWS.md. No iniciar la bandeja real como
 fixture: las pruebas del icono usan callbacks falsos y el instalador solo carpetas
 temporales. Una bandeja existente puede recibir el icono sin nuevos vigilantes.
 
+Inicio Kali/Linux (2026-10-25): el usuario solicitó el mismo arranque de sesión
+en segundo plano con icono y opciones Abrir panel / Salir. El backend Linux
+usa GTK3 y bandeja X11 (Kali/XFCE), con bloqueo por usuario/puerto y callbacks
+separados del servicio. `instalar_inicio_linux.py` simula por defecto y habilita
+un acceso XDG exclusivo sin pisar accesos ajenos; `iniciar_bandeja_linux.py`
+fija directorio y conserva logs append fuera de Git. Inicio sin navegador.
+Una bandeja existente recibe solo el icono y ofrece Cerrar icono, sin nuevos
+vigilantes. No afirmar compatibilidad Wayland ni Windows nativo no ejecutados.
+Las pruebas del icono usan callbacks falsos/Xvfb y el instalador temporales;
+no iniciar vigilantes reales como fixture. Ver README_KALI.md.
+
 ## Cola de publicación y Wi-Fi (2026-10-12)
 
 Interfaz y receptor (2026-10-17): Preparar envío, Enviados y Organizar anteriores

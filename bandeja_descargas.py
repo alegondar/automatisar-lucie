@@ -106,7 +106,7 @@ def main():
     parser.add_argument("--descargas", "-d", default=None, help="Ruta alternativa de ~/Descargas")
     parser.add_argument("--destino", default=None, help="Ruta base destino (por defecto ~/Descargas/_lucie)")
     parser.add_argument("--sin-navegador", action="store_true", help="Iniciar sin abrir Google Chrome")
-    parser.add_argument("--icono", action="store_true", help="Mostrar el icono de Lucie junto al reloj de Windows")
+    parser.add_argument("--icono", action="store_true", help="Mostrar el icono de Lucie junto al reloj (Windows o Linux/X11)")
     args = parser.parse_args()
 
     config = ConfiguracionBandeja(ruta_config=args.config)
@@ -117,10 +117,8 @@ def main():
     if args.destino:
         config.ruta_destino_base = os.path.abspath(os.path.expanduser(args.destino))
 
-    if args.icono and sys.platform == "win32":
-        from bandeja.icono_windows import IconoWindows
-        icono = IconoWindows(config.puerto_servidor,
-                             lambda: abrir_dashboard_chrome(config.puerto_servidor))
+    if args.icono:
+        icono = crear_icono_bandeja(config.puerto_servidor)
         try:
             if not icono.adquirir_instancia():
                 if not args.sin_navegador:
@@ -141,8 +139,18 @@ def main():
         ejecutar_bandeja(config, args)
 
 
+def crear_icono_bandeja(puerto):
+    if sys.platform == "win32":
+        from bandeja.icono_windows import IconoWindows as Icono
+    elif sys.platform.startswith("linux"):
+        from bandeja.icono_linux import IconoLinux as Icono
+    else:
+        raise OSError("El icono de Lucie está disponible en Windows o Linux/X11.")
+    return Icono(puerto, lambda: abrir_dashboard_chrome(puerto))
+
+
 def ejecutar_bandeja(config, args, icono=None):
-    """Ciclo normal; el icono es opcional y Linux conserva el arranque de consola."""
+    """Ciclo normal; icono opcional en Windows o Linux/X11, sin duplicar vigilantes."""
     db = GestorBaseDatosBandeja()
     filtro = FiltroListaBlanca(config)
     detector = DetectorDescargasActivas()
