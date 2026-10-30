@@ -54,6 +54,18 @@ material existente; reintentos y Deshacer respetan las rutas registradas.
 CapCut conserva sus originales. Ver el mapa de módulos, API, estados, modo manual,
 reintentos, reversión y validaciones en `ESTADO_ACTUAL.md`.
 
+Corrección de exports sin sesión (2026-10-30): un nombre numérico de CapCut,
+como `1005.mp4` o `1010(5).mp4`, queda pendiente en Videos completados hasta
+elegir su sesión o indicar título y personaje explícitos. No copiarlo
+automáticamente a Sin publicar con ese número ni adivinar una sesión terminada.
+El resguardo con título requiere plan previo, confirmación y token de un uso;
+la copia usa personaje/mes/carpeta fechada/título.mp4 (o .mov), conserva el
+original de CapCut y permite Deshacer. No renombrar copias históricas.
+El retiro de originales editados se sigue sondeando aunque falte la carpeta
+de exports; los bloqueos de Windows se respetan y quedan visibles en el panel.
+Si un único clip numérico pertenece a un capítulo con título conocido, sugerir
+ese título para la nueva sesión; conservar el nombre del clip original.
+
 Retiro de crudos retenidos (2026-10-19): Terminé de editar registra el retiro
 pendiente cuando Windows obliga a copiar un clip en uso. Tras liberarse, verificar
 origen/copia por SHA-256, resguardar el original redundante en `_enviados/edicion`

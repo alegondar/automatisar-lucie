@@ -52,6 +52,7 @@ class GestorPublicacion:
         self.db = db
         self.cliente = cliente or ClienteLocalSend()
         self._planes = {}
+        self._planes_resguardo = {}
         self._dispositivos = {}
         self._trabajos = {}
         self._cancelaciones = {}
@@ -214,6 +215,48 @@ class GestorPublicacion:
         with self._lock:
             self._dispositivos[identificador] = dict(dispositivo)
         return {"id": identificador, **dispositivo}
+
+    def _export_sin_sesion(self, export_id):
+        if type(export_id) is not int:
+            raise ValueError("Export inválido.")
+        export = next((e for e in self.db.obtener_exports_pendientes() if e["id"] == export_id), None)
+        if not export or export.get("sesion_id") or export["estado"] != "sin_asignar":
+            raise ValueError("Export sin sesión no encontrado o ya guardado.")
+        origen = export["ruta_origen"]
+        sin_enlaces(origen)
+        capcut = os.path.realpath(self.config.obtener_carpeta_exportacion_capcut())
+        if os.path.commonpath([capcut, os.path.realpath(origen)]) != capcut:
+            raise ValueError("El export está fuera de la carpeta de CapCut.")
+        return export
+
+    def simular_resguardo(self, export_id, titulo, personaje):
+        from bandeja.edicion import simular_resguardo_export
+        identidad = self._identidad()
+        export = self._export_sin_sesion(export_id)
+        plan = simular_resguardo_export(export, os.path.dirname(identidad[1]),
+                                       self.config.carpeta_raiz_pendrive, titulo, personaje)
+        token = secrets.token_urlsafe(32)
+        with self._lock:
+            self._planes_resguardo = {k: v for k, v in self._planes_resguardo.items() if v["vence"] > time.monotonic()}
+            self._planes_resguardo[token] = {"identidad": identidad, "export_id": export_id,
+                                            "plan": plan, "vence": time.monotonic() + 300}
+        return {"token": token, **plan}
+
+    def resguardar(self, token, confirmacion, ruta_bitacora):
+        from bandeja.edicion import _resguardar_export_sin_sesion
+        if confirmacion is not True or not isinstance(token, str):
+            raise ValueError("Confirmá primero el plan de resguardo.")
+        with operacion_pendrive_exclusiva():
+            with self._lock:
+                revision = self._planes_resguardo.pop(token, None)
+            if not revision or revision["vence"] < time.monotonic():
+                raise ValueError("El plan venció o ya se utilizó. Revisá nuevamente.")
+            if self._identidad() != revision["identidad"]:
+                raise ValueError("Cambió el pendrive desde la revisión.")
+            export = self._export_sin_sesion(revision["export_id"])
+            destino = _resguardar_export_sin_sesion(export, os.path.dirname(revision["identidad"][1]),
+                self.db, self.config.carpeta_raiz_pendrive, ruta_bitacora, plan=revision["plan"])
+            return {"exito": True, "destino": destino}
 
     def buscar_dispositivos(self, receptor=None):
         validar_receptor(receptor)

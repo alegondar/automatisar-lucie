@@ -239,6 +239,12 @@ la copia en `videos completos` recibe el nombre de esa sesión. El export numér
 original de CapCut se conserva. Los archivos presentes al iniciar el vigilante
 no se importan automáticamente.
 
+Un export numérico sin sesión inequívoca queda pendiente en **Videos completados**:
+elegir su sesión o completar título y personaje, revisar el destino exacto y
+confirmar. Por ejemplo, la copia de `1005.mp4` puede llamarse `Lucie pedo.mp4`
+dentro de su carpeta fechada y su mes; el original numérico no se modifica.
+No se renombra material histórico automáticamente.
+
 La pestaña **Videos completados** muestra el export original con reproductor,
 el nombre de la edición, los pendientes, errores y la ruta enviada al pendrive.
 Una única sesión **En edición** tiene prioridad para el envío automático aunque

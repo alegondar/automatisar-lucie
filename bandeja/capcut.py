@@ -130,6 +130,7 @@ class VigilanteCapCut:
                 return []
 
             if not os.path.exists(self.ruta_capcut) or not os.path.isdir(self.ruta_capcut):
+                self._procesar_pendientes()
                 return []
 
             nuevos_listos: List[Dict[str, Any]] = []
@@ -219,13 +220,17 @@ class VigilanteCapCut:
                         self._exports_detectados.pop(os.path.normcase(os.path.abspath(info["ruta_absoluta"])), None)
                         logger.error(f"[CapCut] Error en callback_nuevo_export: {e}")
 
-            if self.callback_sondeo:
-                try:
-                    self.callback_sondeo()
-                except Exception as e:
-                    logger.error(f"[CapCut] Error al procesar pendientes: {e}")
+            self._procesar_pendientes()
 
             return nuevos_listos
+
+    def _procesar_pendientes(self):
+        """Los traslados del pendrive no dependen de la carpeta de exports."""
+        if self.callback_sondeo:
+            try:
+                self.callback_sondeo()
+            except Exception as e:
+                logger.error(f"[CapCut] Error al procesar pendientes: {e}")
 
     def revisar_export_sesion(self, sesion, otras_sesiones=()):
         """Revisa solo un export de la ventana de la sesión confirmada.

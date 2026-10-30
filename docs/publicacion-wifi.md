@@ -2,8 +2,11 @@
 
 Los exports nuevos se resguardan en `LucieSinReglas/videos completos/videos sin publicar/`.
 Los vinculados a una sesión conservan personaje y carpeta de edición. Los exports
-sin una sesión inequívoca se copian con su nombre original directamente en la cola,
-sin inventar una asociación. Si un nombre ya contiene otro video, se usa un sufijo
+sin una sesión inequívoca y con un nombre legible se resguardan por ese nombre,
+sin inventar una asociación. Un export numérico sin sesión queda pendiente de
+elegir sesión o título/personaje en Videos completados: Revisar título y guardar
+muestra origen y destino antes de confirmar. La copia con título explícito usa
+personaje/mes/carpeta fechada/título.mp4 (o .mov). Si un nombre ya contiene otro video, se usa un sufijo
 de versión derivado del hash. Los originales de CapCut no se modifican.
 
 ```text
@@ -108,7 +111,7 @@ copia del celular ni modifica ninguna publicación en redes.
 La lista contiene únicamente videos y fotos que existen dentro de
 `videos completos/videos sin publicar/` del pendrive vinculado. No se incluyen
 directamente originales de CapCut, crudos ni archivos de ya editados. Un export
-copiado a la cola puede conservar un nombre numérico de CapCut; la tarjeta
+histórico copiado a la cola puede conservar un nombre numérico de CapCut; la tarjeta
 muestra su carpeta para distinguirlo y ofrece una vista previa de esa copia.
 
 Los archivos se agrupan en Lucie, Roli, Mailen y **Sin asignar**. Se usa primero

@@ -1119,6 +1119,10 @@ dialog::backdrop { background: #020712c9; }
   .wifi-historial-fila button { justify-self: start; }
 }
 .edicion-pendientes-card { padding: 16px 20px; }
+.edicion-aviso-traslados { padding: 14px 18px; margin-bottom: 16px; border: 1px solid #92713e; border-radius: 8px; background: #241d16; color: #ffd18a; overflow-wrap: anywhere; }
+.export-sin-sesion { display: grid; gap: 10px; width: 100%; padding-top: 14px; border-top: 1px solid var(--border); }
+.export-sin-sesion label { display: grid; gap: 6px; font-size: .85rem; }
+.export-sin-sesion input, .export-sin-sesion select { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
 .edicion-pendientes-summary { display: flex; justify-content: space-between; align-items: center; gap: 12px; cursor: pointer; user-select: none; }
 .edicion-pendientes-cuerpo { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
 #contenedor-traslados-pendientes, #contenedor-esperando-export { display: flex; flex-direction: column; gap: 10px; }
