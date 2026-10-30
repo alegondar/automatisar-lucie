@@ -38,7 +38,7 @@ async function probar() {
     ['lucie', '<archivo especial>.mp4', 'video', 'lucie/Cafe'],
     ['roli', 'Roli.mp4', 'video', 'roli/Cancion'],
     ['mailen', 'Foto.png', 'imagen', 'mailen/Plaza'],
-    ['sin_asignar', '1010(6).mp4', 'video', 'Sin publicar (raíz)']
+    ['sin_asignar', '1010(5).mp4', 'video', 'Sin publicar (raíz)']
   ].map(([personaje, nombre, tipo, carpeta_relativa], indice) => ({id: 'archivo-' + indice,
     nombre, personaje, tipo, carpeta_relativa, tamano: 5000, mtime: 1,
     id_media: 'publicacion:archivo-' + indice, ruta: 'videos completos/videos sin publicar/' + nombre}));
@@ -54,15 +54,23 @@ async function probar() {
   let archivados = new Set();
   let deshechos = 0;
   let organizados = 0;
+  let retenerLista = false;
+  const listasPendientes = [];
+  let respuestaEstado = null;
+  const sondeos = [];
   const llamadas = [];
   const evento = {id_operacion: 'operacion-temporal', ruta_destino: 'videos completos/videosPublicados/mailen/Foto.png',
     dispositivo: receptor.alias, fecha: '2026-10-12'};
   async function apiFetch(url, opciones) {
     const cuerpo = opciones ? JSON.parse(opciones.body) : null;
     llamadas.push({url, cuerpo});
-    if (url.endsWith('/lista')) return {conectado: true, carpeta: 'Pendrive temporal',
+    if (url.endsWith('/lista')) {
+      const respuesta = {conectado: true, carpeta: 'Pendrive temporal',
       archivos: datos.filter(a => !archivados.has(a.id)), historial: archivados.size ? [evento] : [],
       organizacion_pendiente: [{id: 'carpeta-antigua', ruta: 'videos completos/roli', tipo: 'carpeta_pendiente', personaje: 'roli'}]};
+      if (retenerLista) return new Promise(resolve => listasPendientes.push(() => resolve(respuesta)));
+      return respuesta;
+    }
     if (url.endsWith('/buscar')) {
       assert.strictEqual(cuerpo.receptor, el('wifi-app').value || 'lucie');
       return {dispositivos: [receptor, oficial]};
@@ -87,6 +95,7 @@ async function probar() {
       return {id: 'envio-temporal'};
     }
     if (url.includes('/estado?id=')) {
+      if (respuestaEstado) return respuestaEstado();
       archivados = new Set(enviados);
       return {estado: 'completado', mensaje: 'Recibido', bytes_enviados: 5000, total_bytes: 5000,
         recibidos: ['Foto.png'], publicados: [evento], dispositivo: receptor};
@@ -113,7 +122,7 @@ async function probar() {
     Option: function(texto, valor) { const opcion = new Elemento('option'); opcion.textContent = texto; opcion.value = valor; return opcion; },
     confirm: () => true,
     sessionStorage: {getItem: k => almacen.get(k), setItem: (k, v) => almacen.set(k, v), removeItem: k => almacen.delete(k)},
-    setTimeout: () => { throw Error('No se espera más sondeo tras un envío completado.'); }
+    setTimeout: funcion => { sondeos.push(funcion); return sondeos.length; }
   });
   function tarjetas() {
     return el('wifi-videos').children.flatMap(grupo => grupo.children.filter(c => c.className === 'wifi-archivos-grid')
@@ -139,6 +148,9 @@ async function probar() {
   assert.strictEqual(el('wifi-dispositivo').children.length, 2, 'Lucie no mezcla la app LocalSend de la misma IP.');
   assert(el('wifi-dispositivo').children[1].textContent.includes(':53318'));
   el('wifi-dispositivo').value = receptor.id;
+  await el('wifi-dispositivo').emitir('change');
+  assert.strictEqual(el('wifi-conexion').open, false, 'Elegir celular deja visible el destino y pliega los controles.');
+  assert.strictEqual(el('wifi-conexion-resumen').textContent, 'Cambiar celular o app');
   esperados = ['archivo-2'];
   await el('wifi-preparar').emitir('click');
   const confirmacionAnterior = el('wifi-plan').children[3];
@@ -165,6 +177,8 @@ async function probar() {
   await el('wifi-plan').children[3].emitir('click');
   assert.deepStrictEqual(enviados, ['archivo-3']);
   assert.strictEqual(almacen.size, 0);
+  assert.strictEqual(sondeos.length, 0, 'Un envío completado no sigue sondeando.');
+  assert.strictEqual(tarjetas().length, 0, 'El archivo recibido y archivado desaparece del panel pendiente.');
   assert.strictEqual(el('wifi-cancelar').style.display, 'none');
   assert.strictEqual(el('wifi-historial').children[0].children[0].children[0].textContent, 'Foto.png');
   assert.strictEqual(el('wifi-historial').children[0].children[0].children[2].children[1].textContent, evento.ruta_destino);
@@ -178,11 +192,17 @@ async function probar() {
   el('wifi-personaje').value = 'sin_asignar'; el('wifi-filtro').value = '';
   await el('wifi-personaje').emitir('change');
   await el('wifi-todos').emitir('click'); esperados = ['archivo-4'];
+  assert.strictEqual(el('wifi-preparar').disabled, true);
+  assert(el('wifi-siguiente').textContent.includes('1010(5).mp4'), 'Se indica qué archivo necesita personaje antes de revisar.');
+  assert.strictEqual(el('wifi-seleccion-detalle').children[0].children[0].textContent, '1010(5).mp4');
   const antes = llamadas.filter(l => l.url.endsWith('/simular')).length;
   await el('wifi-preparar').emitir('click');
   assert.strictEqual(llamadas.filter(l => l.url.endsWith('/simular')).length, antes, 'Sin personaje no se prepara ni envía.');
   const asignacion = tarjetas()[0].children.find(c => c.tag === 'label' && c.children.some(e => e.tag === 'select')).children[0];
-  asignacion.value = 'roli'; await asignacion.emitir('change');
+  const asignacionLateral = el('wifi-seleccion-detalle').children[0].children.find(c => c.tag === 'label').children[0];
+  asignacionLateral.value = 'roli'; await asignacionLateral.emitir('change');
+  assert.strictEqual(el('wifi-preparar').disabled, false, 'Elegir personaje junto al nombre habilita la revisión.');
+  assert.strictEqual(tarjetas()[0].children.find(c => c.tag === 'label' && c.children.some(e => e.tag === 'select')).children[0].value, 'roli', 'La tarjeta refleja la elección del panel lateral.');
   await el('wifi-preparar').emitir('click');
   assert.strictEqual(llamadas.at(-1).cuerpo.personajes['archivo-4'], 'roli');
   const vieja = el('wifi-plan').children[3];
@@ -202,6 +222,7 @@ async function probar() {
   await el('wifi-tab-envio').emitir('click');
   assert.strictEqual(el('wifi-vista-envio').style.display, 'grid');
   el('wifi-app').value = 'localsend'; await el('wifi-app').emitir('change');
+  assert.strictEqual(el('wifi-conexion').open, true, 'Cambiar la app permite buscar un nuevo receptor.');
   assert.strictEqual(el('wifi-dispositivo').value, '');
   assert.strictEqual(el('wifi-puerto').value, '53317');
   await el('wifi-buscar').emitir('click');
@@ -223,6 +244,56 @@ async function probar() {
   liberarPlan(); await pendiente;
   assert.strictEqual(el('wifi-plan').style.display, 'none', 'Una revisión tardía no reaparece después de cambiar la app.');
   assert.deepStrictEqual(enviados, ['archivo-3'], 'Buscar, conectar o cambiar de app nunca inicia un envío.');
+
+  // La selección sobrevive a una actualización sin cambios; una versión nueva
+  // del archivo o una respuesta vieja nunca habilita una confirmación anterior.
+  retenerPlan = false;
+  el('wifi-app').value = 'lucie'; await el('wifi-app').emitir('change');
+  await el('wifi-conectar').emitir('click');
+  await el('wifi-preparar').emitir('click');
+  const confirmarArchivoViejo = el('wifi-plan').children[3];
+  await ventana.cargarPublicacionWifi();
+  assert.strictEqual(el('wifi-plan').style.display, 'block', 'La misma versión conserva su revisión.');
+  datos[3] = {...datos[3], mtime: 2};
+  await ventana.cargarPublicacionWifi();
+  assert.strictEqual(el('wifi-plan').style.display, 'none', 'Cambiar el archivo en la misma ruta invalida la revisión.');
+  const enviosAntes = llamadas.filter(l => l.url.endsWith('/enviar')).length;
+  await confirmarArchivoViejo.emitir('click');
+  assert.strictEqual(llamadas.filter(l => l.url.endsWith('/enviar')).length, enviosAntes);
+  retenerLista = true;
+  const listaVieja = ventana.cargarPublicacionWifi();
+  archivados.add('archivo-3');
+  const listaNueva = ventana.cargarPublicacionWifi();
+  listasPendientes[1](); await listaNueva;
+  listasPendientes[0](); await listaVieja;
+  assert.strictEqual(tarjetas().length, 0, 'Una lista tardía no vuelve a mostrar el archivo archivado.');
+  assert.strictEqual(el('wifi-preparar').disabled, true);
+  retenerLista = false; archivados.clear(); await ventana.cargarPublicacionWifi();
+
+  // Cada recepción archivada sale de la selección aunque otro archivo del
+  // mismo envío siga pendiente o termine fallando; no se vuelve a enviar.
+  el('wifi-personaje').value = 'lucie'; await el('wifi-personaje').emitir('change');
+  await el('wifi-todos').emitir('click'); esperados = ['archivo-0', 'archivo-1'];
+  const parcial = {...evento, ruta_origen: datos[0].ruta};
+  respuestaEstado = () => {
+    archivados.add('archivo-0');
+    return {estado: 'en_curso', mensaje: 'Enviando segundo archivo', bytes_enviados: 5000, total_bytes: 10000,
+      recibidos: [datos[0].nombre], publicados: [parcial], dispositivo: receptor};
+  };
+  await el('wifi-preparar').emitir('click');
+  await el('wifi-plan').children[3].emitir('click');
+  assert.strictEqual(tarjetas().length, 1, 'El primero desaparece sin esperar al final del envío.');
+  assert.strictEqual(tarjetas()[0].children[0].children[1].textContent, datos[1].nombre);
+  assert(el('wifi-resumen-seleccion').textContent.startsWith('1 archivo'));
+  respuestaEstado = () => ({estado: 'error', mensaje: 'Envío parcial', error: 'Rechazado segundo archivo',
+    bytes_enviados: 5000, total_bytes: 10000, recibidos: [datos[0].nombre], publicados: [parcial], dispositivo: receptor});
+  await sondeos.shift()();
+  assert.strictEqual(tarjetas().length, 1, 'Un fallo posterior conserva solo el video no recibido en pendientes.');
+  assert.strictEqual(almacen.size, 0);
+  assert.strictEqual(el('wifi-preparar').disabled, false, 'El pendiente se puede revisar para un nuevo envío explícito.');
+  await el('wifi-seleccion-detalle').children[0].children[1].emitir('click');
+  assert.strictEqual(tilde(tarjetas()[0]).checked, false, 'Quitar del resumen desmarca la tarjeta.');
+  assert.strictEqual(el('wifi-preparar').disabled, true);
   const recarga = new Map([...html.matchAll(/id="([^"]+)"/g)].map(m => [m[1], new Elemento()]));
   recarga.get('wifi-app').value = 'lucie';
   vm.runInNewContext(fs.readFileSync('bandeja/web/wifi.js', 'utf8'), {

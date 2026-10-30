@@ -317,6 +317,34 @@ class TestPublicacionWifi(unittest.TestCase):
             with open(archivo["destino"], "rb") as f:
                 self.assertEqual(self.receptor.archivos[archivo["id"]], f.read())
 
+    def test_numerico_elegido_exige_personaje_y_archiva_solo_ese_video(self):
+        numerico = self.crear("sin asignar/octubre - 2026/1010(5).mp4", b"video numerico elegido")
+        otro = self.crear("lucie/octubre - 2026/lucie pedo.mp4", b"otro export conservado")
+        inventario = self.gestor.listar()["archivos"]
+        elegido = next(a for a in inventario if a["nombre"] == "1010(5).mp4")
+        with self.assertRaisesRegex(ValueError, r"1010\(5\).mp4"):
+            self.gestor.simular([elegido["id"]], self.dispositivo["id"])
+        self.assertEqual(self.receptor.archivos, {})
+        self.assertTrue(os.path.isfile(numerico))
+        plan = self.gestor.simular([elegido["id"]], self.dispositivo["id"], {elegido["id"]: "lucie"})
+        self.assertEqual(len(plan["archivos"]), 1)
+        self.assertEqual(plan["archivos"][0]["destino_rel"],
+                         "videos completos/videosPublicados/lucie/octubre - 2026/1010(5).mp4")
+        resultado = self.esperar(self.gestor.iniciar_envio(plan["token"], True)["id"])
+        self.assertEqual(resultado["estado"], "completado", resultado)
+        self.assertEqual(self.receptor.archivos, {elegido["id"]: b"video numerico elegido"})
+        self.assertFalse(os.path.exists(numerico))
+        elegido_sha = hashlib.sha256(b"video numerico elegido").hexdigest()
+        self.assertEqual(calcular_sha256(plan["archivos"][0]["destino"]), elegido_sha)
+        self.assertEqual(calcular_sha256(otro), hashlib.sha256(b"otro export conservado").hexdigest())
+        listado = self.gestor.listar()
+        self.assertNotIn(elegido["id"], [a["id"] for a in listado["archivos"]])
+        self.assertIn("lucie pedo.mp4", [a["nombre"] for a in listado["archivos"]])
+        self.assertEqual(listado["historial"][0]["sha256"], elegido_sha)
+        self.gestor.deshacer(resultado["publicados"][0]["id_operacion"])
+        self.assertEqual(calcular_sha256(numerico), elegido_sha)
+        self.assertEqual(self.gestor.listar()["historial"], [])
+
     def test_transferencia_real_http_confirma_hash_archiva_y_deshace(self):
         sesion = crear_sesion(self.db, ["lucie/Cafe/clip.mp4"], "lucie", "Cafe")
         self.db.actualizar_sesion_edicion(sesion["id"], video_completo_ruta=self.video, estado="completado")

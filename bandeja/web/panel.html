@@ -105,6 +105,8 @@
       <aside class="wifi-lateral" aria-label="Destino y revisión del envío">
       <div class="card" id="wifi-paso-celular">
         <div class="wifi-paso"><span>2</span><div><h3>Conectá tu celular</h3><p>Misma Wi-Fi y app abierta en el teléfono.</p></div></div>
+        <p id="wifi-destino" class="wifi-destino">Todavía no elegiste un celular.</p>
+        <details id="wifi-conexion" class="wifi-conexion" open><summary id="wifi-conexion-resumen">Buscar o elegir celular</summary>
         <div class="wifi-conexion-barra"><label class="wifi-campo" for="wifi-app">App que va a recibir
           <select id="wifi-app"><option value="lucie">Lucie Recibir</option><option value="localsend">LocalSend</option></select>
         </label>
@@ -112,18 +114,20 @@
         <p id="wifi-busqueda-estado" class="wifi-ayuda" role="status">Abrí Lucie Recibir en tu celular y tocá Buscar.</p>
         <label class="wifi-campo" for="wifi-dispositivo">Celular encontrado
           <select id="wifi-dispositivo"><option value="">Elegí tu celular</option></select></label>
-        <p id="wifi-destino" class="wifi-destino">Todavía no elegiste un celular.</p>
         <details class="wifi-detalles"><summary>Conectar manualmente por IP</summary>
           <p>Usá la dirección que muestra la app elegida en el celular. La búsqueda automática vuelve a consultar la red si cambia la IP.</p>
           <label class="wifi-campo">IP del celular <input id="wifi-ip" placeholder="192.168.1.20" autocomplete="off"></label>
           <label class="wifi-campo">Puerto <input id="wifi-puerto" type="number" value="53318" min="1" max="65535"></label>
           <button class="btn-sm" id="wifi-conectar">Conectar por IP</button>
         </details>
+        </details>
       </div>
       <div class="card wifi-revision" id="wifi-paso-revision">
         <div class="wifi-paso"><span>3</span><div><h3>Revisá y enviá</h3><p>El envío empieza recién cuando lo confirmás.</p></div></div>
         <p id="wifi-resumen-seleccion" class="wifi-resumen">Ningún archivo seleccionado.</p>
-        <button class="btn-sm" id="wifi-preparar" disabled>Revisar antes de enviar</button>
+        <div id="wifi-seleccion-detalle" class="wifi-seleccion-detalle" aria-label="Archivos elegidos para enviar"></div>
+        <p id="wifi-siguiente" class="wifi-siguiente" role="status" aria-live="polite">Marcá el video que querés enviar.</p>
+        <button class="btn-sm wifi-principal" id="wifi-preparar" aria-describedby="wifi-siguiente" disabled>Revisar envío</button>
         <details class="wifi-detalles"><summary>Mi celular pide un PIN</summary>
           <label class="wifi-campo">PIN del receptor <input id="wifi-pin" type="password" autocomplete="off"></label></details>
         <div id="wifi-plan" style="display:none;"></div>

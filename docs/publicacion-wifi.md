@@ -35,7 +35,7 @@ Una copia deshecha no vuelve a enviarse automáticamente.
    [LocalSend en el celular](https://localsend.org/download), en la misma
    red Wi-Fi que la PC. No hace falta instalar LocalSend en la PC: el emisor está
    integrado al dashboard y usa la biblioteca estándar de Python.
-4. Pulsar **Buscar celular**, elegir el receptor y **Revisar antes de enviar**.
+4. Pulsar **Buscar celular**, elegir el receptor y **Revisar envío**.
    La lista muestra el nombre, IP y puerto. La búsqueda no selecciona ni envía
    automáticamente. Si no aparece, desplegar **Conectar manualmente por IP**
    e ingresar los datos de la app elegida (53318 para Lucie, 53317 para LocalSend).
@@ -47,6 +47,21 @@ Una copia deshecha no vuelve a enviarse automáticamente.
    los videos se trasladan a `videos completos/videosPublicados/<personaje>/`,
    conservando las carpetas del capítulo y el nombre del archivo. La vista
    **Enviados** ofrece buscar, ver la ubicación y **Volver a Sin publicar**.
+
+El panel derecho muestra el nombre exacto de cada archivo seleccionado y permite
+quitarlo del envío. Para nombres numéricos como `1010(5).mp4`, elegir su personaje
+en ese resumen o en la tarjeta: ambas elecciones se mantienen sincronizadas.
+La pista encima de **Revisar envío** indica qué falta; el botón se destaca en
+celeste cuando están elegidos los archivos, sus personajes y el celular.
+Después de elegir el receptor, **Cambiar celular o app** permite abrir de nuevo
+los controles. Revisar sigue mostrando el plan antes de **Confirmar y enviar**.
+
+Cada archivo confirmado y archivado desaparece de Preparar envío aunque aún se
+estén enviando otros. Si alguno falla, permanece pendiente; los recibidos quedan
+en Enviados y en su carpeta de `videosPublicados`. Una respuesta vieja del
+listado no vuelve a incorporarlos. Si el archivo seleccionado cambia mientras
+se revisa, se exige una revisión nueva. Tener una copia en el teléfono obtenida
+por otro medio no genera por sí solo una recepción confirmada en Lucie.
 
 La pantalla separa **Preparar envío**, **Enviados** y **Organizar anteriores**.
 En escritorio, la selección y el destino quedan uno al lado del otro; en móvil

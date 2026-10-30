@@ -1,4 +1,57 @@
-# Estado actual del sistema — 2026-10-23
+# Estado actual del sistema — 2026-10-30
+
+## Selección y actualización del envío al celular (2026-10-30)
+
+El usuario confirmó que el video seleccionado era `1010(5).mp4`. La captura
+mostraba que faltaba elegir su personaje, aunque el aviso aparecía al pie del
+panel. Ahora el lateral muestra los nombres seleccionados, permite quitar un
+archivo y elegir allí el personaje de cada numérico, sincronizado con su tarjeta.
+La revisión se habilita solo con archivos, personajes y celular elegidos; una
+pista visible explica lo que falta. Los botones de revisar y confirmar se
+destacan en celeste cuando están habilitados. Al elegir celular se pliegan los
+controles de búsqueda bajo «Cambiar celular o app», dejando visible el destino.
+El lateral permite desplazarse si excede el alto disponible.
+
+Cada archivo archivado confirmado sale de la galería y de la selección durante
+el sondeo, sin esperar a que terminen los demás. Un fallo posterior conserva
+los no recibidos. Los listados tardíos se descartan; cambiar la versión de un
+archivo seleccionado invalida también una revisión en curso o ya preparada.
+El traslado existente sigue usando aceptación, SHA-256, registro, destino por
+personaje/mes y Deshacer; no se alteró ese contrato ni se ocultaron pendientes
+por suposición.
+
+Diagnóstico real de solo lectura, separado de las pruebas: `lucie pedo.mp4`
+también existe en la cola y está identificado como Lucie; es distinto del
+numérico seleccionado. Ninguna de las ocho copias pendientes coincidió por
+SHA-256 con las recepciones del historial mostrado. Falta identificar cuáles
+son los anteriores que el usuario ya tiene en el celular; no se trasladaron
+ni marcaron como recibidos. La conexión a la IP de la captura fue rechazada
+con WinError 10061: abrir Lucie Recibir y buscar el celular nuevamente. No se
+envió material real ni se certificó una nueva recepción en el Motorola.
+
+Validación Windows/Python 3.13: **487 pruebas, OK con 12 omisiones**, **97.604 s**;
+omisiones por capacidades exclusivas de Linux o privilegios de symlinks ausentes.
+Guardia y aserciones conservadas. Manifiesto real exclusivamente contado durante
+la suite: **868 / 868**, estable. Log externo:
+`%TEMP%/lucie-wifi-tests-5e55cd62.log`. Nueva prueba con receptor HTTP temporal:
+elegir el numérico, exigir personaje, archivar solo ese video, conservar otro
+export con nombre legible y deshacer verificando hashes. UI de publicación
+(29 llamadas simuladas), CSRF, capítulos, edición e incrementales correctas;
+regresiones de selección lateral, cambios de versión, listados tardíos y envío
+parcial. AST **0/33**, auditoría de **249 archivos** e historial sin infracciones.
+Chrome headless con HTML/API sintéticos verificó estados pendiente/listo,
+botón habilitado celeste y ausencia de desborde horizontal en escritorio y ancho
+estrecho. Capturas fuera del repositorio. Linux nativo no ejecutado.
+
+Trabajo iniciado en `feat/lucie-recibir`, base `94e9dbd`, sin commits locales
+anteriores pendientes. El usuario autorizó integrar `5f65044` (inicio con icono
+en Linux) y hacer commit/push de este lote el 2026-10-30. Se integró por
+fast-forward, conservando las mejoras locales del panel y ambas secciones de
+estado. No se modificó master. Los cambios del panel requieren **Ctrl+F5**;
+se sirven desde disco y no necesitan reiniciar el servicio. No se iniciaron
+vigilantes reales como fixtures ni se modificaron bases/configuraciones o
+material real.
+
 
 ## Inicio automático e icono en Kali/XFCE (2026-10-25)
 

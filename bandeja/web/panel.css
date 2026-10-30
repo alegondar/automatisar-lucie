@@ -1035,7 +1035,7 @@ dialog::backdrop { background: #020712c9; }
 .wifi-distribucion .card { margin-bottom: 0; }
 .wifi-saltos { display: none; }
 .wifi-distribucion .card { scroll-margin-top: 115px; }
-.wifi-lateral { position: sticky; top: calc(var(--header-height) + 16px); display: grid; gap: 18px; min-width: 0; }
+.wifi-lateral { position: sticky; top: calc(var(--header-height) + 16px); display: grid; gap: 14px; min-width: 0; max-height: calc(100dvh - var(--header-height) - 32px); overflow-y: auto; scrollbar-gutter: stable; padding: 2px; }
 .wifi-paso { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 22px; }
 .wifi-paso > span { display: grid; place-items: center; flex-shrink: 0; width: 30px; height: 30px; border-radius: 9px; background: #00f0ff12; color: var(--accent); font-weight: 700; }
 .wifi-paso h3 { font-size: 1.05rem; margin: 0 0 5px; }
@@ -1067,8 +1067,28 @@ dialog::backdrop { background: #020712c9; }
 .wifi-lateral .wifi-paso { margin-bottom: 14px; }
 .wifi-lateral .wifi-campo { margin: 10px 0; }
 .wifi-lateral .wifi-detalles { margin-top: 14px; padding-top: 12px; }
-.wifi-conexion-barra { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: end; }
-.wifi-conexion-barra #wifi-buscar { width: auto; margin: 0 0 10px; min-height: 44px; }
+.wifi-conexion-barra { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
+.wifi-conexion-barra #wifi-buscar { width: 100%; margin: 0; min-height: 44px; }
+.wifi-conexion { margin-top: 12px; }
+.wifi-conexion > summary { cursor: pointer; color: var(--accent); font-size: .85rem; padding: 6px 0; }
+#wifi-paso-celular[data-estado="listo"] { border-color: #00f0ff60; }
+.wifi-asignacion { display: grid; gap: 8px; margin-top: 14px; font-size: .85rem; }
+.wifi-archivo > a { display: inline-block; margin: 4px 0; }
+.wifi-seleccion-detalle { display: grid; gap: 8px; max-height: 34vh; overflow-y: auto; }
+.wifi-seleccion-fila { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--card-alt); font-size: .85rem; }
+.wifi-seleccion-fila strong { overflow-wrap: anywhere; }
+.wifi-seleccion-fila > span { grid-column: 1 / -1; color: var(--text-muted); font-size: .8rem; }
+.wifi-seleccion-fila .wifi-asignacion { grid-column: 1 / -1; margin-top: 4px; }
+.wifi-quitar { align-self: start; background: transparent; color: var(--text-muted); border: 0; text-decoration: underline; padding: 2px; cursor: pointer; font: inherit; font-size: .8rem; }
+.wifi-quitar:hover, .wifi-quitar:focus-visible { color: var(--accent); }
+.wifi-siguiente { margin: 14px 0; font-size: .85rem; color: var(--text-muted); line-height: 1.6; }
+.wifi-siguiente[data-estado="pendiente"] { color: #ffd18a; }
+.wifi-siguiente[data-estado="listo"] { color: var(--accent); }
+#sec-publicacion .wifi-principal:not(:disabled) { background: var(--accent); color: #03131c; border: 1px solid var(--accent); font-weight: 700; min-height: 46px; }
+#sec-publicacion .wifi-principal:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+#sec-publicacion .wifi-principal:disabled { opacity: .55; cursor: not-allowed; }
+#sec-publicacion .wifi-principal:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+#wifi-plan > .wifi-principal { width: 100%; margin: 12px 0 4px; }
 #wifi-busqueda-estado { margin: 12px 0; line-height: 1.6; }
 .wifi-estado:not(:empty) { padding: 14px; margin-top: 18px; border: 1px solid var(--border); background: var(--card-alt); border-radius: 8px; font-size: .85rem; overflow-wrap: anywhere; }
 #wifi-progreso { margin-top: 14px; accent-color: var(--accent); height: 9px; }
@@ -1090,7 +1110,7 @@ dialog::backdrop { background: #020712c9; }
 }
 @media (max-width: 760px) {
   .wifi-distribucion { grid-template-columns: 1fr; }
-  .wifi-lateral { position: static; }
+  .wifi-lateral { position: static; max-height: none; overflow: visible; padding: 0; }
   .wifi-saltos { display: flex; flex-wrap: wrap; gap: 16px; font-size: .85rem; }
   .wifi-saltos a { color: var(--accent); text-underline-offset: 4px; }
   .wifi-cabecera { align-items: flex-start; flex-direction: column; gap: 16px; }
