@@ -16,4 +16,4 @@
 
 - [x] 3.1 Ejecutar suite Python hermética y regresiones JS, comprobar sintaxis y auditorías anti-borrado/repositorio; cerrar bandeja real antes de suite y registrar conteo de manifiesto antes/después si está montado, sin otras lecturas reales durante pruebas.
 - [x] 3.2 Comprobar en navegador temporal/API sintética los selectores de Luna, creación y filtros, sin operaciones sobre material real; registrar validación y límites de SO en ESTADO_ACTUAL.md y revisar el diff sin incluir notas locales preexistentes.
-- [ ] 3.3 Con la autorización explícita de publicación para este lote, hacer commit y push de archivos seleccionados en feat/lucie-recibir y verificar SHA remoto; si no se autoriza, conservar cambios locales y documentarlo.
+- [x] 3.3 Con la autorización explícita de publicación para este lote, hacer commit y push de archivos seleccionados en feat/lucie-recibir y verificar SHA remoto; si no se autoriza, conservar cambios locales y documentarlo.
