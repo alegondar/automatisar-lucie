@@ -164,4 +164,41 @@ async function probar() {
   assert.equal(p.errores.length, 1);
   console.log('OK: cierre directo, pendientes, lotes acotados, cancelación, ID y errores.');
 }
-probar().catch(error => {console.error(error); process.exitCode = 1;});
+probar().then(probarTitulos).catch(error => {console.error(error); process.exitCode = 1;});
+
+async function probarTitulos() {
+  const nodos = new Map();
+  const nodo = id => {
+    if (!nodos.has(id)) nodos.set(id, {value: '', style: {}, innerText: ''});
+    return nodos.get(id);
+  };
+  const llamadas = [];
+  const ctx = vm.createContext({
+    document: {getElementById: nodo},
+    apiFetch: async (ruta, opciones) => {llamadas.push({ruta, datos: JSON.parse(opciones.body)}); return {};},
+    cargarDatos: async () => {},
+    datosEstado: {},
+    mostrarError: msg => {throw Error(msg);},
+  });
+  vm.runInContext(funcion('validarNombreEscena') + funcion('empezarCapitulo'), ctx);
+  for (const titulo of ['Luna de paseo', 'LUCIE 2026', 'Roli y Mailén', 'Café con Luna', 'Mix X1F 09',
+                         'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz', '0123456789']) {
+    assert.equal(ctx.validarNombreEscena(titulo), null, titulo);
+    nodo('sel-capitulo-personaje').value = 'luna';
+    nodo('txt-capitulo-nombre').value = titulo;
+    await ctx.empezarCapitulo();
+    assert.deepEqual(llamadas.at(-1), {ruta: '/api/capitulos/empezar', datos: {personaje: 'luna', nombre: titulo}},
+      'El título debe enviarse conservando mayúsculas, acentos y números');
+  }
+  const cantidad = llamadas.length;
+  const invalidos = ['', '   ', 'Luna/otra', 'Luna\\otra', 'Luna..otra', 'Luna.', 'CON', 'con.mp4', 'NUL', 'LPT9.txt',
+    'a'.repeat(101), ...Array.from('<>:"|?*', c => 'Luna' + c + 'otra'),
+    ...Array.from({length: 32}, (_, n) => 'Luna' + String.fromCharCode(n) + 'otra')];
+  for (const titulo of invalidos) {
+    assert(ctx.validarNombreEscena(titulo), 'Debe rechazar ' + JSON.stringify(titulo));
+    nodo('txt-capitulo-nombre').value = titulo;
+    await ctx.empezarCapitulo();
+    assert.equal(llamadas.length, cantidad, 'Los nombres inválidos no deben llamar a la API');
+  }
+  console.log('Títulos UI OK: mayúsculas, acentos y números intactos; rutas, reservados y controles bloqueados.');
+}

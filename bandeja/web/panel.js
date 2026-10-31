@@ -2024,10 +2024,10 @@
       if (trim.endsWith('.') || trim.endsWith(' ')) {
         return "El nombre no puede terminar en punto ni en espacio.";
       }
-      if (trim.includes('..') || trim.includes('/') || trim.includes('\\\\')) {
+      if (trim.includes('..') || trim.includes('/') || trim.includes('\\')) {
         return "El nombre no puede contener '/', '\\\\' ni '..'.";
       }
-      if (/[<>:"|?*\\x00-\\x1F]/.test(trim)) {
+      if (/[<>:"|?*\x00-\x1F]/.test(trim)) {
         return "Contiene caracteres inválidos (< > : \\\" | ? * o de control).";
       }
       const reservados = ["CON", "PRN", "AUX", "NUL",

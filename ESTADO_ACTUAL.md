@@ -1,5 +1,28 @@
 # Estado actual del sistema — 2026-10-31
 
+## Títulos con mayúsculas, acentos y números (2026-10-31)
+
+Corregida la validación del dashboard para capítulos y escenas: la expresión
+regular de caracteres de control estaba doblemente escapada y rechazaba letras
+mayúsculas y números legítimos. El rango ahora representa U+0000–U+001F y la
+comprobación de separador Windows bloquea una sola barra inversa. Se conservan
+acentos, mayúsculas, espacios y números del título enviado a la API, junto con
+las restricciones vigentes de longitud, nombres reservados y rutas.
+Resuelve el fallo de formulario descubierto al incorporar Luna; no cambia el
+backend ni los nombres o rutas del material existente.
+
+Validación Linux: la nueva regresión falla con el JS anterior en `Luna de paseo`
+y pasa con la corrección. Comprueba A–Z, a–z, 0–9, acentos y títulos mixtos, el
+payload sin cambios y que separadores, caracteres inválidos, nombres reservados
+y 32 controles no disparen solicitudes API. Cinco regresiones UI correctas,
+sintaxis JS y diff OK; AST 0/36 y auditoría repo/historial 0/260. Chrome con perfil
+temporal/API sintética confirma creación con `Luna de paseo`, filtros y selectores
+a 1440/390 px. Capturas/herramientas fuera de Git. No se ejecutó suite Python
+completa porque el lote solo modifica el validador JS; Windows nativo no ejecutado.
+Sin pruebas sobre material real ni reiniciar vigilantes como fixture. Usuario
+autorizó expresamente commit y push. Basta Ctrl+F5; no requiere reinicio de Lucie.
+
+
 ## Luna como protagonista en el circuito completo (2026-10-31)
 
 Luna (`luna`) se suma a Lucie, Roli y Mailen en los selectores estáticos y
