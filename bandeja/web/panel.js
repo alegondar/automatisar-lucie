@@ -3876,13 +3876,22 @@
       const cont = document.getElementById('contenedor-traslados-pendientes');
       if (!cont) return;
       cont.replaceChildren();
+      const aviso = document.getElementById('aviso-traslados-edicion');
+      if (aviso) {
+        aviso.style.display = sesiones.length ? 'block' : 'none';
+        aviso.textContent = sesiones.length ? sesiones.map(s => `${s.nombre}: ${s.archivos.length} clip(s) con copia en Ya editados y original pendiente de retiro.`).join(' ') +
+          (sesiones.every(s => s.archivos.every(a => a.automatico))
+            ? ' Al quedar libres se retirarán automáticamente de Sin editar.'
+            : ' Las ediciones anteriores requieren Completar traslado y confirmar su plan.') +
+          ' Revisá los detalles de traslado debajo.' : '';
+      }
       for (const sesion of sesiones) {
         const fila = document.createElement('div');
         fila.className = 'edicion-pendiente-fila';
         const texto = document.createElement('p');
         const esAuto = sesion.archivos.every(a => a.automatico);
         texto.textContent = esAuto
-          ? `${sesion.nombre}: ${sesion.archivos.length} original(es) siguen en Sin editar en uso por CapCut. Se completará el retiro automáticamente en segundo plano (no es necesario cerrar CapCut).`
+          ? `${sesion.nombre}: los clips ya están copiados en Videos ya editados. ${sesion.archivos.length} original(es) siguen en Sin editar. ${sesion.archivos.some(a => a.en_uso) ? 'Windows los mantiene en uso por CapCut u otra aplicación. ' : ''}El retiro se completará automáticamente cuando queden libres, sin forzar el bloqueo.`
           : `${sesion.nombre}: ${sesion.archivos.length} original(es) de esta edición anterior siguen en Sin editar (su video editado ya fue guardado). Confirmá el retiro para archivarlos en resguardo.`;
         const boton = document.createElement('button');
         boton.className = 'btn-sm'; boton.textContent = 'Completar traslado';
@@ -4159,10 +4168,15 @@
                 ${sesionesActivas.map(s => `<option value="${s.id}">${escapeHTML(s.nombre)} (${escapeHTML(s.capitulo)})</option>`).join('')}
               </select>` : ''}
               ${!copiado ? `<button class="btn-sm" ${exp.archivo_reemplazado ? 'disabled' : ''} onclick="asignarExportASesion(${exp.id}, '${selectId}', ${exp.sesion_id || 'null'})" style="background:var(--accent); color:#000; font-weight:600;">Enviar al pendrive</button>
-              ${!exp.sesion_id && !exp.archivo_reemplazado ? `<button class="btn-sm" onclick="guardarExportSinPublicar(${exp.id})">Guardar en Sin publicar</button>` : ''}
               <button class="btn-sm btn-secundario" onclick="descartarExportCapCut(${exp.id})">Descartar de la lista</button>` : ''}
               ${copiado && exp.ruta_destino ? `<button class="btn-sm btn-secundario" data-ruta="${escapeHTML(exp.ruta_destino)}" onclick="deshacerCopiaCompleto(this.dataset.ruta)">Deshacer envío</button>` : ''}
             </div>
+            ${!copiado && !exp.sesion_id && !exp.archivo_reemplazado ? `<div class="export-sin-sesion">
+              <p>Si este export no corresponde a una sesión pendiente, indicá su título y personaje. La copia usará ese título; el original de CapCut se conserva.</p>
+              <label>Título del video <input id="titulo-export-${exp.id}" maxlength="160" placeholder="Por ejemplo: Lucie pedo" autocomplete="off"></label>
+              <label>Personaje <select id="personaje-export-${exp.id}"><option value="">Elegí el personaje</option><option value="lucie">Lucie</option><option value="roli">Roli</option><option value="mailen">Mailen</option></select></label>
+              <button class="btn-sm" onclick="guardarExportSinPublicar(${exp.id})">Revisar título y guardar en Sin publicar</button>
+            </div>` : ''}
           </div>
         `;
       });
@@ -4171,9 +4185,26 @@
     }
 
     async function guardarExportSinPublicar(exportId) {
-      if (!confirm('¿Guardar este export en Videos sin publicar, conservando el original de CapCut?')) return;
       try {
-        const datos = await apiFetch('/api/publicacion/resguardar', {method: 'POST', body: JSON.stringify({export_id: exportId})});
+        const campoTitulo = document.getElementById('titulo-export-' + exportId);
+        const campoPersonaje = document.getElementById('personaje-export-' + exportId);
+        const titulo = campoTitulo?.value.trim();
+        const personaje = campoPersonaje?.value;
+        if (!titulo || !personaje) {
+          mostrarAvisoEdicion('Escribí el título y elegí el personaje del export, o asignalo a su sesión de edición.');
+          (!titulo ? campoTitulo : campoPersonaje)?.focus();
+          return;
+        }
+        const plan = await apiFetch('/api/publicacion/resguardar-simular', {method: 'POST', body: JSON.stringify({export_id: exportId, titulo, personaje})});
+        if (!confirm(`¿Guardar esta copia en Sin publicar?\nOrigen: ${plan.origen}\nDestino: ${plan.destino}\nTamaño: ${plan.tamano} bytes\nEl original de CapCut se conserva.`)) return;
+        // Una edición de los campos durante la revisión exige un plan nuevo.
+        if (document.getElementById('titulo-export-' + exportId) !== campoTitulo ||
+            document.getElementById('personaje-export-' + exportId) !== campoPersonaje ||
+            campoTitulo.value.trim() !== titulo || campoPersonaje.value !== personaje) {
+          mostrarAvisoEdicion('Cambiaste el título o personaje. Revisá nuevamente el destino.');
+          return;
+        }
+        const datos = await apiFetch('/api/publicacion/resguardar', {method: 'POST', body: JSON.stringify({token: plan.token, confirmacion: true})});
         mostrarAvisoEdicion('Video guardado en Sin publicar: ' + escapeHTML(datos.destino));
         await cargarVistaEdicion();
       } catch (error) { mostrarAvisoEdicion(escapeHTML(error.message)); }

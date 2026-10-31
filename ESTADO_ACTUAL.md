@@ -1,4 +1,160 @@
-# Estado actual del sistema — 2026-10-23
+# Estado actual del sistema — 2026-10-31
+
+## Integración de GitHub y publicación del diseño Taste (2026-10-31)
+
+El usuario autorizó actualizar este host y publicar el rediseño. Se integraron
+`d52477e` y `7c76bd8` de `origin/feat/lucie-recibir` con el commit local Taste
+`aa241e8`, mediante merge sin conflictos. El backend y `wifi.js` conservan
+íntegros los cambios entrantes; la navegación y el diseño Taste se conservan.
+Las otras ramas remotas son antecedentes integrados. No se modificó master
+ni se sincronizaron bases de datos, configuraciones locales o material.
+Las notas locales anteriores se resguardaron fuera del repo y en un stash
+conservado; no se incluyen en el commit de integración.
+
+Validación Kali/Linux, Python 3.14.8: **507 pruebas, OK con 12 omisiones**,
+**61.335 s**. Las omisiones requieren capacidades nativas de Windows.
+Se conservaron guardia y aserciones. La primera suite detectó dos regresiones
+del rediseño en identificadores visuales: se restauraron `⭐ EN FOCO` y la
+capitalización `Bandeja de Descargas` del título HTML; ambas regresiones
+específicas y la repetición completa pasaron sin modificar pruebas.
+Cinco regresiones UI, sintaxis JS, diff y auditorías AST **0/36** y repo/historial
+**0/254** correctos. Windows nativo y recepción física no ejecutados en este host.
+
+La bandeja real preexistente se cerró normalmente con SIGINT antes de probar;
+no se inició como fixture. Pruebas exclusivamente en temporales, sin acceder
+a Descargas, CapCut o material real. Manifiesto antes/después: **no disponible**,
+sin pendrive montado; no son recuentos cero. Logs fuera de Git:
+`/tmp/lucie-integracion-20261031-suite-final.log` y
+`/tmp/lucie-integracion-20261031-regresiones.log`.
+
+
+## Retiro de crudos en uso y títulos de exports numéricos (2026-10-30)
+
+Diagnóstico de solo lectura: la sesión 32, `lucie pedo`, ya tenía sus dos clips
+en `videos ya editados/lucie/octubre - 2026/videoyaeditado_lucie_pedo_semana_5_octubre_2026/`.
+Sus originales `luciepedo1.mp4` y `luciepedo2.mp4` seguían en Sin editar con
+retiro automático solicitado. SHA-256 de cada original/copia coincidía; Windows
+denegaba la apertura exclusiva de ambos. El completo asociado al export
+`1010(4).mp4` ya llevaba el nombre `lucie pedo.mp4` y estaba en Publicados.
+No se forzaron bloqueos ni se cerró CapCut. La carpeta original no puede retirarse
+mientras Windows impida trasladar esos archivos; la copia editada está preservada.
+
+Se corrigió una salida temprana del sondeo: si falta la carpeta de exports,
+se siguen procesando los retiros ya solicitados y los pendientes autorizados del
+pendrive. Una prueba libera un original retenido con esa carpeta ausente,
+verifica su resguardo/hash, el retiro de sus padres vacíos y Deshacer. Listar
+sigue sin mover material y los históricos sin indicador requieren confirmar
+Completar traslado. El panel muestra un aviso visible fuera del desplegable
+con los clips ya copiados y sus originales pendientes; el detalle indica si
+Windows los mantiene en uso, sin afirmar que el retiro físico ya terminó.
+
+La regla de nombres está en AGENTS.md, README.md y openspec/config.yaml:
+completo con título legible y una sola fecha en la carpeta; Ya editados usa
+`videoyaeditado_<nombre>_semana_<del mes>_<mes>_<año>` bajo personaje/mes.
+La sugerencia de una sesión con un único clip numérico usa ahora el título
+conocido de su capítulo, conservando intacto el clip original.
+
+El resguardo automático sin sesión permitía introducir `1005.mp4` o
+`1010(5).mp4` en la cola sin título. Los nuevos numéricos sin sesión inequívoca
+quedan pendientes en Videos completados. Allí se puede elegir una sesión o
+indicar título y personaje y revisar el destino exacto antes de confirmar.
+`resguardar-simular` genera un token privado de un uso que vence a los cinco
+minutos; `resguardar` exige ese token y confirmación. Se revalidan versión,
+SHA-256, origen dentro de CapCut, enlaces, identidad del pendrive y colisiones.
+La copia usa personaje/mes/carpeta fechada/título.mp4 o .mov; el original de
+CapCut y las versiones anteriores se conservan. Deshacer sigue disponible.
+No se renombraron archivos históricos ni se reasignaron sesiones por suposición.
+
+Validación Windows/Python 3.13: **505 pruebas, OK con 24 omisiones**, **95.125 s**;
+las 12 omisiones añadidas son de inicio Linux/XDG/flock, además de capacidades
+Linux y privilegios de symlinks ausentes. Tras ajustar la sugerencia numérica,
+**73 pruebas de edición, exports y API OK**, **13.928 s**, incluida la regresión
+nueva de título del capítulo. Pruebas específicas iniciales: **110 OK**.
+Revalidación adicional de resguardo y enlaces de metadatos: **2 OK**, **1.237 s**;
+la API rechaza cambios en el manifiesto antes de copiar. La interfaz también
+invalida una revisión si el formulario fue reemplazado mientras esperaba respuesta.
+Guardia y aserciones conservadas. Manifiesto real solo contado:
+**877 / 877** en las cuatro ejecuciones. Logs fuera del repo:
+`%TEMP%/lucie-edicion-final-19f789a2.log`,
+`%TEMP%/lucie-titulos-final-f0b5ecb3.log` y
+`%TEMP%/lucie-edicion-nombres-8aad5093.log`.
+UI de edición, publicación, capítulos, incrementales y CSRF, sintaxis JS,
+AST **0/36**, auditoría de **253 archivos** e historial correctos.
+Linux nativo y una nueva recepción física en el celular no ejecutados.
+
+La validación anterior tras integrar Linux tuvo 499 pruebas OK, pero su
+manifiesto cambió de 868 a 874 líneas: se detuvo la publicación y se avisó.
+Para esta corrección se cerró normalmente Lucie antes de probar, conservando
+CapCut abierto. No se iniciaron vigilantes reales como fixtures ni se usaron
+archivos reales como datos de pruebas. La mejora anterior del panel Wi-Fi,
+cuyo commit/push ya estaba autorizado, se publicó como `d52477e` en
+`feat/lucie-recibir`. El usuario autorizó expresamente el commit y la subida
+de esta ampliación de edición/nombres el 2026-10-30.
+
+Al terminar se intentó reabrir Lucie para uso habitual, separado de las pruebas;
+la política automática rechazó el comando de inicio con «blocked by policy».
+El servicio quedó cerrado: abrir el acceso habitual de Lucie y recargar el panel
+con Ctrl+F5 para cargar esta corrección. No se reintentó por otra vía ni se
+afirma una comprobación HTTP posterior de la aplicación real.
+
+Una consulta posterior, con Lucie nuevamente activa, confirmó la API de edición
+y ambos originales todavía en uso. Windows Restart Manager identificó a CapCut
+como el proceso que mantiene abiertos `luciepedo1.mp4` y `luciepedo2.mp4`.
+No se forzó el bloqueo ni se atribuyó al ajuste del sondeo un retiro que no
+había ocurrido. El retiro físico sigue pendiente hasta que CapCut los libere.
+
+## Selección y actualización del envío al celular (2026-10-30)
+
+El usuario confirmó que el video seleccionado era `1010(5).mp4`. La captura
+mostraba que faltaba elegir su personaje, aunque el aviso aparecía al pie del
+panel. Ahora el lateral muestra los nombres seleccionados, permite quitar un
+archivo y elegir allí el personaje de cada numérico, sincronizado con su tarjeta.
+La revisión se habilita solo con archivos, personajes y celular elegidos; una
+pista visible explica lo que falta. Los botones de revisar y confirmar se
+destacan en celeste cuando están habilitados. Al elegir celular se pliegan los
+controles de búsqueda bajo «Cambiar celular o app», dejando visible el destino.
+El lateral permite desplazarse si excede el alto disponible.
+
+Cada archivo archivado confirmado sale de la galería y de la selección durante
+el sondeo, sin esperar a que terminen los demás. Un fallo posterior conserva
+los no recibidos. Los listados tardíos se descartan; cambiar la versión de un
+archivo seleccionado invalida también una revisión en curso o ya preparada.
+El traslado existente sigue usando aceptación, SHA-256, registro, destino por
+personaje/mes y Deshacer; no se alteró ese contrato ni se ocultaron pendientes
+por suposición.
+
+Diagnóstico real de solo lectura, separado de las pruebas: `lucie pedo.mp4`
+también existe en la cola y está identificado como Lucie; es distinto del
+numérico seleccionado. Ninguna de las ocho copias pendientes coincidió por
+SHA-256 con las recepciones del historial mostrado. Falta identificar cuáles
+son los anteriores que el usuario ya tiene en el celular; no se trasladaron
+ni marcaron como recibidos. La conexión a la IP de la captura fue rechazada
+con WinError 10061: abrir Lucie Recibir y buscar el celular nuevamente. No se
+envió material real ni se certificó una nueva recepción en el Motorola.
+
+Validación Windows/Python 3.13: **487 pruebas, OK con 12 omisiones**, **97.604 s**;
+omisiones por capacidades exclusivas de Linux o privilegios de symlinks ausentes.
+Guardia y aserciones conservadas. Manifiesto real exclusivamente contado durante
+la suite: **868 / 868**, estable. Log externo:
+`%TEMP%/lucie-wifi-tests-5e55cd62.log`. Nueva prueba con receptor HTTP temporal:
+elegir el numérico, exigir personaje, archivar solo ese video, conservar otro
+export con nombre legible y deshacer verificando hashes. UI de publicación
+(29 llamadas simuladas), CSRF, capítulos, edición e incrementales correctas;
+regresiones de selección lateral, cambios de versión, listados tardíos y envío
+parcial. AST **0/33**, auditoría de **249 archivos** e historial sin infracciones.
+Chrome headless con HTML/API sintéticos verificó estados pendiente/listo,
+botón habilitado celeste y ausencia de desborde horizontal en escritorio y ancho
+estrecho. Capturas fuera del repositorio. Linux nativo no ejecutado.
+
+Trabajo iniciado en `feat/lucie-recibir`, base `94e9dbd`, sin commits locales
+anteriores pendientes. El usuario autorizó integrar `5f65044` (inicio con icono
+en Linux) y hacer commit/push de este lote el 2026-10-30. Se integró por
+fast-forward, conservando las mejoras locales del panel y ambas secciones de
+estado. No se modificó master. Los cambios del panel requieren **Ctrl+F5**;
+se sirven desde disco y no necesitan reiniciar el servicio. No se iniciaron
+vigilantes reales como fixtures ni se modificaron bases/configuraciones o
+material real.
+
 
 ## Rediseño del dashboard con Taste (2026-10-31)
 
@@ -22,10 +178,10 @@ No se ejecutó suite Python completa ni Windows nativo: el lote es HTML/CSS/JS.
 No se inició la bandeja real ni se accedió a Descargas, CapCut o pendrive reales.
 Fixtures, capturas e informes quedaron en /tmp, fuera de Git.
 
-Fetch detectó dos commits entrantes en origin/feat/lucie-recibir (d52477e y
-7c76bd8). Se consultó su integración y se continuó con la versión local, sin
-merge/pull ni cambios de versión instalada. Commit del rediseño autorizado;
-publicación remota pendiente. Las notas locales preexistentes se conservan.
+El rediseño quedó inicialmente en el commit local `aa241e8`, sin publicación
+remota: GitHub tenía los commits entrantes `d52477e` y `7c76bd8`. El usuario
+autorizó integrar ambas líneas y publicar el resultado el 2026-10-31; ver la
+sección de integración de esta fecha. Las notas locales preexistentes se conservan.
 
 
 ## Inicio automático e icono en Kali/XFCE (2026-10-25)

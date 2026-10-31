@@ -3,8 +3,9 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const fuente = fs.readFileSync('bandeja/web/panel.js', 'utf8');
 function extraer(nombre, siguiente) {
-  const inicio = fuente.indexOf(`    ${nombre.startsWith('terminar') ? 'async ' : ''}function ${nombre}(`);
-  const fin = fuente.indexOf(`    ${siguiente.startsWith('deshacer') ? 'async ' : ''}function ${siguiente}(`, inicio);
+  const inicio = fuente.search(new RegExp(`    (?:async )?function ${nombre}\\(`));
+  const resto = fuente.slice(inicio).search(new RegExp(`    (?:async )?function ${siguiente}\\(`));
+  const fin = resto < 0 ? -1 : inicio + resto;
   assert.ok(inicio >= 0 && fin > inicio);
   return fuente.slice(inicio, fin);
 }
@@ -98,6 +99,48 @@ async function probar() {
   clips[0].nombre_sesion_sugerido = 'Café y canción 🎬';
   ctx.abrirModalCrearSesion();
   assert.equal(campos.get('input-nombre-sesion').value, 'Café y canción 🎬');
+  const resumen = elemento();
+  const lista = elemento();
+  campos.set('aviso-traslados-edicion', resumen);
+  campos.set('contenedor-traslados-pendientes', lista);
+  ctx.renderizarTrasladosPendientes([{id: 32, nombre: 'Lucie pedo', archivos: [{automatico: true, en_uso: true}]}]);
+  assert.equal(resumen.style.display, 'block');
+  assert(resumen.textContent.includes('Ya editados'));
+  assert(resumen.textContent.includes('automáticamente'));
+  assert(lista.children[0].children[0].textContent.includes('Windows los mantiene en uso'));
+  ctx.renderizarTrasladosPendientes([historico]);
+  assert(resumen.textContent.includes('requieren Completar traslado'));
+  ctx.renderizarTrasladosPendientes([]);
+  assert.equal(resumen.style.display, 'none');
+
+  vm.runInContext(extraer('guardarExportSinPublicar', 'asignarExportASesion'), ctx);
+  const campoTitulo = {value: '', focus() {this.enfocado = true;}};
+  const campoPersonaje = {value: 'lucie'};
+  campos.set('titulo-export-41', campoTitulo);
+  campos.set('personaje-export-41', campoPersonaje);
+  const resguardos = [];
+  const plan = {token: 'plan-nombre', origen: 'CapCut/1005.mp4', destino: 'Sin publicar/lucie/Café y canción.mp4', tamano: 100};
+  ctx.apiFetch = async (ruta, datos) => {
+    const cuerpo = JSON.parse(datos.body); resguardos.push({ruta, cuerpo});
+    return ruta.endsWith('resguardar-simular') ? plan : {destino: plan.destino};
+  };
+  await ctx.guardarExportSinPublicar(41);
+  assert.equal(resguardos.length, 0, 'Sin título no se copia ni se simula con el número de CapCut.');
+  assert(campoTitulo.enfocado);
+  campoTitulo.value = 'Café y canción';
+  ctx.confirm = () => false;
+  await ctx.guardarExportSinPublicar(41);
+  assert.equal(resguardos.length, 1, 'Cancelar el plan no ejecuta el resguardo.');
+  ctx.confirm = mensaje => {confirmaciones.push(mensaje); return true;};
+  await ctx.guardarExportSinPublicar(41);
+  assert.deepEqual(resguardos.at(-2).cuerpo, {export_id: 41, titulo: 'Café y canción', personaje: 'lucie'});
+  assert.deepEqual(resguardos.at(-1).cuerpo, {token: plan.token, confirmacion: true});
+  assert(confirmaciones.at(-1).includes(plan.origen));
+  assert(confirmaciones.at(-1).includes(plan.destino));
+  ctx.confirm = () => {campoTitulo.value = 'Otro título'; return true;};
+  const antesCambio = resguardos.length;
+  await ctx.guardarExportSinPublicar(41);
+  assert.equal(resguardos.length, antesCambio + 1, 'Cambiar el título invalida el plan mostrado.');
   console.log('Edición UI OK: pendientes visibles, revisión explícita, destino y errores de copia.');
 }
 probar().catch(error => {console.error(error); process.exitCode = 1;});

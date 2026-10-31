@@ -685,7 +685,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
         if ruta in ("/api/publicacion/buscar", "/api/publicacion/conectar", "/api/publicacion/simular",
                     "/api/publicacion/enviar", "/api/publicacion/cancelar", "/api/publicacion/deshacer",
-                    "/api/publicacion/resguardar", "/api/publicacion/organizar-simular",
+                    "/api/publicacion/resguardar", "/api/publicacion/resguardar-simular", "/api/publicacion/organizar-simular",
                     "/api/publicacion/organizar", "/api/publicacion/deshacer-organizacion"):
             self._handle_publicacion(ruta, body)
         elif ruta == "/api/pendrive/eliminacion-simular":
@@ -779,17 +779,10 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
                 resultado = self.publicacion.cancelar(body.get("id"))
             elif ruta.endswith("/deshacer"):
                 resultado = self.publicacion.deshacer(body.get("id_operacion"))
+            elif ruta.endswith("/resguardar-simular"):
+                resultado = self.publicacion.simular_resguardo(body.get("export_id"), body.get("titulo"), body.get("personaje"))
             else:
-                from bandeja.edicion import copiar_export_sin_sesion_a_sin_publicar
-                export = next((e for e in self.db.obtener_exports_pendientes() if e["id"] == body.get("export_id")), None)
-                if not export or export.get("sesion_id") or export["estado"] not in ("sin_asignar", "copiado"):
-                    raise ValueError("Export sin sesión no encontrado.")
-                pen = detectar_pendrive(self.config)
-                if not pen or not pen.get("conectado"):
-                    raise ValueError("No hay pendrive vinculado conectado.")
-                destino = copiar_export_sin_sesion_a_sin_publicar(export, pen.get("punto_montaje") or pen.get("ruta_montaje"),
-                    self.db, self.config.carpeta_raiz_pendrive, self.movimientos.ruta_bitacora)
-                resultado = {"exito": True, "destino": destino}
+                resultado = self.publicacion.resguardar(body.get("token"), body.get("confirmacion"), self.movimientos.ruta_bitacora)
             self._enviar_json(resultado)
         except (OSError, ValueError) as e:
             self._enviar_error(HTTPStatus.CONFLICT, str(e))

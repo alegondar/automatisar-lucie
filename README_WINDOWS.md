@@ -148,8 +148,10 @@ abiertos por CapCut. El registro mantiene operativas las referencias históricas
 
 Al confirmar **Terminé de editar**, los clips pasan a `videos ya editados`.
 Si CapCut bloquea un original, se crea una copia verificada y el dashboard
-muestra **traslado pendiente**. Cerrá el proyecto de CapCut: el sondeo completa
-automáticamente el retiro de `videos sin editar` y retira sus padres vacíos.
+muestra **traslado pendiente**, también en un aviso visible fuera del desplegable.
+Cuando Windows libere esos archivos, el sondeo completa automáticamente el retiro
+de `videos sin editar` y retira sus padres vacíos, aunque la carpeta de exports
+no esté disponible. No se fuerza el bloqueo ni se cierra CapCut automáticamente.
 El original redundante se conserva en `_enviados/edicion`, con SHA-256 y registro;
 no se elimina ni se sobrescribe material. Deshacer restaura las rutas originales.
 Las ediciones anteriores a esta corrección requieren pulsar **Completar traslado**

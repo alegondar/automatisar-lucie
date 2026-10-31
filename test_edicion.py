@@ -382,6 +382,15 @@ class TestEdicionCapCut(unittest.TestCase):
         self.assertEqual(calcular_sha256(destino), calcular_sha256(resultado["retirados"][0]["resguardo"]))
         self.assertFalse(os.path.exists(os.path.dirname(origen)))
 
+    def test_clip_numerico_sugiere_titulo_del_capitulo_sin_renombrar_original(self):
+        capitulo = "Lucie pedo - viernes - semana 5 - octubre - 2026"
+        origen = self._crear_clip_crudo("lucie", capitulo, "1005.mp4")
+        for nombre in ("1005.mp4", "1010(5).mp4"):
+            self.assertEqual(calcular_nombre_defecto([nombre], capitulo), "Lucie pedo.mp4")
+        sesion = crear_sesion(self.db, [f"lucie/{capitulo}/1005.mp4"], "lucie", capitulo)
+        self.assertEqual(sesion["nombre_final_defecto"], "Lucie pedo.mp4")
+        self.assertTrue(os.path.isfile(origen))
+
     def test_sondeo_completa_retiro_aun_en_modo_export_manual(self):
         from bandeja_descargas import crear_vigilante_capcut
         _, _, origen, _ = self._preparar_retiro_pendiente()
@@ -392,6 +401,31 @@ class TestEdicionCapCut(unittest.TestCase):
         with patch("bandeja_descargas.detectar_pendrive", return_value={"conectado": True, "punto_montaje": self.pendrive_montaje}):
             vigilante.callback_sondeo()
         self.assertFalse(os.path.exists(origen))
+
+    def test_sondeo_retira_original_liberado_aunque_falte_carpeta_capcut(self):
+        from bandeja_descargas import crear_vigilante_capcut
+        _, _, origen, destino = self._preparar_retiro_pendiente()
+        sha = calcular_sha256(origen)
+        config = ConfiguracionBandeja(ruta_config=os.path.join(self.tmp_dir, "config.json"),
+                                      ruta_config_local=os.path.join(self.tmp_dir, "local.json"))
+        config.envio_exports_capcut = "manual"
+        config.carpeta_exportacion_capcut = os.path.join(self.tmp_dir, "exports-no-existe")
+        vigilante = crear_vigilante_capcut(config, self.db, self.bitacora_path)
+        vigilante.tomar_fotografia_inicial()
+        self.assertFalse(os.path.exists(config.carpeta_exportacion_capcut))
+        with patch("bandeja_descargas.detectar_pendrive", return_value={"conectado": True, "punto_montaje": self.pendrive_montaje}):
+            with patch("bandeja.edicion.verificar_archivo_exclusivo", return_value=False):
+                self.assertEqual(vigilante.escanear(), [])
+                self.assertTrue(os.path.isfile(origen), "El bloqueo conserva el original.")
+            self.assertEqual(vigilante.escanear(), [])
+        self.assertFalse(os.path.exists(origen))
+        self.assertFalse(os.path.exists(os.path.dirname(origen)))
+        self.assertEqual(calcular_sha256(destino), sha)
+        sesion = self.db.obtener_sesiones_edicion()[0]
+        self.assertEqual(obtener_secciones_edicion(self.pendrive_montaje, self.db)["traslados_pendientes"], [])
+        deshacer_finalizar_edicion(self.db, sesion["id"], self.pendrive_montaje,
+                                  self.carpeta_raiz, self.bitacora_path)
+        self.assertEqual(calcular_sha256(origen), sha)
 
     @unittest.skipUnless(os.name == "nt", "Requiere bloqueo nativo de renombrado de Windows")
     def test_retiro_nativo_windows_espera_cierre_del_lector(self):

@@ -6416,6 +6416,40 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(b"LocalSend", contenido)
 
+    def test_resguardar_export_api_exige_plan_titulo_personaje_y_csrf(self):
+        capcut = os.path.join(self.tmp_dir, "CapCut")
+        os.makedirs(capcut)
+        self.config.carpeta_exportacion_capcut = capcut
+        origen = os.path.join(capcut, "1005.mp4")
+        with open(origen, "xb") as archivo:
+            archivo.write(b"video numerico temporal")
+        st = os.stat(origen)
+        exp_id = self.db.registrar_export_pendiente(origen, "1005.mp4", st.st_size, st.st_mtime)
+        pen = {"conectado": True, "id": "pen-resguardo-prueba", "punto_montaje": self.pendrive_dir}
+        body = {"export_id": exp_id, "titulo": "Café y canción", "personaje": "lucie"}
+        with patch("bandeja.publicacion.detectar_pendrive", return_value=pen):
+            status, _ = self._post("/api/publicacion/resguardar-simular", body, csrf="incorrecto")
+            self.assertEqual(status, 403)
+            status, _ = self._post("/api/publicacion/resguardar-simular", {"export_id": exp_id})
+            self.assertEqual(status, 409)
+            status, plan = self._post("/api/publicacion/resguardar-simular", body)
+            self.assertEqual(status, 200, plan)
+            self.assertEqual(os.path.basename(plan["destino"]), "Café y canción.mp4")
+            self.assertFalse(os.path.exists(plan["destino"]))
+            status, _ = self._post("/api/publicacion/resguardar", {"export_id": exp_id})
+            self.assertEqual(status, 409, "La API anterior no permite copiar sin confirmar un plan.")
+            status, _ = self._post("/api/publicacion/resguardar", {"token": plan["token"], "confirmacion": False})
+            self.assertEqual(status, 409)
+            status, _ = self._post("/api/publicacion/resguardar", {"token": plan["token"], "confirmacion": True}, csrf="incorrecto")
+            self.assertEqual(status, 403)
+            status, resultado = self._post("/api/publicacion/resguardar", {"token": plan["token"], "confirmacion": True})
+            self.assertEqual(status, 200, resultado)
+            self.assertEqual(resultado["destino"], plan["destino"])
+            self.assertEqual(calcular_sha256(origen), calcular_sha256(plan["destino"]))
+            status, _ = self._post("/api/publicacion/resguardar", {"token": plan["token"], "confirmacion": True})
+            self.assertEqual(status, 409, "Un plan confirmado no se puede repetir.")
+        self.assertTrue(os.path.isfile(origen))
+
     def test_publicacion_preview_solo_desde_cola_con_rangos(self):
         from unittest.mock import patch
         carpeta = os.path.join(self.raiz_pen, "videos completos", "videos sin publicar", "roli", "Capitulo")

@@ -16,7 +16,7 @@ from unittest.mock import patch
 from bandeja.config import ConfiguracionBandeja, calcular_sha256
 from bandeja.db import GestorBaseDatosBandeja
 from bandeja.edicion import (copiar_export_sin_sesion_a_sin_publicar,
-                            deshacer_copia_completo, obtener_secciones_edicion, crear_sesion)
+                            simular_resguardo_export, deshacer_copia_completo, obtener_secciones_edicion, crear_sesion)
 from bandeja.localsend import ClienteLocalSend, validar_destino
 from bandeja.publicacion import GestorPublicacion
 
@@ -317,6 +317,34 @@ class TestPublicacionWifi(unittest.TestCase):
             with open(archivo["destino"], "rb") as f:
                 self.assertEqual(self.receptor.archivos[archivo["id"]], f.read())
 
+    def test_numerico_elegido_exige_personaje_y_archiva_solo_ese_video(self):
+        numerico = self.crear("sin asignar/octubre - 2026/1010(5).mp4", b"video numerico elegido")
+        otro = self.crear("lucie/octubre - 2026/lucie pedo.mp4", b"otro export conservado")
+        inventario = self.gestor.listar()["archivos"]
+        elegido = next(a for a in inventario if a["nombre"] == "1010(5).mp4")
+        with self.assertRaisesRegex(ValueError, r"1010\(5\).mp4"):
+            self.gestor.simular([elegido["id"]], self.dispositivo["id"])
+        self.assertEqual(self.receptor.archivos, {})
+        self.assertTrue(os.path.isfile(numerico))
+        plan = self.gestor.simular([elegido["id"]], self.dispositivo["id"], {elegido["id"]: "lucie"})
+        self.assertEqual(len(plan["archivos"]), 1)
+        self.assertEqual(plan["archivos"][0]["destino_rel"],
+                         "videos completos/videosPublicados/lucie/octubre - 2026/1010(5).mp4")
+        resultado = self.esperar(self.gestor.iniciar_envio(plan["token"], True)["id"])
+        self.assertEqual(resultado["estado"], "completado", resultado)
+        self.assertEqual(self.receptor.archivos, {elegido["id"]: b"video numerico elegido"})
+        self.assertFalse(os.path.exists(numerico))
+        elegido_sha = hashlib.sha256(b"video numerico elegido").hexdigest()
+        self.assertEqual(calcular_sha256(plan["archivos"][0]["destino"]), elegido_sha)
+        self.assertEqual(calcular_sha256(otro), hashlib.sha256(b"otro export conservado").hexdigest())
+        listado = self.gestor.listar()
+        self.assertNotIn(elegido["id"], [a["id"] for a in listado["archivos"]])
+        self.assertIn("lucie pedo.mp4", [a["nombre"] for a in listado["archivos"]])
+        self.assertEqual(listado["historial"][0]["sha256"], elegido_sha)
+        self.gestor.deshacer(resultado["publicados"][0]["id_operacion"])
+        self.assertEqual(calcular_sha256(numerico), elegido_sha)
+        self.assertEqual(self.gestor.listar()["historial"], [])
+
     def test_transferencia_real_http_confirma_hash_archiva_y_deshace(self):
         sesion = crear_sesion(self.db, ["lucie/Cafe/clip.mp4"], "lucie", "Cafe")
         self.db.actualizar_sesion_edicion(sesion["id"], video_completo_ruta=self.video, estado="completado")
@@ -483,13 +511,15 @@ class TestPublicacionWifi(unittest.TestCase):
         exp1 = self.db.registrar_export_pendiente(origen, "1010(7).mp4", st.st_size, st.st_mtime)
         dato = next(e for e in self.db.obtener_exports_pendientes() if e["id"] == exp1)
         bitacora = os.path.join(self.montaje, "bitacora.jsonl")
-        destino1 = copiar_export_sin_sesion_a_sin_publicar(dato, self.montaje, self.db, "LucieSinReglas", bitacora)
+        plan = simular_resguardo_export(dato, self.montaje, "LucieSinReglas", "Lucie café", "lucie")
+        destino1 = copiar_export_sin_sesion_a_sin_publicar(dato, self.montaje, self.db, "LucieSinReglas", bitacora, plan=plan)
         with open(origen, "wb") as archivo:
             archivo.write(b"segundo export distinto")
         st = os.stat(origen)
         exp2 = self.db.registrar_export_pendiente(origen, "1010(7).mp4", st.st_size, st.st_mtime)
         dato = next(e for e in self.db.obtener_exports_pendientes() if e["id"] == exp2)
-        destino2 = copiar_export_sin_sesion_a_sin_publicar(dato, self.montaje, self.db, "LucieSinReglas", bitacora)
+        plan = simular_resguardo_export(dato, self.montaje, "LucieSinReglas", "Lucie café", "lucie")
+        destino2 = copiar_export_sin_sesion_a_sin_publicar(dato, self.montaje, self.db, "LucieSinReglas", bitacora, plan=plan)
         self.assertNotEqual(destino1, destino2)
         with open(destino1, "rb") as archivo:
             self.assertEqual(archivo.read(), b"primer export")
@@ -503,6 +533,99 @@ class TestPublicacionWifi(unittest.TestCase):
         dispositivo = self.gestor.agregar_dispositivo("127.0.0.1", self.receptor.servidor.server_port)
         self.assertEqual(dispositivo["alias"], "Celular temporal")
         self.assertEqual(dispositivo["protocol"], "http")
+
+    def _export_numerico_sin_sesion(self):
+        capcut = os.path.join(self.montaje, "CapCut")
+        os.makedirs(capcut, exist_ok=True)
+        self.config.carpeta_exportacion_capcut = capcut
+        origen = os.path.join(capcut, "1005.mp4")
+        with open(origen, "xb") as archivo:
+            archivo.write(b"export numerico sin asociacion")
+        st = os.stat(origen)
+        exp_id = self.db.registrar_export_pendiente(origen, "1005.mp4", st.st_size, st.st_mtime)
+        return exp_id, origen
+
+    def test_resguardo_numerico_con_titulo_revisa_confirma_y_deshace(self):
+        exp_id, origen = self._export_numerico_sin_sesion()
+        plan = self.gestor.simular_resguardo(exp_id, "Café y canción videocompleto", "lucie")
+        self.assertEqual(os.path.basename(plan["destino"]), "Café y canción.mp4")
+        relativa = os.path.relpath(plan["destino"], self.pendientes).replace(os.sep, "/")
+        self.assertRegex(relativa, r"^lucie/[^/]+ - \d{4}/Café y canción - .+ - semana [1-5] - .+ - \d{4}/Café y canción.mp4$")
+        self.assertFalse(os.path.exists(plan["destino"]))
+        self.assertFalse(os.path.exists(os.path.join(self.raiz, ".lucie", "manifiesto.jsonl")))
+        bitacora = os.path.join(self.montaje, "bitacora.jsonl")
+        with self.assertRaisesRegex(ValueError, "Confirmá"):
+            self.gestor.resguardar(plan["token"], False, bitacora)
+        resultado = self.gestor.resguardar(plan["token"], True, bitacora)
+        self.assertEqual(resultado["destino"], plan["destino"])
+        self.assertEqual(calcular_sha256(origen), calcular_sha256(plan["destino"]))
+        self.assertTrue(os.path.isfile(origen))
+        self.assertIsNone(self.db.obtener_exports_pendientes()[0]["sesion_id"])
+        with self.assertRaisesRegex(ValueError, "utilizó"):
+            self.gestor.resguardar(plan["token"], True, bitacora)
+        deshacer_copia_completo(plan["destino"], self.montaje, self.db, "LucieSinReglas", bitacora)
+        self.assertTrue(os.path.isfile(origen))
+        self.assertTrue(self.db.obtener_exports_pendientes()[0]["envio_automatico_bloqueado"])
+
+    def test_resguardo_numerico_no_adivina_titulo_o_personaje(self):
+        exp_id, origen = self._export_numerico_sin_sesion()
+        for titulo, personaje in ((None, None), ("", "lucie"), ("1005.mp4", "lucie"), ("Café", "")):
+            with self.subTest(titulo=titulo, personaje=personaje), self.assertRaises(ValueError):
+                self.gestor.simular_resguardo(exp_id, titulo, personaje)
+        self.assertTrue(os.path.isfile(origen))
+        self.assertEqual(len(self.gestor.listar()["archivos"]), 1)
+        self.assertEqual(self.db.obtener_exports_pendientes()[0]["estado"], "sin_asignar")
+
+    def test_resguardo_rechaza_cambios_de_archivo_destino_pendrive_y_plan_vencido(self):
+        exp_id, origen = self._export_numerico_sin_sesion()
+        bitacora = os.path.join(self.montaje, "bitacora.jsonl")
+        plan = self.gestor.simular_resguardo(exp_id, "Café", "lucie")
+        self.pen["id"] = "otro-pendrive"
+        with self.assertRaisesRegex(ValueError, "pendrive"):
+            self.gestor.resguardar(plan["token"], True, bitacora)
+        self.pen["id"] = "pendrive-temporal"
+        plan = self.gestor.simular_resguardo(exp_id, "Café", "lucie")
+        self.gestor._planes_resguardo[plan["token"]]["vence"] = 0
+        with self.assertRaisesRegex(ValueError, "venció"):
+            self.gestor.resguardar(plan["token"], True, bitacora)
+        plan = self.gestor.simular_resguardo(exp_id, "Café", "lucie")
+        os.makedirs(os.path.dirname(plan["destino"]))
+        with open(plan["destino"], "xb") as archivo:
+            archivo.write(b"contenido ajeno")
+        with self.assertRaises(FileExistsError):
+            self.gestor.resguardar(plan["token"], True, bitacora)
+        with open(plan["destino"], "rb") as archivo:
+            self.assertEqual(archivo.read(), b"contenido ajeno")
+        plan = self.gestor.simular_resguardo(exp_id, "Otro título", "lucie")
+        with open(origen, "ab") as archivo:
+            archivo.write(b"nueva version")
+        with self.assertRaises(ValueError):
+            self.gestor.resguardar(plan["token"], True, bitacora)
+        self.assertFalse(os.path.exists(plan["destino"]))
+
+    def test_vigilante_no_copia_export_numerico_sin_titulo(self):
+        from bandeja_descargas import crear_vigilante_capcut
+        exp_id, origen = self._export_numerico_sin_sesion()
+        vigilante = crear_vigilante_capcut(self.config, self.db, os.path.join(self.montaje, "bitacora.jsonl"))
+        vigilante.tomar_fotografia_inicial()
+        with patch("bandeja_descargas.detectar_pendrive", return_value=self.pen):
+            vigilante.escanear()
+        exp = next(e for e in self.db.obtener_exports_pendientes() if e["id"] == exp_id)
+        self.assertEqual(exp["estado"], "sin_asignar")
+        self.assertIn("título", exp["error"])
+        self.assertIsNone(exp["ruta_destino"])
+        self.assertTrue(os.path.isfile(origen))
+
+    def test_resguardo_revalida_enlaces_del_manifiesto_antes_de_copiar(self):
+        from bandeja.carpetas_vacias import _sin_enlaces
+        exp_id, origen = self._export_numerico_sin_sesion()
+        plan = self.gestor.simular_resguardo(exp_id, "Café", "lucie")
+        manifiesto = os.path.join(self.raiz, ".lucie", "manifiesto.jsonl")
+        with patch("bandeja.edicion._sin_enlaces", side_effect=lambda ruta: False if ruta == manifiesto else _sin_enlaces(ruta)):
+            with self.assertRaisesRegex(ValueError, "rutas cambiaron"):
+                self.gestor.resguardar(plan["token"], True, os.path.join(self.montaje, "bitacora.jsonl"))
+        self.assertTrue(os.path.isfile(origen))
+        self.assertFalse(os.path.exists(plan["destino"]))
 
     def test_conteos_de_completos_en_cola_sin_base_compartida(self):
         conteos = obtener_secciones_edicion(self.montaje, self.db)["conteos_capitulo"]

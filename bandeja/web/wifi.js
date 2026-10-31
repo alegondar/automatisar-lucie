@@ -18,6 +18,7 @@
   try { trabajo = sessionStorage.getItem('lucie-envio-wifi') || null; } catch (_) { /* Sin almacenamiento disponible. */ }
   let timer = null;
   let observadorPreviews = null;
+  let consultaLista = 0;
   const etiquetasPersonaje = {lucie: 'Lucie', roli: 'Roli', mailen: 'Mailen', sin_asignar: 'Sin asignar'};
   const dispositivos = new Map();
   const el = id => document.getElementById(id);
@@ -37,7 +38,50 @@
     plan = null;
     el('wifi-plan').replaceChildren();
     el('wifi-plan').style.display = 'none';
+    estado('');
     dibujarConteo();
+  }
+
+  function selectorPersonaje(archivo) {
+    const selector = document.createElement('select');
+    selector.setAttribute('aria-label', 'Personaje de ' + archivo.nombre);
+    selector.add(new Option('Elegí el personaje', ''));
+    for (const p of ['lucie', 'roli', 'mailen']) selector.add(new Option(etiquetasPersonaje[p], p));
+    selector.value = personajesElegidos.get(archivo.id) || '';
+    selector.disabled = Boolean(trabajo) || enviando;
+    selector.addEventListener('change', () => {
+      personajesElegidos.set(archivo.id, selector.value);
+      invalidarPlan();
+      dibujarArchivos();
+    });
+    return selector;
+  }
+
+  function dibujarSeleccion() {
+    const lista = el('wifi-seleccion-detalle');
+    lista.replaceChildren();
+    for (const archivo of archivos.filter(a => seleccion.has(a.id))) {
+      const fila = document.createElement('div');
+      fila.className = 'wifi-seleccion-fila';
+      const nombre = document.createElement('strong'); nombre.textContent = archivo.nombre;
+      const quitar = document.createElement('button');
+      quitar.className = 'wifi-quitar'; quitar.textContent = 'Quitar';
+      quitar.setAttribute('aria-label', 'Quitar ' + archivo.nombre + ' del envío');
+      quitar.disabled = Boolean(trabajo) || enviando;
+      quitar.addEventListener('click', () => { seleccion.delete(archivo.id); invalidarPlan(); dibujarArchivos(); });
+      fila.append(nombre, quitar);
+      if (archivo.personaje === 'sin_asignar') {
+        const etiqueta = document.createElement('label');
+        etiqueta.className = 'wifi-asignacion';
+        etiqueta.textContent = '¿De qué personaje es?';
+        etiqueta.append(selectorPersonaje(archivo)); fila.append(etiqueta);
+      } else {
+        const personaje = document.createElement('span');
+        personaje.textContent = etiquetasPersonaje[archivo.personaje] + ' · ' + bytes(archivo.tamano);
+        fila.append(personaje);
+      }
+      lista.append(fila);
+    }
   }
 
   function archivosVisibles() {
@@ -56,12 +100,23 @@
       ' · ' + bytes(elegidos.reduce((s, a) => s + a.tamano, 0)) : 'Ningún archivo seleccionado. Marcá los que quieras enviar.');
     const celular = dispositivos.get(el('wifi-dispositivo').value);
     texto('wifi-destino', celular ? 'Recibe: ' + nombreApp(celular.receptor || appElegida()) + ' · ' +
-      celular.ip + ':' + celular.port : trabajo ? 'Envío en curso. El receptor se conserva hasta que termine.' : 'Todavía no elegiste un celular.');
+      aliasDispositivo(celular) + ' · ' + celular.ip + ':' + celular.port : trabajo ? 'Envío en curso. El receptor se conserva hasta que termine.' : 'Todavía no elegiste un celular.');
     const ocupado = Boolean(trabajo) || enviando;
-    el('wifi-preparar').disabled = ocupado || revisando || buscando || conectando || !seleccion.size || !celular;
+    const sinPersonaje = elegidos.filter(a => a.personaje === 'sin_asignar' && !personajesElegidos.get(a.id));
+    const listo = !ocupado && !revisando && !buscando && !conectando && elegidos.length > 0 && !sinPersonaje.length && Boolean(celular);
+    el('wifi-preparar').disabled = !listo || Boolean(plan);
+    el('wifi-preparar').textContent = revisando ? 'Revisando archivos…' : plan ? 'Revisión lista abajo' : 'Revisar envío';
+    texto('wifi-siguiente', ocupado ? 'Esperá a que termine este envío.' : revisando ? 'Comprobando archivos y destinos…' :
+      !elegidos.length ? '1. Marcá el video que querés enviar.' : sinPersonaje.length ? 'Elegí el personaje de ' + sinPersonaje.map(a => a.nombre).join(', ') + ' aquí arriba.' :
+      buscando || conectando ? 'Buscando conexión con el celular…' : !celular ? '2. Buscá tu celular y elegilo en la lista.' :
+      plan ? '3. Revisá el detalle y pulsá Confirmar y enviar.' : 'Todo listo. Revisá el envío para continuar.');
+    el('wifi-siguiente').dataset.estado = listo || plan ? 'listo' : sinPersonaje.length ? 'pendiente' : 'esperando';
+    el('wifi-paso-celular').dataset.estado = celular ? 'listo' : 'pendiente';
+    texto('wifi-conexion-resumen', celular ? 'Cambiar celular o app' : 'Buscar o elegir celular');
     for (const id of ['wifi-app', 'wifi-dispositivo', 'wifi-ip', 'wifi-puerto', 'wifi-todos', 'wifi-ninguno', 'wifi-actualizar', 'wifi-tab-historial', 'wifi-tab-organizacion']) el(id).disabled = ocupado;
     el('wifi-buscar').disabled = ocupado || buscando;
     el('wifi-conectar').disabled = ocupado || conectando;
+    dibujarSeleccion();
   }
 
   function dibujarArchivos() {
@@ -120,7 +175,6 @@
         checkbox.addEventListener('change', () => {
           checkbox.checked ? seleccion.add(archivo.id) : seleccion.delete(archivo.id);
           invalidarPlan();
-          dibujarConteo();
         });
         const nombre = document.createElement('strong');
         nombre.textContent = archivo.nombre;
@@ -161,18 +215,9 @@
         fila.append(cabecera, marco, detalle, carpeta, abrir);
         if (archivo.personaje === 'sin_asignar') {
           const asignacion = document.createElement('label');
-          asignacion.textContent = 'Personaje para publicar ';
-          const selector = document.createElement('select');
-          selector.setAttribute('aria-label', 'Personaje de ' + archivo.nombre);
-          selector.add(new Option('Elegí el personaje', ''));
-          for (const p of ['lucie', 'roli', 'mailen']) selector.add(new Option(etiquetasPersonaje[p], p));
-          selector.value = personajesElegidos.get(archivo.id) || '';
-          selector.disabled = Boolean(trabajo);
-          selector.addEventListener('change', () => {
-            personajesElegidos.set(archivo.id, selector.value);
-            invalidarPlan();
-          });
-          asignacion.append(selector);
+          asignacion.className = 'wifi-asignacion';
+          asignacion.textContent = 'Personaje para publicar';
+          asignacion.append(selectorPersonaje(archivo));
           fila.append(asignacion);
         }
         rejilla.append(fila);
@@ -204,11 +249,18 @@
   }
 
   async function cargar() {
+    const consulta = ++consultaLista;
     try {
       const datos = await apiFetch('/api/publicacion/lista');
+      if (consulta !== consultaLista) return;
       pendriveConectado = Boolean(datos.conectado);
       texto('wifi-fuente-estado', datos.conectado ? 'Pendrive conectado · Archivos de Sin publicar' : datos.mensaje || 'Conectá el pendrive vinculado.');
-      archivos = datos.archivos || [];
+      const nuevos = datos.archivos || [];
+      // Una revisión solo vale para la versión exacta de sus archivos.
+      // La misma ruta puede reaparecer con contenido nuevo entre sondeos.
+      const firma = a => JSON.stringify([a.ruta, a.tamano, a.mtime, a.personaje]);
+      if ([...seleccion].some(id => firma(archivos.find(a => a.id === id) || {}) !== firma(nuevos.find(a => a.id === id) || {}))) invalidarPlan();
+      archivos = nuevos;
       for (const id of personajesElegidos.keys()) if (!archivos.some(a => a.id === id)) personajesElegidos.delete(id);
       dibujarOrganizacion(datos);
       const disponibles = new Set(archivosVisibles().map(a => a.id));
@@ -217,7 +269,7 @@
       dibujarArchivos();
       historialEnvios = datos.historial || [];
       dibujarHistorial();
-    } catch (error) { estado(error.message); }
+    } catch (error) { if (consulta === consultaLista) estado(error.message); }
   }
 
   function dibujarHistorial() {
@@ -374,6 +426,7 @@
       dispositivos.set(datos.dispositivo.id, datos.dispositivo);
       dibujarDispositivos();
       el('wifi-dispositivo').value = datos.dispositivo.id;
+      el('wifi-conexion').open = false;
       invalidarPlan();
       texto('wifi-busqueda-estado', 'Conectado con ' + nombreApp(receptor) + '. El destino está listo para revisar.');
     } catch (error) { texto('wifi-busqueda-estado', error.message); }
@@ -428,7 +481,7 @@
         identidad.append(tituloIdentidad, huella); aviso.append(identidad);
       }
       const confirmar = document.createElement('button');
-      confirmar.className = 'btn-sm';
+      confirmar.className = 'btn-sm wifi-principal';
       confirmar.textContent = 'Confirmar y enviar al celular';
       const token = plan.token;
       confirmar.addEventListener('click', () => iniciar(token));
@@ -467,6 +520,16 @@
     if (!trabajo) return;
     try {
       const datos = await apiFetch('/api/publicacion/estado?id=' + encodeURIComponent(trabajo));
+      // Retirar de la galería cada archivo ya archivado, también en envíos
+      // de varios videos o si el siguiente archivo falla.
+      const publicados = new Set((datos.publicados || []).map(a => a.ruta_origen));
+      if (archivos.some(a => publicados.has(a.ruta))) {
+        consultaLista++; // Descartar listados previos al archivado confirmado.
+        archivos = archivos.filter(a => !publicados.has(a.ruta));
+        const pendientes = new Set(archivos.map(a => a.id));
+        seleccion = new Set([...seleccion].filter(id => pendientes.has(id)));
+        dibujarArchivos();
+      }
       if (datos.dispositivo) {
         const d = datos.dispositivo;
         dispositivos.set(d.id, d);
@@ -474,6 +537,7 @@
         el('wifi-puerto').value = String(d.port);
         dibujarDispositivos();
         el('wifi-dispositivo').value = d.id;
+        el('wifi-conexion').open = false;
         dibujarConteo();
       }
       el('wifi-progreso').value = Math.min(100, datos.total_bytes ? datos.bytes_enviados * 100 / datos.total_bytes : 0);
@@ -484,7 +548,7 @@
       texto('wifi-diagnostico-texto', diagnostico);
       el('wifi-diagnostico').style.display = diagnostico ? 'block' : 'none';
       estado(datos.mensaje + (datos.error ? ': ' + datos.error : '') +
-        ' · Recibidos: ' + (datos.recibidos || []).length + ' · Archivados: ' + datos.publicados.length +
+        ' · Recibidos: ' + (datos.recibidos || []).length + ' · Archivados: ' + (datos.publicados || []).length +
         (datos.cancelacion_confirmada === false ? ' · Verificá la recepción en el celular antes de reintentar.' : ''));
       if (datos.estado === 'en_curso') {
         timer = setTimeout(seguir, 1000);
@@ -519,6 +583,7 @@
   el('wifi-app').addEventListener('change', () => {
     if (trabajo) return;
     dispositivos.clear(); dibujarDispositivos(); invalidarPlan();
+    el('wifi-conexion').open = true;
     el('wifi-puerto').value = appElegida() === 'lucie' ? '53318' : '53317';
     texto('wifi-busqueda-estado', 'Abrí ' + nombreApp(appElegida()) + ' en el celular y buscá nuevamente.');
   });
@@ -527,7 +592,10 @@
   el('wifi-filtro').addEventListener('input', cambiarFiltro);
   el('wifi-todos').addEventListener('click', () => { if (trabajo) return; seleccion = new Set(archivosVisibles().map(a => a.id)); invalidarPlan(); dibujarArchivos(); });
   el('wifi-ninguno').addEventListener('click', () => { if (trabajo) return; seleccion.clear(); invalidarPlan(); dibujarArchivos(); });
-  el('wifi-dispositivo').addEventListener('change', invalidarPlan);
+  el('wifi-dispositivo').addEventListener('change', () => {
+    el('wifi-conexion').open = !dispositivos.has(el('wifi-dispositivo').value);
+    invalidarPlan();
+  });
   el('wifi-buscar').addEventListener('click', buscar);
   el('wifi-conectar').addEventListener('click', conectar);
   el('wifi-preparar').addEventListener('click', preparar);
