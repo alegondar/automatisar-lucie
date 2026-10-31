@@ -99,4 +99,80 @@ async function probar() {
   assert.equal(boton.disabled, false);
   console.log('Envío incremental UI OK: pendientes, espacio, cartel, renombrar/no agregar, revisión tardía y ausencia de envíos automáticos.');
 }
-probar().catch(error => {console.error(error); process.exitCode = 1;});
+probar().then(probarSeleccionVacias).catch(error => {console.error(error); process.exitCode = 1;});
+
+async function probarSeleccionVacias() {
+  const nodos = new Map();
+  const nodo = id => {
+    if (!nodos.has(id)) nodos.set(id, {style: {}, innerHTML: '', innerText: '', disabled: false});
+    return nodos.get(id);
+  };
+  let carpetas = [];
+  let conectado = true;
+  const planes = [], errores = [], consultas = [];
+  const contexto = vm.createContext({
+    window: {},
+    document: {
+      getElementById: nodo,
+      querySelectorAll() {
+        return [...nodo('contenedor-capitulos-pendrive').innerHTML.matchAll(/<input type="checkbox" class="chk-carpeta-pendrive"[^>]+>/g)].map(m => ({
+          disabled: /\sdisabled(?:\s|>)/.test(m[0]), checked: false,
+          getAttribute: () => m[0].match(/data-carpeta-key="([^"]+)"/)[1],
+        }));
+      },
+    },
+    escapeHTML: s => String(s ?? ''),
+    apiFetch: async ruta => {
+      consultas.push(ruta);
+      if (ruta === '/api/pendrive/carpetas') return {carpetas};
+      if (ruta === '/api/pendrive/estado') return {conectado};
+      if (ruta === '/api/historial') return {historial: []};
+      throw Error('Consulta inesperada: ' + ruta);
+    },
+    mostrarError: mensaje => errores.push(mensaje),
+    abrirModalPlanEnvio: seleccion => planes.push(Array.from(seleccion)),
+  });
+  const inicioSeleccion = fuente.indexOf('    let carpetasPendriveData');
+  const finSeleccion = fuente.indexOf('    async function deshacerEnvio', inicioSeleccion);
+  vm.runInContext(fuente.slice(inicioSeleccion, finSeleccion), contexto);
+  const vacia = {personaje: 'lucie', carpeta: 'publicidad', total_archivos: 0,
+    pendientes_conteo: 0, archivos: [], videos: 0, fotos: 0, bytes_totales_fmt: '0 B'};
+  const conArchivos = {...vacia, carpeta: 'otro', total_archivos: 1, pendientes_conteo: 1, videos: 1};
+  carpetas = [vacia];
+  await contexto.cargarVistaPendrive();
+  assert.doesNotMatch(nodo('contenedor-estado-pendrive').innerHTML, /Error al cargar/);
+  assert.match(nodo('contenedor-capitulos-pendrive').innerHTML, /Carpeta vacía\. No hay archivos para enviar\./);
+  assert.match(nodo('contenedor-capitulos-pendrive').innerHTML, /data-carpeta-key="lucie\/publicidad"[^>]*disabled/);
+  contexto.seleccionarTodasCarpetasPendrive();
+  contexto.toggleSeleccionCarpetaPendrive('lucie/publicidad', true);
+  assert.equal(contexto.window.carpetasPendriveSeleccionadas.size, 0);
+  assert.equal(nodo('btn-enviar-seleccionadas-pendrive').disabled, true);
+  assert.equal(nodo('chk-maestro-carpetas-pendrive').disabled, true);
+  contexto.enviarCarpetasSeleccionadasPendrive();
+  assert.equal(planes.length, 0);
+  assert.equal(errores.length, 1);
+
+  carpetas = [vacia, conArchivos];
+  await contexto.cargarVistaPendrive();
+  contexto.seleccionarTodasCarpetasPendrive();
+  assert.deepEqual(Array.from(contexto.window.carpetasPendriveSeleccionadas), ['lucie/otro']);
+  assert.equal(nodo('chk-maestro-carpetas-pendrive').checked, true);
+  assert.equal(nodo('chk-maestro-carpetas-pendrive').indeterminate, false);
+  assert.equal(nodo('btn-enviar-seleccionadas-pendrive').disabled, false);
+  contexto.enviarCarpetasSeleccionadasPendrive();
+  assert.deepEqual(planes, [['lucie/otro']]);
+
+  // La carpeta permanece listada pero pierde sus archivos durante el refresco.
+  carpetas = [vacia, {...conArchivos, total_archivos: 0, pendientes_conteo: 0}];
+  await contexto.cargarVistaPendrive();
+  assert.equal(contexto.window.carpetasPendriveSeleccionadas.size, 0);
+  assert.equal(nodo('btn-enviar-seleccionadas-pendrive').disabled, true);
+  contexto.enviarCarpetasSeleccionadasPendrive();
+  assert.equal(planes.length, 1);
+  conectado = false;
+  await contexto.cargarVistaPendrive();
+  assert.match(nodo('contenedor-capitulos-pendrive').innerHTML, /Carpeta vacía/);
+  assert.equal(nodo('btn-enviar-seleccionadas-pendrive').disabled, true);
+  assert.ok(consultas.every(ruta => ['/api/pendrive/carpetas', '/api/pendrive/estado', '/api/historial'].includes(ruta)));
+  console.log('Selección Pendrive UI OK: vacías, selección mixta, refresco, contador, plan acotado y ausencia de envío.');
+}

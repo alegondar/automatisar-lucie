@@ -2720,7 +2720,7 @@
     function seleccionarTodasCarpetasPendrive() {
       if (!window.carpetasPendriveSeleccionadas) window.carpetasPendriveSeleccionadas = new Set();
       carpetasPendriveData.forEach(c => {
-        window.carpetasPendriveSeleccionadas.add(`${c.personaje}/${c.carpeta}`);
+        if (c.total_archivos > 0) window.carpetasPendriveSeleccionadas.add(`${c.personaje}/${c.carpeta}`);
       });
       actualizarEstadoCheckboxesPendrive();
     }
@@ -2734,7 +2734,7 @@
 
     function toggleSeleccionCarpetaPendrive(carpetaKey, marcado) {
       if (!window.carpetasPendriveSeleccionadas) window.carpetasPendriveSeleccionadas = new Set();
-      if (marcado) {
+      if (marcado && carpetasPendriveData.some(c => `${c.personaje}/${c.carpeta}` === carpetaKey && c.total_archivos > 0)) {
         window.carpetasPendriveSeleccionadas.add(carpetaKey);
       } else {
         window.carpetasPendriveSeleccionadas.delete(carpetaKey);
@@ -2767,6 +2767,7 @@
     }
 
     function enviarCarpetasSeleccionadasPendrive() {
+      actualizarEstadoCheckboxesPendrive();
       if (!window.carpetasPendriveSeleccionadas || window.carpetasPendriveSeleccionadas.size === 0) {
         mostrarError("No seleccionaste ninguna carpeta para enviar.");
         return;
@@ -2775,7 +2776,11 @@
     }
 
     function actualizarEstadoCheckboxesPendrive() {
-      const cbs = document.querySelectorAll('.chk-carpeta-pendrive');
+      const disponibles = new Set(carpetasPendriveData.filter(c => c.total_archivos > 0).map(c => `${c.personaje}/${c.carpeta}`));
+      for (const key of window.carpetasPendriveSeleccionadas) {
+        if (!disponibles.has(key)) window.carpetasPendriveSeleccionadas.delete(key);
+      }
+      const cbs = Array.from(document.querySelectorAll('.chk-carpeta-pendrive')).filter(cb => !cb.disabled);
       let cantMarcadas = 0;
       cbs.forEach(cb => {
         const k = cb.getAttribute('data-carpeta-key');
@@ -2789,6 +2794,7 @@
 
       const chkMaestro = document.getElementById('chk-maestro-carpetas-pendrive');
       if (chkMaestro) {
+        chkMaestro.disabled = cbs.length === 0;
         if (cbs.length > 0 && cantMarcadas === cbs.length) {
           chkMaestro.checked = true;
           chkMaestro.indeterminate = false;
@@ -2862,7 +2868,7 @@
           });
           window.carpetasPendriveInicializadas = true;
         } else {
-          const keysActuales = new Set(carpetasPendriveData.map(c => `${c.personaje}/${c.carpeta}`));
+          const keysActuales = new Set(carpetasPendriveData.filter(c => c.total_archivos > 0).map(c => `${c.personaje}/${c.carpeta}`));
           for (const k of Array.from(window.carpetasPendriveSeleccionadas)) {
             if (!keysActuales.has(k)) {
               window.carpetasPendriveSeleccionadas.delete(k);
@@ -3126,7 +3132,9 @@
                   }
 
                   let transferInfo = '';
-                  if (estadoPen.conectado) {
+                  if (c.total_archivos === 0) {
+                    transferInfo = '<p style="color:var(--text-muted); font-size:0.85rem;">Carpeta vacía. No hay archivos para enviar.</p>';
+                  } else if (estadoPen.conectado) {
                     transferInfo = `<div><strong style="color:var(--teal)">${c.enviados_conteo}</strong> enviados</div><div style="color:var(--text-muted); font-size:0.8rem;">${c.pendientes_conteo} pendientes</div>`;
                   } else {
                     transferInfo = `<span style="color:var(--text-muted); font-size:0.85rem;">${c.total_archivos} pendientes</span>`;
@@ -3142,13 +3150,13 @@
                     <div style="font-size:0.8rem; color:var(--text-muted); margin-top:2px;">${escapeHTML(c.bytes_totales_fmt)}</div>
                   `;
 
-                  const filaEnvioInhabilitada = !puedeEnviarPendrive || (estadoPen.conectado && c.pendientes_conteo === 0);
-                  const motivoFila = !puedeEnviarPendrive ? motivoDeshabilitado : 'Todos los archivos ya fueron transferidos';
+                  const filaEnvioInhabilitada = c.total_archivos === 0 || !puedeEnviarPendrive || (estadoPen.conectado && c.pendientes_conteo === 0);
+                  const motivoFila = c.total_archivos === 0 ? 'Carpeta vacía. No hay archivos para enviar.' : !puedeEnviarPendrive ? motivoDeshabilitado : 'Todos los archivos ya fueron transferidos';
 
                   return `
                     <tr>
                       <td style="text-align:center;">
-                        <input type="checkbox" class="chk-carpeta-pendrive" data-carpeta-key="${escapeHTML(cKey)}" onchange="toggleSeleccionCarpetaPendrive('${escapeHTML(cKey)}', this.checked)" ${estaMarcada ? 'checked' : ''}>
+                        <input type="checkbox" class="chk-carpeta-pendrive" data-carpeta-key="${escapeHTML(cKey)}" aria-label="Seleccionar ${escapeHTML(cKey)}" ${c.total_archivos === 0 ? 'disabled title="Carpeta vacía. No hay archivos para enviar."' : ''} onchange="toggleSeleccionCarpetaPendrive('${escapeHTML(cKey)}', this.checked)" ${estaMarcada ? 'checked' : ''}>
                       </td>
                       <td><code>${escapeHTML(c.personaje)}</code></td>
                       <td>

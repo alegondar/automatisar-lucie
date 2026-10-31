@@ -1,5 +1,31 @@
 # Estado actual del sistema — 2026-10-31
 
+## Selección de carpetas vacías en Pendrive (2026-10-31)
+
+El diagnóstico de solo lectura del capítulo `publicidad` encontró su carpeta
+de sala de espera vacía, el capítulo cerrado con cero archivos movidos y ningún
+archivo asociado por escena/ruta en la base local. El usuario indicó que su
+material permanece en Descargas; no se seleccionó ni trasladó automáticamente.
+Después el usuario incorporó su material y confirmó el envío al pendrive. La
+consulta posterior de solo lectura registró siete archivos movidos en el capítulo,
+que seguía cerrado desde antes; por eso no ofrecía Terminar nuevamente.
+
+El panel permitía seleccionar carpetas vacías y habilitaba Enviar seleccionadas,
+aunque el botón individual estuviera bloqueado con un motivo incorrecto.
+Ahora muestra «Carpeta vacía. No hay archivos para enviar», deshabilita su casilla,
+las excluye de Seleccionar todas y poda la selección si una carpeta queda vacía
+al refrescar. La revisión sigue recibiendo solo las carpetas elegidas con archivos;
+no se alteraron simulación, confirmación, traslado, colisiones ni Deshacer.
+
+Validación Linux: cinco regresiones UI OK; la ampliación de envío incremental
+comprueba vacías, selección mixta, contador/maestro, refresco con carpeta que se
+vacía, desconexión, plan acotado y ausencia de envíos. Sintaxis JS y diff correctos;
+AST 0/36 y auditoría repo/historial 0/254. Fixtures sintéticos en Node, sin iniciar
+bandeja ni usar material real como pruebas. No se ejecutó suite Python completa:
+el cambio es exclusivamente JS; Windows nativo no ejecutado. El usuario autorizó
+el commit y la publicación de este lote. Recargar el panel con Ctrl+F5.
+
+
 ## Integración de GitHub y publicación del diseño Taste (2026-10-31)
 
 El usuario autorizó actualizar este host y publicar el rediseño. Se integraron
