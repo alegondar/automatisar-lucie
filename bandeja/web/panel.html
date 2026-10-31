@@ -4,25 +4,26 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <meta name="theme-color" content="#050811">
+  <meta name="theme-color" content="#101011">
   <meta name="csrf-token" content="__TOKEN_CSRF__">
   <title>Lucie Sin Reglas · Bandeja de descargas</title>
   <link rel="stylesheet" href="/panel.css">
 </head>
 <body>
+  <a class="saltar-contenido" href="#contenido-principal">Saltar al contenido</a>
   <header>
     <div class="marca-lucie">
       <span class="marca-simbolo" aria-hidden="true">L<span>↗</span></span>
       <div>
-        <h1 class="marca-nombre">lucie<span>Sinreglas</span></h1>
-        <p class="marca-descripcion">Bandeja de Descargas <span aria-hidden="true">/</span> Proyecto Lucie</p>
+        <p class="marca-nombre">lucie<span>Sin reglas</span></p>
+        <p class="marca-descripcion">Estudio de producción</p>
       </div>
     </div>
-    <div class="estado-local"><span class="estado-local-etiqueta">Panel local</span><span class="badge">127.0.0.1:__PUERTO__</span></div>
+    <div class="estado-local"><span class="estado-local-etiqueta">Espacio local</span><span class="badge">127.0.0.1:__PUERTO__</span></div>
   </header>
 
   <div id="banner-desconexion" class="banner-desconexion" style="display:none;">
-    <span>⚠️ Sin conexión con la bandeja de descargas. Reintentando reconectar...</span>
+    <span> Sin conexión con la bandeja de descargas. Reintentando reconectar...</span>
   </div>
 
   <div id="banner-aviso" class="banner-aviso" style="display:none;">
@@ -38,7 +39,7 @@
 
   <div id="banner-pendrive-detectado" class="banner-aviso" style="display:none; background:#1e3a8a; border-bottom:2px solid #3b82f6;">
     <div class="banner-aviso-texto">
-      <span style="font-size:1.2rem;">💾</span>
+      <span style="font-size:1.2rem;"></span>
       <span id="banner-pendrive-texto">Pendrive detectado</span>
     </div>
     <div class="banner-aviso-acciones">
@@ -47,22 +48,41 @@
     </div>
   </div>
 
-  <nav class="navegacion-principal" aria-label="Secciones del dashboard">
-    <button class="nav-btn active" id="nav-btn-lotes" onclick="mostrarPestana('lotes', event)">Lotes Detectados</button>
-    <button class="nav-btn" id="nav-btn-sin-identificar" onclick="mostrarPestana('sin-identificar', event)">Sin Identificar</button>
-    <button class="nav-btn" id="nav-btn-capitulos-abiertos" onclick="mostrarPestana('capitulos-abiertos', event)">Capítulos Abiertos (<span id="conteo-nav-abiertos">0</span>)</button>
-    <button class="nav-btn" id="nav-btn-capitulos-cerrados" onclick="mostrarPestana('capitulos-cerrados', event)">Capítulos Cerrados</button>
-    <button class="nav-btn" id="nav-btn-descartados" onclick="mostrarPestana('descartados', event)">Descartados</button>
-    <button class="nav-btn" id="nav-btn-pendrive" onclick="mostrarPestana('pendrive', event)">Pendrive</button>
-    <button class="nav-btn" id="nav-btn-eliminacion" type="button">Eliminar capítulos</button>
-    <button class="nav-btn" id="nav-btn-edicion" onclick="mostrarPestana('edicion', event)">Edición</button>
-    <button class="nav-btn" id="nav-btn-completados" onclick="mostrarPestana('completados', event)">Videos completados</button>
-    <button class="nav-btn" id="nav-btn-publicacion" onclick="mostrarPestana('publicacion', event)">Sin publicar · Enviar al celular</button>
-    <button class="nav-btn" id="nav-btn-historial" onclick="mostrarPestana('historial', event)">Historial</button>
-    <button class="nav-btn" onclick="recargarVistaActual()">Refrescar</button>
-  </nav>
+  <details class="menu-secciones" open>
+    <summary>Secciones del estudio</summary>
+    <nav class="navegacion-principal" aria-label="Secciones del dashboard">
+      <div class="nav-grupo">
+        <p class="nav-etiqueta">Material</p>
+        <button class="nav-btn active" id="nav-btn-lotes" aria-current="page" onclick="mostrarPestana('lotes', event)">Lotes detectados</button>
+        <button class="nav-btn" id="nav-btn-sin-identificar" onclick="mostrarPestana('sin-identificar', event)">Sin identificar</button>
+        <button class="nav-btn" id="nav-btn-capitulos-abiertos" onclick="mostrarPestana('capitulos-abiertos', event)">Capítulos abiertos <span class="nav-conteo" id="conteo-nav-abiertos">0</span></button>
+        <button class="nav-btn" id="nav-btn-capitulos-cerrados" onclick="mostrarPestana('capitulos-cerrados', event)">Capítulos cerrados</button>
+      </div>
+      <div class="nav-grupo">
+        <p class="nav-etiqueta">Producción</p>
+        <button class="nav-btn" id="nav-btn-pendrive" onclick="mostrarPestana('pendrive', event)">Pendrive</button>
+        <button class="nav-btn" id="nav-btn-edicion" onclick="mostrarPestana('edicion', event)">Edición</button>
+        <button class="nav-btn" id="nav-btn-completados" onclick="mostrarPestana('completados', event)">Videos completados</button>
+        <button class="nav-btn" id="nav-btn-publicacion" onclick="mostrarPestana('publicacion', event)">Enviar al celular</button>
+      </div>
+      <div class="nav-grupo">
+        <p class="nav-etiqueta">Archivo</p>
+        <button class="nav-btn" id="nav-btn-historial" onclick="mostrarPestana('historial', event)">Historial</button>
+        <button class="nav-btn" id="nav-btn-descartados" onclick="mostrarPestana('descartados', event)">Descartados</button>
+        <button class="nav-btn nav-peligro" id="nav-btn-eliminacion" type="button">Eliminar capítulos</button>
+      </div>
+      <div class="nav-pie"><span>Lucie · Roli · Mailen</span><p>De la primera toma al celular.</p></div>
+    </nav>
+  </details>
 
-  <main>
+  <main id="contenido-principal" tabindex="-1">
+    <div class="estudio-cabecera">
+      <div><p class="estudio-contexto">Lucie Sin Reglas <span aria-hidden="true">/</span> Producción</p>
+      <h1 id="vista-titulo">Lotes detectados</h1>
+      <p id="vista-descripcion">Revisá el material que llegó y prepará el próximo capítulo.</p></div>
+      <button class="btn-sm estudio-refrescar" type="button" onclick="recargarVistaActual()">Actualizar vista <span aria-hidden="true">↻</span></button>
+    </div>
+
     <section id="sec-publicacion" style="display:none;">
       <div class="wifi-cabecera">
         <div><p class="wifi-eyebrow">DEL PENDRIVE AL CELULAR</p><h2>Enviar al celular</h2>
@@ -189,7 +209,7 @@
     <!-- Alerta de capítulo olvidado (>12h) -->
     <div id="banner-capitulo-olvidado" class="banner-capitulo-olvidado" style="display:none;">
       <div id="banner-olvidado-texto" style="font-weight:600; font-size:0.95rem;">
-        ⚠️ ¿Sigue activo este capítulo?
+         ¿Sigue activo este capítulo?
       </div>
       <div style="display:flex; gap:10px; align-items:center;">
         <button class="btn-sm" onclick="posponerAlertaCapitulo()" style="background:#f59e0b; color:#000; font-weight:600; padding:6px 14px;">Seguir</button>
@@ -201,7 +221,7 @@
     <div id="banner-capitulo-activo" class="banner-capitulo-activo" style="display:none;">
       <div>
         <div style="display:flex; align-items:center; gap:10px;">
-          <span class="badge-capitulo-activo">⭐ EN FOCO</span>
+          <span class="badge-capitulo-activo"> EN FOCO</span>
           <span id="banner-capitulo-titulo" style="font-weight:700; font-size:1.1rem; color:#e0e7ff;">Capítulo en foco:</span>
           <span id="banner-otros-abiertos" style="font-size:0.85rem; color:#a5b4fc; cursor:pointer; text-decoration:underline;" onclick="mostrarPestana('capitulos-abiertos')"></span>
         </div>
@@ -223,9 +243,9 @@
     </div>
 
     <!-- Banner aviso cuando hay capítulos abiertos pero ninguno en foco -->
-    <div id="banner-sin-foco" class="banner-capitulo-olvidado" style="display:none; background:#1e1b4b; border:1px solid #6366f1;">
+    <div id="banner-sin-foco" class="banner-capitulo-olvidado" style="display:none; background:#1e1b4b; border:1px solid var(--text-muted);">
       <div style="display:flex; align-items:center; gap:10px;">
-        <span style="font-size:1.2rem;">ℹ️</span>
+        <span style="font-size:1.2rem;"></span>
         <div>
           <div style="font-weight:700; color:#e0e7ff;">Ningún capítulo en foco</div>
           <div style="font-size:0.85rem; color:#a5b4fc;">El material nuevo se clasifica por alias inicial. Podés elegir cuál poner en foco en la pestaña Capítulos Abiertos.</div>
@@ -242,11 +262,11 @@
     <div id="card-empezar-capitulo" class="card-capitulo" style="display:none;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
         <div style="display:flex; align-items:center; gap:8px;">
-          <span style="font-weight:600; font-size:0.95rem;">Empezar Capítulo:</span>
+          <span class="capitulo-encabezado">Tu próximo capítulo</span>
           <span class="badge-capitulo-inactivo">Sin capítulo activo</span>
         </div>
         <div style="font-size:0.8rem; color:var(--text-muted);">
-          Modo de respaldo activo (se asignará por alias al inicio del nombre).
+          Sin capítulo en foco, el material se reconoce por su alias.
         </div>
       </div>
       <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
@@ -257,7 +277,9 @@
             <option value="mailen">Mailen</option>
           </select>
         </label>
-        <input type="text" id="txt-capitulo-nombre" placeholder="Nombre del nuevo capítulo" style="min-width:240px;">
+        <label class="capitulo-nombre-campo" for="txt-capitulo-nombre">Nombre del capítulo
+          <input type="text" id="txt-capitulo-nombre" placeholder="Ej.: Lucie sin ideas">
+        </label>
         <button class="btn-sm" id="btn-empezar-capitulo" onclick="empezarCapitulo()" style="background:var(--accent); color:#000; font-weight:600; padding:6px 16px;">
           Empezar capítulo
         </button>
@@ -269,7 +291,7 @@
 
     <section id="sec-lotes">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; flex-wrap:wrap; gap:8px;">
-        <h2 style="font-size:1.15rem; margin:0;">Lotes Detectados</h2>
+        <h2 class="lotes-titulo">Material recibido</h2>
         <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
           <button id="btn-global-seleccionar-todo" type="button" class="btn-sm" onclick="seleccionarTodoGlobal(true)" style="padding:6px 12px; font-size:0.85rem;">
             Seleccionar todo
@@ -553,7 +575,7 @@
         Cargando detalles de descarte...
       </div>
       <div id="modal-descartar-aviso" style="background:rgba(245, 158, 11, 0.15); border:1px solid #f59e0b; color:#fef3c7; padding:12px 16px; border-radius:6px; margin:16px 0; font-weight:500;">
-        ⚠️ Esto NO borra: mueve a _descartados y se puede deshacer.
+         Esto NO borra: mueve a _descartados y se puede deshacer.
       </div>
       <div id="modal-descartar-confirmacion-box" style="margin:16px 0;">
         <label for="txt-confirmar-descartar" style="display:block; font-size:0.9rem; margin-bottom:6px;">
@@ -691,7 +713,7 @@
       <div class="visor-header">
         <div class="visor-info">
           <h3 id="visor-nombre">archivo.mp4</h3>
-          <div id="visor-meta" class="visor-meta-sub">Lote #1 &bull; 15.2 MB &bull; 🕒 2026-10-06 04:30:00</div>
+          <div id="visor-meta" class="visor-meta-sub">Lote #1 &bull; 15.2 MB &bull;  2026-10-06 04:30:00</div>
         </div>
         <div class="visor-controles-top">
           <label id="visor-lbl-seleccion" class="visor-chk-label" title="Sincronizado con la selección de la tarjeta">

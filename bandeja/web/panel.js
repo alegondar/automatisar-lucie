@@ -305,13 +305,41 @@
     function mostrarPestana(pestana, ev) {
       pestanaActual = pestana;
       document.body?.classList?.toggle('vista-eliminacion', pestana === 'eliminacion');
+      document.body?.classList?.toggle('vista-secundaria', pestana !== 'lotes');
       if (pestana !== 'eliminacion') document.querySelectorAll('#sec-eliminacion video, #sec-eliminacion audio').forEach(m => m.pause());
-      document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-      if (ev && ev.target) {
-        ev.target.classList.add('active');
-      } else {
-        const btn = document.getElementById(`nav-btn-${pestana}`);
-        if (btn) btn.classList.add('active');
+      document.querySelectorAll('.nav-btn').forEach(b => {
+        b.classList.remove('active');
+        b.removeAttribute('aria-current');
+      });
+      const botonActivo = document.getElementById(`nav-btn-${pestana}`);
+      if (botonActivo) {
+        botonActivo.classList.add('active');
+        botonActivo.setAttribute('aria-current', 'page');
+      }
+      const vistas = {
+        lotes: ['Lotes detectados', 'Revisá el material que llegó y prepará el próximo capítulo.'],
+        'sin-identificar': ['Sin identificar', 'Decidí qué archivos pertenecen a tu proyecto.'],
+        'capitulos-abiertos': ['Capítulos abiertos', 'Retomá una historia o elegí el capítulo en foco.'],
+        'capitulos-cerrados': ['Capítulos cerrados', 'Revisá las historias terminadas y su material.'],
+        descartados: ['Descartados', 'Consultá los capítulos que apartaste de producción.'],
+        pendrive: ['Pendrive', 'Revisá la unidad y prepará el traslado de material.'],
+        eliminacion: ['Eliminar capítulos', 'Elegí el material y revisá la simulación antes de confirmar su eliminación permanente.'],
+        edicion: ['Edición', 'Del material sin editar al video final de cada capítulo.'],
+        completados: ['Videos completados', 'Revisá los exports y conservá cada versión del video final.'],
+        publicacion: ['Enviar al celular', 'Tu material sin publicar, listo para revisar y enviar.'],
+        historial: ['Historial', 'Consultá los movimientos registrados y las opciones de Deshacer.']
+      };
+      const vista = vistas[pestana];
+      const titulo = document.getElementById('vista-titulo');
+      const descripcion = document.getElementById('vista-descripcion');
+      if (vista && titulo && descripcion) {
+        titulo.textContent = vista[0];
+        descripcion.textContent = vista[1];
+      }
+      const menu = document.querySelector('.menu-secciones');
+      if (menu && window.matchMedia('(max-width: 767px)').matches) {
+        menu.open = false;
+        document.getElementById('contenido-principal')?.focus({preventScroll: true});
       }
 
       document.getElementById('sec-lotes').style.display = (pestana === 'lotes') ? 'block' : 'none';
@@ -658,9 +686,9 @@
             const movidos = (datosEstado.balance_capitulo && datosEstado.balance_capitulo.movidos !== undefined) ? datosEstado.balance_capitulo.movidos : (capFoco.archivos_movidos || 0);
             let textoSub = `Iniciado: ${fechaTxt} | ${movidos} archivo(s) movido(s). Todo archivo nuevo entrante se asigna a esta historia.`;
             if (capFoco.carpeta_info && capFoco.carpeta_info.ya_existia && capFoco.carpeta_info.total_archivos > 0) {
-              textoSub += ` • ℹ️ ${capFoco.carpeta_info.mensaje}`;
+              textoSub += ` • ${capFoco.carpeta_info.mensaje}`;
             } else if (datosEstado.mensaje_carpeta_existente) {
-              textoSub += ` • ℹ️ ${datosEstado.mensaje_carpeta_existente}`;
+              textoSub += ` • ${datosEstado.mensaje_carpeta_existente}`;
             }
             subtitulo.innerText = textoSub;
           }
@@ -668,7 +696,7 @@
         if (bannerOlvidado) {
           bannerOlvidado.style.display = datosEstado.alerta_olvidado ? 'flex' : 'none';
           const txtOlv = document.getElementById('banner-olvidado-texto');
-          if (txtOlv) txtOlv.innerText = `⚠️ ¿Sigue activo este capítulo? Lleva más de ${datosEstado.horas_limite || 12} horas abierto.`;
+          if (txtOlv) txtOlv.innerText = `¿Sigue activo este capítulo? Lleva más de ${datosEstado.horas_limite || 12} horas abierto.`;
         }
       } else {
         if (bannerActivo) bannerActivo.style.display = 'none';
@@ -796,7 +824,7 @@
                 const mov = bal.movidos !== undefined ? bal.movidos : (c.archivos_movidos || 0);
                 const fechaTxt = (c.fecha_inicio || '').replace('T', ' ').slice(0, 19);
                 const badgeFoco = c.en_foco 
-                  ? '<span class="badge" style="background:#f59e0b; color:#000; font-weight:700;">⭐ En foco</span>'
+                  ? '<span class="badge" style="background:#f59e0b; color:#000; font-weight:700;"> En foco</span>'
                   : '<span style="color:var(--text-muted); font-size:0.85rem;">Secundario</span>';
                 
                 const btnFoco = !c.en_foco
@@ -804,7 +832,7 @@
                   : '';
                 
                 return `
-                  <tr style="${c.en_foco ? 'background:rgba(99, 102, 241, 0.1);' : ''}">
+                  <tr style="${c.en_foco ? 'background:var(--card-alt);' : ''}">
                     <td><code>${escapeHTML(c.personaje)}</code></td>
                     <td><strong>${escapeHTML(c.nombre)}</strong></td>
                     <td style="text-align:center;">${badgeFoco}</td>
@@ -872,8 +900,8 @@
           cont.innerHTML = `
             <p style="margin-bottom:8px;">Capítulo a terminar: <strong>${escapeHTML(cap.personaje)} / ${escapeHTML(cap.nombre)}</strong></p>
             <div style="background:var(--card-alt); padding:12px; border-radius:6px; margin:12px 0;">
-              <div style="margin-bottom:6px;">📁 <strong>${bal.pendientes}</strong> archivo(s) pendiente(s) en Descargas</div>
-              <div>📦 <strong>${bal.movidos}</strong> archivo(s) ya movido(s) al destino</div>
+              <div style="margin-bottom:6px;"><strong>${bal.pendientes}</strong> archivo(s) pendiente(s) en Descargas</div>
+              <div> <strong>${bal.movidos}</strong> archivo(s) ya movido(s) al destino</div>
             </div>
             <p style="color:var(--text-muted); font-size:0.85rem;">
               Al terminar, el capítulo queda cerrado: no se le asignará ningún archivo nuevo y lo que llegue después seguirá el circuito sin capítulo en foco.
@@ -1123,9 +1151,9 @@
         detalles.innerHTML = `
           <p style="margin-bottom:8px;">Capítulo: <strong>${escapeHTML(sim.escena)}</strong> (${escapeHTML(sim.personaje)})</p>
           <div style="background:var(--card-alt); padding:12px; border-radius:6px; margin:12px 0; font-size:0.9rem;">
-            <div>📁 <strong>Origen:</strong> <code style="word-break:break-all;">${escapeHTML(sim.origen_carpeta)}</code></div>
-            <div style="margin-top:6px;">📦 <strong>Destino en cuarentena:</strong> <code style="word-break:break-all; color:var(--teal);">${escapeHTML(sim.destino_carpeta)}</code></div>
-            <div style="margin-top:6px;">📊 <strong>Total archivos:</strong> ${sim.total_archivos} &bull; <strong>Peso:</strong> ${escapeHTML(sim.peso_total_fmt || '0 B')}</div>
+            <div><strong>Origen:</strong> <code style="word-break:break-all;">${escapeHTML(sim.origen_carpeta)}</code></div>
+            <div style="margin-top:6px;"> <strong>Destino en cuarentena:</strong> <code style="word-break:break-all; color:var(--teal);">${escapeHTML(sim.destino_carpeta)}</code></div>
+            <div style="margin-top:6px;"> <strong>Total archivos:</strong> ${sim.total_archivos} &bull; <strong>Peso:</strong> ${escapeHTML(sim.peso_total_fmt || '0 B')}</div>
           </div>
           ${notaVacio}
         `;
@@ -1343,11 +1371,11 @@
     function generarHtmlMiniatura(loteId, a) {
       if (a.nombre && a.nombre.toLowerCase().endsWith('.mp3')) {
         const src = a.id_media ? `/api/media?id=${encodeURIComponent(a.id_media)}` : '';
-        return `<div class="audio-thumb"><span>🎵 ${escapeHTML(a.nombre)}</span><audio controls preload="none" src="${src}"></audio></div>`;
+        return `<div class="audio-thumb"><span>Audio · ${escapeHTML(a.nombre)}</span><audio controls preload="none" src="${src}"></audio></div>`;
       }
       const esVid = esArchivoVideo(a.nombre);
       const mediaId = a.id_media || '';
-      const fallbackSvg = `data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22><rect width=%22100%%22 height=%22100%%22 fill=%22%23222%22/><text x=%2250%%22 y=%2250%%22 fill=%22%23888%22 text-anchor=%22middle%22 dy=%22.3em%22>Media</text></svg>`;
+      const fallbackSvg = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" fill="#242426"/><text x="160" y="90" fill="#b4b4b8" text-anchor="middle" dominant-baseline="middle" font-family="sans-serif" font-size="14">Vista previa no disponible</text></svg>');
 
       if (esVid) {
         const srcVideo = mediaId ? `/api/media?id=${mediaId}#t=0.1` : '';
@@ -1477,7 +1505,7 @@
         }
         const pesoFmt = archivo.tamanio_fmt || formatearBytes(archivo.tamanio || archivo.tamanio_bytes || archivo.tamano || 0);
         const fechaTxt = archivo.fecha_modificacion || archivo.fecha_llegada || archivo.fecha || '';
-        divMeta.innerText = `${loteDesc} • ${pesoFmt}${fechaTxt ? ' • 🕒 ' + fechaTxt : ''}`;
+        divMeta.innerText = `${loteDesc} • ${pesoFmt}${fechaTxt ? ' • ' + fechaTxt : ''}`;
       }
 
       if (chk) {
@@ -1651,7 +1679,7 @@
       const archivosSeleccionadosIniciales = (lote.archivos || []).filter(a => !(a.duplicado && a.duplicado.es_duplicado)).length;
       const todosTildados = totalArchivosLote > 0 && archivosSeleccionadosIniciales === totalArchivosLote;
       const listoParaMover = todosTildados && !esLoteAdoptado;
-      const badgeAdoptadoHeader = esLoteAdoptado ? `<span class="badge" style="background:#7c3aed; color:#fff; font-weight:600; margin-left:8px; font-size:0.75rem;">Adoptado a mano</span>` : '';
+      const badgeAdoptadoHeader = esLoteAdoptado ? `<span class="badge" style="background:var(--card-alt); color:var(--text); font-weight:600; margin-left:8px; font-size:0.75rem;">Adoptado a mano</span>` : '';
 
       return `
         <div class="card" id="card-${lote.lote_id}">
@@ -1674,7 +1702,7 @@
               const esDup = Boolean(a.duplicado && a.duplicado.es_duplicado);
               const isChecked = !esDup;
               const badgeDup = esDup ? `<span class="badge-duplicado" title="${escapeHTML(a.duplicado.mensaje || 'Archivo duplicado')}">Duplicado</span>` : '';
-              const badgeAdop = a.adoptado_a_mano ? `<span class="badge" style="background:#7c3aed; color:#fff; font-size:0.7rem; padding:1px 5px; border-radius:3px; margin-left:4px; font-weight:600;" title="Adoptado a mano desde Sin Identificar">Adoptado a mano</span>` : '';
+              const badgeAdop = a.adoptado_a_mano ? `<span class="badge" style="background:var(--card-alt); color:var(--text); font-size:0.7rem; padding:1px 5px; border-radius:3px; margin-left:4px; font-weight:600;" title="Adoptado a mano desde Sin Identificar">Adoptado a mano</span>` : '';
               const detalleDup = esDup ? `<div class="archivo-duplicado-info" style="font-size:0.72rem; color:#ef4444; margin-top:2px;" title="${escapeHTML(a.duplicado.mensaje || '')}">${escapeHTML(a.duplicado.mensaje || 'Duplicado')}</div>` : '';
               return `
               <div class="archivo-item" title="Archivo: ${a.nombre}&#10;Fecha llegada: ${a.fecha_llegada || a.fecha || ''}&#10;Fecha modificación: ${a.fecha || ''}&#10;Tamaño: ${formatearBytes(a.tamanio)}">
@@ -1686,7 +1714,7 @@
                   <div class="archivo-nombre" title="${a.nombre}">${escapeHTML(a.nombre)} ${badgeDup} ${badgeAdop}</div>
                   <div class="archivo-peso">${formatearBytes(a.tamanio)}</div>
                   ${detalleDup}
-                  <div class="archivo-llegada" style="font-size:0.75rem; color:var(--text-muted);" title="Fecha de llegada: ${a.fecha_llegada || a.fecha || ''}">🕒 ${a.fecha_llegada || a.fecha || ''}</div>
+                  <div class="archivo-llegada" style="font-size:0.75rem; color:var(--text-muted);" title="Fecha de llegada: ${a.fecha_llegada || a.fecha || ''}"> ${a.fecha_llegada || a.fecha || ''}</div>
                 </div>
               </div>
             `;}).join('')}
@@ -1767,7 +1795,7 @@
                   <div class="archivo-nombre" title="${a.nombre}">${escapeHTML(a.nombre)} ${badgeDup}</div>
                   <div class="archivo-peso">${formatearBytes(a.tamanio)}</div>
                   ${detalleDup}
-                  <div class="archivo-llegada" style="font-size:0.75rem; color:var(--text-muted);" title="Fecha de llegada: ${a.fecha_llegada || a.fecha || ''}">🕒 ${a.fecha_llegada || a.fecha || ''}</div>
+                  <div class="archivo-llegada" style="font-size:0.75rem; color:var(--text-muted);" title="Fecha de llegada: ${a.fecha_llegada || a.fecha || ''}"> ${a.fecha_llegada || a.fecha || ''}</div>
                 </div>
               </div>
             `;}).join('')}
@@ -1794,7 +1822,7 @@
       const cont = document.getElementById('contenedor-lotes');
       const lotesActivos = (datosEstado.lotes || []).filter(l => !l.es_anterior);
       if (!lotesActivos.length) {
-        cont.innerHTML = '<div class="card"><p style="color:var(--text-muted)">No hay nuevos lotes de candidatos en ~/Descargas.</p></div>';
+        cont.innerHTML = '<div class="card"><p style="color:var(--text-muted)">Todavía no llegaron archivos. Las nuevas descargas aparecerán acá para que las revises.</p></div>';
         actualizarConteoGlobalSeleccion();
         return;
       }
@@ -1807,7 +1835,7 @@
       const cont = document.getElementById('contenedor-lotes');
       const lotesActivos = (datosEstado.lotes || []).filter(l => !l.es_anterior);
       if (!lotesActivos.length) {
-        cont.innerHTML = '<div class="card"><p style="color:var(--text-muted)">No hay nuevos lotes de candidatos en ~/Descargas.</p></div>';
+        cont.innerHTML = '<div class="card"><p style="color:var(--text-muted)">Todavía no llegaron archivos. Las nuevas descargas aparecerán acá para que las revises.</p></div>';
         actualizarConteoGlobalSeleccion();
         return;
       }
@@ -2387,7 +2415,7 @@
       } else {
         const alertaOtro = sim.hay_otro_tipo ? `
           <div style="margin:8px 0 14px 0; padding:10px 14px; background:rgba(234, 179, 8, 0.15); border:1px solid #eab308; border-radius:6px; color:#fde047; font-size:0.9rem;">
-            <strong>⚠️ Archivo no multimedia detectado:</strong> Contiene archivos con extensión distinta a fotos o videos. Se moverán a la raíz de la escena conservando su nombre original sin sobreescritura.
+            <strong> Archivo no multimedia detectado:</strong> Contiene archivos con extensión distinta a fotos o videos. Se moverán a la raíz de la escena conservando su nombre original sin sobreescritura.
           </div>
         ` : '';
         cont.innerHTML = `
@@ -2551,7 +2579,7 @@
         if (sim.capitulo_abierto) {
           alertasHtml += `
             <div style="background:rgba(245, 158, 11, 0.15); border:1px solid #f59e0b; color:#fef3c7; padding:10px 14px; border-radius:6px; margin-bottom:12px; font-weight:500;">
-              ⚠️ <strong>Atención:</strong> Uno o más capítulos seleccionados siguen abiertos en el panel; podrían recibirse más archivos luego.
+               <strong>Atención:</strong> Uno o más capítulos seleccionados siguen abiertos en el panel; podrían recibirse más archivos luego.
             </div>
           `;
         }
@@ -2570,7 +2598,7 @@
         if (sim.archivos_omitidos && sim.archivos_omitidos.length > 0) {
           alertasHtml += `
             <div style="background:rgba(14, 165, 233, 0.15); border:1px solid #0ea5e9; color:#bae6fd; padding:10px 14px; border-radius:6px; margin-bottom:12px; font-size:0.9rem;">
-              <strong>ℹ️ Archivos que no se agregarán:</strong>
+              <strong> Archivos que no se agregarán:</strong>
               <ul style="margin:6px 0 0 18px;">
                 ${sim.archivos_omitidos.map(o => `<li><code>${escapeHTML(o.nombre)}</code>: ${escapeHTML(o.aviso || o.motivo || o.estado || "Ya enviado")}${["ya_enviado", "omitido_usuario"].includes(o.estado) ? opcionesArchivoExistente(o) : ""}</li>`).join('')}
               </ul>
@@ -2896,7 +2924,7 @@
           motivoDeshabilitado = "El pendrive no responde a las lecturas dentro del tiempo límite de 3 segundos.";
           contEstado.innerHTML = `
             <div style="background:rgba(245, 158, 11, 0.15); border:1px solid #f59e0b; padding:16px; border-radius:6px; color:#fef3c7;">
-              <h3 style="display:flex; align-items:center; gap:8px;">⚠️ Pendrive sin respuesta</h3>
+              <h3 style="display:flex; align-items:center; gap:8px;"> Pendrive sin respuesta</h3>
               <p style="margin-top:6px; font-size:0.9rem;">El dispositivo montado no responde a las solicitudes de lectura dentro del tiempo límite de 3 segundos.</p>
             </div>
           `;
@@ -2907,7 +2935,7 @@
           motivoDeshabilitado = "No hay ningún pendrive vinculado conectado.";
           contEstado.innerHTML = `
             <div style="background:var(--card-alt); padding:16px; border-radius:6px; color:var(--text-muted);">
-              <p>🔌 Ningún pendrive detectado en el sistema.</p>
+              <p> Ningún pendrive detectado en el sistema.</p>
               <small>Conectá tu pendrive para transferir el material o vincularlo por primera vez.</small>
             </div>
           `;
@@ -2988,12 +3016,12 @@
               if (btnVincular) btnVincular.style.display = 'none';
 
               contEstado.innerHTML = `
-                <div style="background:rgba(99, 102, 241, 0.1); border:1px solid #6366f1; padding:16px; border-radius:6px;">
+                <div style="background:var(--card-alt); border:1px solid var(--text-muted); padding:16px; border-radius:6px;">
                   <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:12px;">
                     <div>
                       <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Estado</div>
-                      <div style="font-size:1.1rem; font-weight:700; color:#818cf8; margin-top:4px;">
-                        🔍 Unidad candidata montada (sin vincular)
+                      <div style="font-size:1.1rem; font-weight:700; color:var(--text-muted); margin-top:4px;">
+                         Unidad candidata montada (sin vincular)
                       </div>
                     </div>
                     <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
@@ -3092,7 +3120,7 @@
                   } else if (c.tipo === 'Capítulo cerrado') {
                     badgeTipo = '<span class="badge-tipo-cerrado">Capítulo cerrado</span>';
                   } else if (c.es_heredada || c.tipo === 'Carpeta heredada') {
-                    badgeTipo = '<span class="badge-tipo-heredada" title="Carpeta preexistente sin estructura estándar de capítulo">⚠️ Carpeta heredada</span>';
+                    badgeTipo = '<span class="badge-tipo-heredada" title="Carpeta preexistente sin estructura estándar de capítulo"> Carpeta heredada</span>';
                   } else {
                     badgeTipo = '<span class="badge-tipo-escena">Escena suelta</span>';
                   }
@@ -3150,12 +3178,12 @@
                           </div>
                           ${c.es_heredada ? `
                             <div style="background:rgba(245, 158, 11, 0.15); border:1px solid #f59e0b; color:#fef3c7; padding:8px 12px; border-radius:6px; margin-bottom:8px; font-size:0.85rem;">
-                              ⚠️ <strong>Carpeta heredada:</strong> No tiene estructura canónica de capítulo. Revisá el contenido antes de decidir su envío.
+                               <strong>Carpeta heredada:</strong> No tiene estructura canónica de capítulo. Revisá el contenido antes de decidir su envío.
                             </div>
                           ` : ''}
                           ${c.no_multimedia > 0 ? `
                             <div style="background:rgba(239, 68, 68, 0.15); border:1px solid #ef4444; color:#fca5a5; padding:8px 12px; border-radius:6px; margin-bottom:8px; font-size:0.85rem;">
-                              ⚠️ <strong>Archivos no multimedia (${c.no_multimedia}):</strong> Se omitirán en la transferencia hacia el pendrive y permanecerán intactos en la sala de espera sin borrarse.
+                               <strong>Archivos no multimedia (${c.no_multimedia}):</strong> Se omitirán en la transferencia hacia el pendrive y permanecerán intactos en la sala de espera sin borrarse.
                             </div>
                           ` : ''}
                           <table class="tabla-archivos-carpeta">
@@ -3178,7 +3206,7 @@
                                   <tr>
                                     <td>
                                       <span ${onclickVisor} style="${cursorStyle} font-weight:500;" title="${esMedia ? 'Clic para ver en el visor' : ''}">
-                                        ${esMedia ? (a.tipo === 'video' ? '🎬 ' : '🖼️ ') : '📄 '}${escapeHTML(a.nombre)}
+                                        ${esMedia ? (a.tipo === 'video' ? 'Video · ' : a.tipo === 'audio' ? 'Audio · ' : 'Imagen · ') : 'Archivo · '}${escapeHTML(a.nombre)}
                                       </span>
                                     </td>
                                     <td><code>${escapeHTML(a.ruta_relativa)}</code></td>
@@ -3188,7 +3216,7 @@
                                     <td style="text-align:center;">
                                       ${esMedia ? `
                                         <button class="btn-sm" onclick="abrirVisorMedia('pendrive:${escapeHTML(cKey)}', '${escapeHTML(a.id_media)}')" style="background:transparent; border:1px solid var(--border); color:var(--text); padding:2px 8px; font-size:0.8rem; border-radius:4px; cursor:pointer;" title="Abrir visor">
-                                          👁️ Ver
+                                           Ver
                                         </button>
                                       ` : '<span style="color:var(--text-muted); font-size:0.8rem;">-</span>'}
                                     </td>
@@ -3700,7 +3728,7 @@
               <input type="checkbox" onchange="toggleSeleccionClipParaEditar('${escapeHTML(c.identificador)}')" ${sel}>
             </td>
             <td style="padding:8px; font-weight:500;">
-              <span style="cursor:pointer;" onclick="previsualizarClipPendrive('${escapeHTML(c.id_media || c.ruta_relativa || c.identificador)}', '${escapeHTML(c.nombre)}')" title="${escapeHTML(c.ruta_relativa)}">${c.tipo === 'audio' ? '🎵 ' : ''}${escapeHTML(c.nombre)}</span>
+              <span style="cursor:pointer;" onclick="previsualizarClipPendrive('${escapeHTML(c.id_media || c.ruta_relativa || c.identificador)}', '${escapeHTML(c.nombre)}')" title="${escapeHTML(c.ruta_relativa)}">${c.tipo === 'audio' ? 'Audio · ' : ''}${escapeHTML(c.nombre)}</span>
             </td>
             <td style="padding:8px; color:var(--text-muted);">${escapeHTML(c.personaje)}</td>
             <td style="padding:8px; color:var(--text-muted);"><span class="badge" style="background:#1e1b4b; color:#a5b4fc;">${escapeHTML(c.capitulo)}</span></td>
@@ -3797,7 +3825,7 @@
       document.getElementById('conteo-clips-modal').innerText = String(sesionModalClips.length);
 
       const listaDiv = document.getElementById('lista-clips-modal');
-      listaDiv.innerHTML = sesionModalClips.map(c => `<div>🎬 <strong>${escapeHTML(c.nombre)}</strong> (${escapeHTML(c.capitulo)})</div>`).join('');
+      listaDiv.innerHTML = sesionModalClips.map(c => `<div>Video · <strong>${escapeHTML(c.nombre)}</strong> (${escapeHTML(c.capitulo)})</div>`).join('');
 
       document.getElementById('modal-crear-sesion').style.display = 'flex';
     }
@@ -3831,7 +3859,7 @@
         if (data.exito) {
           cerrarModalCrearSesion();
           clipsSeleccionadosParaEditar.clear();
-          mostrarAvisoEdicion(`✅ Sesión iniciada: <strong>${escapeHTML(nombreInput)}</strong> con ${sesionModalClips.length} clip(s).`);
+          mostrarAvisoEdicion(`Sesión iniciada: <strong>${escapeHTML(nombreInput)}</strong> con ${sesionModalClips.length} clip(s).`);
           if (data.error_abrir_carpeta) {
             mostrarAvisoEdicion(`Sesión iniciada. No se pudo abrir la carpeta: ${escapeHTML(data.error_abrir_carpeta)}`);
           }
@@ -3949,7 +3977,7 @@
             <div style="margin-top:10px; font-size:0.85rem; color:var(--text-muted);">
               <strong>Clips agrupados (${clips.length}):</strong>
               <div style="margin-top:4px; display:flex; flex-wrap:wrap; gap:6px;">
-                ${clips.map(c => `<span style="background:rgba(255,255,255,0.06); padding:2px 8px; border-radius:4px;">🎬 ${escapeHTML(c.split('/').pop())}</span>`).join('')}
+                ${clips.map(c => `<span style="background:rgba(255,255,255,0.06); padding:2px 8px; border-radius:4px;">Video · ${escapeHTML(c.split('/').pop())}</span>`).join('')}
               </div>
             </div>
           </div>
@@ -4002,7 +4030,7 @@
           const pendientes = (data.retiro_originales?.pendientes || []).length;
           const motivos = [...new Set((data.retiro_originales?.pendientes || []).map(p => p.error).filter(Boolean))].join(' ');
           mostrarAvisoEdicion(
-            `✅ ${movidosCount} clip(s) organizados en 'videos ya editados'. ${pendientes ? `${pendientes} original(es) siguen en Sin editar en uso por CapCut; se retirarán automáticamente en segundo plano (no es necesario cerrar CapCut).` : 'Traslado completado.'} ${escapeHTML(data.export_final?.mensaje || '')} ${data.export_final?.destino ? escapeHTML(data.export_final.destino) : ''}`,
+            `${movidosCount} clip(s) organizados en 'videos ya editados'. ${pendientes ? `${pendientes} original(es) siguen en Sin editar en uso por CapCut; se retirarán automáticamente en segundo plano (no es necesario cerrar CapCut).` : 'Traslado completado.'} ${escapeHTML(data.export_final?.mensaje || '')} ${data.export_final?.destino ? escapeHTML(data.export_final.destino) : ''}`,
             `<button class="btn-sm" onclick="deshacerTerminarEdicion(${sesionId})" style="background:#f59e0b; color:#000; font-weight:600;">Deshacer</button>`
           );
           await cargarVistaEdicion();
@@ -4086,7 +4114,7 @@
             <td style="padding:8px; text-align:center; color:var(--text-muted);">${c.sin_editar}</td>
             <td style="padding:8px; text-align:center; color:#38bdf8; font-weight:600;">${c.en_edicion}</td>
             <td style="padding:8px; text-align:center; color:#10b981; font-weight:600;">${c.ya_editados}</td>
-            <td style="padding:8px; text-align:center; color:#a855f7; font-weight:700;">${c.completos}</td>
+            <td style="padding:8px; text-align:center; color:var(--text-muted); font-weight:700;">${c.completos}</td>
           </tr>
         `;
       });
@@ -4169,7 +4197,7 @@
           if (data.resultado_copia && data.resultado_copia.destino) {
             const dest = data.resultado_copia.destino;
             mostrarAvisoEdicion(
-              `🎬 Video copiado a 'videos completos'.`,
+              `Video copiado a 'videos completos'.`,
               `<button class="btn-sm" onclick="deshacerCopiaCompleto('${escapeHTML(dest)}')" style="background:#f59e0b; color:#000; font-weight:600;">Deshacer</button>`
             );
           } else {
@@ -4227,7 +4255,7 @@
         const data = await res.json();
         if (data.exito) {
           const nuevosCount = (data.nuevos || []).length;
-          mostrarAvisoEdicion(`🔍 Escaneo de CapCut finalizado. ${nuevosCount} nuevo(s) export(s) estabilizado(s).`);
+          mostrarAvisoEdicion(`Escaneo de CapCut finalizado. ${nuevosCount} nuevo(s) export(s) estabilizado(s).`);
           await cargarVistaEdicion();
         }
       } catch (err) {
@@ -4360,7 +4388,7 @@
       if (entrada.formato === 'audio') {
         const icono = document.createElement('span');
         icono.className = 'eliminacion-audio-icono';
-        icono.textContent = '♫';
+        icono.textContent = 'Audio';
         icono.setAttribute('aria-hidden', 'true');
         contenedor.append(icono);
         medio.src = src;
@@ -4439,7 +4467,7 @@
         nombre.textContent = entrada.ruta.split('/').at(-1);
         const icono = document.createElement('span');
         icono.className = 'eliminacion-icono';
-        icono.textContent = entrada.tipo === 'carpeta' ? '📁' : (entrada.formato === 'audio' ? '🎵' : (entrada.formato === 'video' ? '🎬' : '🖼️'));
+        icono.textContent = entrada.tipo === 'carpeta' ? 'Carpeta ·' : (entrada.formato === 'audio' ? 'Audio ·' : (entrada.formato === 'video' ? 'Video ·' : 'Imagen ·'));
         icono.setAttribute('aria-hidden', 'true');
         etiqueta.append(check, icono, nombre);
         tarjeta.append(etiqueta);
@@ -4573,3 +4601,13 @@
       });
     }
     conectarEliminacionManual();
+
+// Menú nativo: abierto en escritorio y plegado en el celular. Sin JS queda accesible.
+(() => {
+  const menu = document.querySelector('.menu-secciones');
+  if (!menu || !window.matchMedia) return;
+  const compacto = window.matchMedia('(max-width: 767px)');
+  const adaptarMenu = () => { menu.open = !compacto.matches; };
+  adaptarMenu();
+  compacto.addEventListener('change', adaptarMenu);
+})();

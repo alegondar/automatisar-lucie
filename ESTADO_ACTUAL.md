@@ -1,5 +1,33 @@
 # Estado actual del sistema — 2026-10-23
 
+## Rediseño del dashboard con Taste (2026-10-31)
+
+Instalada la skill oficial `Leonxlnx/taste-skill` en el entorno personal; su
+README no documenta un comando `taste-skill init`. Se aplicó su recorrido para
+apps, estilo `true-black-flat`, semilla 1306357286, adaptado a carbón/cian y
+fuentes locales sin dependencias de red. El sistema visual está en DESIGN.md.
+Navegación lateral Material / Producción / Archivo, menú móvil nativo, h1 y
+contexto por vista, foco accesible, formulario etiquetado y controles táctiles.
+Se conservaron IDs, contratos API, simulaciones, confirmaciones y Deshacer.
+Sin cambios en rutas, movimientos, receptor ni almacenamiento.
+
+Validación Linux/Chrome temporal: las cinco regresiones UI existentes OK;
+sintaxis JS, diff y auditorías AST (0/36) y repo/historial (0/253) correctas.
+Se comprobaron las 11 vistas, navegación desde el contador, foco, menú y ausencia
+de desbordamiento a 1440/768/390/320 px, también con un lote de dos archivos de
+muestra exclusivamente en el navegador temporal. Taste inspector: 0 FAIL y un
+WARN por el espacio del estado sin archivos. Lint: 0 FAIL; avisos sobre estilos
+semánticos heredados, overlays, rutas monospace y encabezado auxiliar conservados.
+No se ejecutó suite Python completa ni Windows nativo: el lote es HTML/CSS/JS.
+No se inició la bandeja real ni se accedió a Descargas, CapCut o pendrive reales.
+Fixtures, capturas e informes quedaron en /tmp, fuera de Git.
+
+Fetch detectó dos commits entrantes en origin/feat/lucie-recibir (d52477e y
+7c76bd8). Se consultó su integración y se continuó con la versión local, sin
+merge/pull ni cambios de versión instalada. Commit del rediseño autorizado;
+publicación remota pendiente. Las notas locales preexistentes se conservan.
+
+
 ## Inicio automático e icono en Kali/XFCE (2026-10-25)
 
 A pedido del usuario, Linux/X11 dispone del mismo icono que Windows: clic abre
