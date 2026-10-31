@@ -62,10 +62,10 @@ class TestOrganizacionMensual(unittest.TestCase):
 
     def test_categorias_y_colas_conservan_personajes_nombres_y_hashes(self):
         for base in self.org.BASES:
-            for personaje in ("lucie", "roli", "mailen"):
+            for personaje in ("lucie", "roli", "mailen", "luna"):
                 self.crear(base + "/" + personaje + "/" + self.cap + "/uno.mp4")
         plan = self.org.simular()
-        self.assertEqual(len(plan["acciones"]), 21)
+        self.assertEqual(len(plan["acciones"]), 28)
         self.org.ejecutar(plan, True)
         for a in plan["acciones"]:
             destino = os.path.join(self.raiz, *a["destino"].split("/"))

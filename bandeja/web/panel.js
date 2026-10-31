@@ -4182,7 +4182,7 @@
             ${!copiado && !exp.sesion_id && !exp.archivo_reemplazado ? `<div class="export-sin-sesion">
               <p>Si este export no corresponde a una sesión pendiente, indicá su título y personaje. La copia usará ese título; el original de CapCut se conserva.</p>
               <label>Título del video <input id="titulo-export-${exp.id}" maxlength="160" placeholder="Por ejemplo: Lucie pedo" autocomplete="off"></label>
-              <label>Personaje <select id="personaje-export-${exp.id}"><option value="">Elegí el personaje</option><option value="lucie">Lucie</option><option value="roli">Roli</option><option value="mailen">Mailen</option></select></label>
+              <label>Personaje <select id="personaje-export-${exp.id}"><option value="">Elegí el personaje</option><option value="lucie">Lucie</option><option value="roli">Roli</option><option value="mailen">Mailen</option><option value="luna">Luna</option></select></label>
               <button class="btn-sm" onclick="guardarExportSinPublicar(${exp.id})">Revisar título y guardar en Sin publicar</button>
             </div>` : ''}
           </div>

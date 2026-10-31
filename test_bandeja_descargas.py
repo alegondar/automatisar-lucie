@@ -640,6 +640,32 @@ class TestServidorHTTPYSeguridad(unittest.TestCase):
             self.assertIn("error_abrir_carpeta", fallo)
             abrir.assert_called_once()
 
+    def test_capitulo_luna_api_creacion_foco_cierre_y_reapertura(self):
+        status, datos, _ = self._request("GET", "/api/personajes")
+        self.assertEqual(status, 200)
+        self.assertIn({"id": "luna", "nombre": "Luna"}, datos["personajes"])
+        headers = {"Content-Type": "application/json", "X-CSRF-Token": self.token_csrf}
+        status, datos, _ = self._request("POST", "/api/capitulos/empezar", headers,
+                                        json.dumps({"personaje": "luna", "nombre": "Luna de paseo"}))
+        self.assertEqual(status, 200, datos)
+        estado = self._request("GET", "/api/capitulos/estado")[1]
+        cap = estado["capitulo_foco"]
+        self.assertEqual(cap["personaje"], "luna")
+        self.assertTrue(os.path.isdir(os.path.join(self.destino, "luna", cap["nombre"])))
+        self.vigilante.escanear()
+        escenas = self._request("GET", "/api/escenas")[1]["escenas"]
+        self.assertTrue(any(e["personaje"] == "luna" and e["nombre"] == cap["nombre"] for e in escenas))
+        status, datos, _ = self._request("POST", "/api/capitulos/terminar", headers,
+                                        json.dumps({"id": cap["id"], "accion": "sin_mover"}))
+        self.assertEqual(status, 200, datos)
+        self.assertEqual(self.db.obtener_capitulo_por_id(cap["id"])["estado"], "cerrado")
+        status, datos, _ = self._request("POST", "/api/capitulos/reabrir", headers,
+                                        json.dumps({"id": cap["id"]}))
+        self.assertEqual(status, 200, datos)
+        self.assertEqual(self.db.obtener_capitulo_por_id(cap["id"])["estado"], "activo")
+        self._request("POST", "/api/capitulos/terminar", headers,
+                      json.dumps({"id": cap["id"], "accion": "sin_mover"}))
+
     def test_get_spa_html(self):
         status, _, raw = self._request("GET", "/")
         self.assertEqual(status, 200)

@@ -1,5 +1,13 @@
 # Videos sin publicar y envío al celular
 
+Personajes disponibles: **Lucie, Roli, Mailen y Luna**. Luna usa `luna` en
+las rutas: `videos completos/videos sin publicar/luna/<mes - año>/<capítulo>/`
+y, tras recepción confirmada e integridad,
+`videos completos/videosPublicados/luna/<mes - año>/<capítulo>/`.
+Comparte filtros, asignación explícita, revisión, confirmación y Deshacer.
+Los exports numéricos siguen requiriendo sesión inequívoca o título/personaje
+explícitos; incorporar Luna no reasigna ni renombra archivos históricos.
+
 Los exports nuevos se resguardan en `LucieSinReglas/videos completos/videos sin publicar/`.
 Los vinculados a una sesión conservan personaje y carpeta de edición. Los exports
 sin una sesión inequívoca y con un nombre legible se resguardan por ese nombre,

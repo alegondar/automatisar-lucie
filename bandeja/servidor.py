@@ -309,7 +309,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
                 "personajes": [
                     {"id": "lucie", "nombre": "Lucie"},
                     {"id": "roli", "nombre": "Roli"},
-                    {"id": "mailen", "nombre": "Mailen"}
+                    {"id": "mailen", "nombre": "Mailen"},
+                    {"id": "luna", "nombre": "Luna"}
                 ],
                 "ultimo_personaje": ultimo
             })
@@ -920,8 +921,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         personaje = str(body.get("personaje", "lucie")).strip().lower()
         nombre = str(body.get("nombre", "")).strip()
 
-        if personaje not in ("lucie", "roli", "mailen"):
-            self._enviar_error(HTTPStatus.BAD_REQUEST, "Personaje inválido. Debe ser 'lucie', 'roli' o 'mailen'.")
+        if personaje not in ("lucie", "roli", "mailen", "luna"):
+            self._enviar_error(HTTPStatus.BAD_REQUEST, "Personaje inválido. Debe ser 'lucie', 'roli', 'mailen' o 'luna'.")
             return
 
         if not nombre:

@@ -1,5 +1,45 @@
 # Estado actual del sistema — 2026-10-31
 
+## Luna como protagonista en el circuito completo (2026-10-31)
+
+Luna (`luna`) se suma a Lucie, Roli y Mailen en los selectores estáticos y
+dinámicos del dashboard, API de personajes/capítulos, clasificación manual y
+por alias inicial, descubrimiento de escenas, edición, organización mensual,
+resguardo titulado de exports y filtros/asignaciones de publicación Wi-Fi.
+Se reutilizan las operaciones vigentes: sala de espera y pendrive por categoría,
+personaje/mes/capítulo, excepción de Ya editados, cola Sin publicar y archivo
+Publicados por personaje. Simulación, confirmación, SHA-256, colisiones, registros
+y Deshacer conservados. Sin migración SQLite ni modificación de protocolo Android.
+No se movió, reasignó ni renombró material real; configuraciones locales intactas.
+
+Validación Kali/Linux, Python 3.14.8: **514 pruebas OK, 12 omisiones** de
+capacidades nativas Windows, **65.979 s**. Cinco regresiones UI correctas;
+publicación ejecutada con Mailen y Luna conserva todas sus aserciones. Se probó
+API de capítulo/foco/cierre/reapertura; aliases mixtos; envío de video/imagen/MP3
+con rutas y hashes; organización mensual de 28 carpetas para cuatro personajes;
+resguardo con token; edición, completo, recepción HTTP temporal y Deshacer, con
+colisión que conserva una versión previa y archivo ajeno de Lucie sin enviar.
+Guardia y aserciones conservadas. AST **0/36**, auditoría repo/historial y diff
+correctos; archivos nuevos revisados al preparar el commit. Windows nativo y
+recepción física en teléfono no ejecutados en este host.
+
+Chrome con perfil temporal y API interceptada/sintética confirmó selectores,
+creación de Luna, filtro exclusivo, asignación de numéricos y exports sin sesión,
+a 1440 y 390 px, sin desborde móvil ni errores JS. Capturas y herramientas en
+/tmp, fuera de Git. El paquete Playwright del sistema carecía de driver; se usó
+una instalación temporal sin cambiar dependencias del proyecto. La prueba usó
+el título `luna de paseo`: detectó además un fallo previo del validador JS con
+algunos títulos en mayúsculas; la corrección adicional se consultó al usuario
+y queda pendiente, fuera de este lote de catálogo.
+
+Bandeja preexistente detenida normalmente con SIGINT antes de pruebas y salida
+comprobada. Pruebas únicamente en temporales; sin vigilantes reales como fixtures.
+Manifiesto antes/después: **no disponible**, sin pendrive montado en ambas
+comprobaciones; no son recuentos cero. Suite en `/tmp/lucie-luna-suite.log`.
+El usuario autorizó aplicar el cambio y hacer commit en `feat/lucie-recibir`.
+Para uso normal, reiniciar Lucie y recargar con Ctrl+F5 para cargar API y selects.
+
+
 ## Selección de carpetas vacías en Pendrive (2026-10-31)
 
 El diagnóstico de solo lectura del capítulo `publicidad` encontró su carpeta

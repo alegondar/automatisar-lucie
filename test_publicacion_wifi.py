@@ -289,6 +289,95 @@ class TestPublicacionWifi(unittest.TestCase):
         self.assertEqual(listado["1010(7).mp4"]["personaje"], "roli")
         self.assertEqual(listado["1010(7).mp4"]["personaje_origen"], "sesion")
 
+    def test_luna_inventario_por_carpeta_sesion_y_prefijo(self):
+        self.crear("Luna/octubre - 2026/Paseo/foto-luna.png")
+        self.crear("lunapaseo.mp4")
+        asociado = self.crear("1010(8).mp4")
+        sesion = crear_sesion(self.db, ["luna/cap/clip.mp4"], "luna", "cap")
+        self.db.actualizar_sesion_edicion(sesion["id"], video_completo_ruta=asociado)
+        listado = {a["nombre"]: a for a in self.gestor.listar()["archivos"]}
+        for nombre, criterio in [("foto-luna.png", "carpeta"), ("lunapaseo.mp4", "nombre"), ("1010(8).mp4", "sesion")]:
+            self.assertEqual(listado[nombre]["personaje"], "luna")
+            self.assertEqual(listado[nombre]["personaje_origen"], criterio)
+        numerico = self.crear("1010(9).mp4")
+        elegido = next(a for a in self.gestor.listar()["archivos"] if a["nombre"] == "1010(9).mp4")
+        with self.assertRaises(ValueError):
+            self.gestor.simular([elegido["id"]], self.dispositivo["id"])
+        plan = self.gestor.simular([elegido["id"]], self.dispositivo["id"], {elegido["id"]: "luna"})
+        self.assertIn("videos completos/videosPublicados/luna/", plan["archivos"][0]["destino_rel"])
+        self.assertTrue(os.path.isfile(numerico))
+        self.assertEqual(self.receptor.archivos, {})
+
+    def test_luna_resguardo_titulado_exige_plan_y_conserva_original(self):
+        exp_id, origen = self._export_numerico_sin_sesion()
+        plan = self.gestor.simular_resguardo(exp_id, "Luna café videocompleto", "luna")
+        self.assertIn(os.sep + "luna" + os.sep, plan["destino"])
+        self.assertEqual(os.path.basename(plan["destino"]), "Luna café.mp4")
+        self.assertFalse(os.path.exists(plan["destino"]))
+        bitacora = os.path.join(self.montaje, "bitacora.jsonl")
+        with self.assertRaises(ValueError):
+            self.gestor.resguardar(plan["token"], False, bitacora)
+        self.gestor.resguardar(plan["token"], True, bitacora)
+        self.assertEqual(calcular_sha256(origen), calcular_sha256(plan["destino"]))
+        deshacer_copia_completo(plan["destino"], self.montaje, self.db, "LucieSinReglas", bitacora)
+        self.assertTrue(os.path.isfile(origen))
+
+    def test_luna_edicion_completo_publicacion_http_y_deshacer(self):
+        from bandeja.edicion import (finalizar_edicion_crudos, copiar_export_a_videos_completos,
+                                    deshacer_finalizar_edicion)
+        clip = os.path.join(self.raiz, "videos sin editar", "luna", "Paseo", "lunapaseo.mp4")
+        os.makedirs(os.path.dirname(clip))
+        with open(clip, "xb") as f:
+            f.write(b"clip original de Luna")
+        sha_clip = calcular_sha256(clip)
+        sesion = crear_sesion(self.db, ["luna/Paseo/lunapaseo.mp4"], "luna", "Paseo", "Luna café videocompleto")
+        bitacora = os.path.join(self.montaje, "bitacora-luna.jsonl")
+        fin = finalizar_edicion_crudos(self.db, sesion["id"], self.montaje, "LucieSinReglas", bitacora)
+        self.assertTrue(fin["exito"], fin)
+        editados = os.path.join(self.raiz, "videos ya editados", "luna")
+        archivos = [os.path.join(base, nombre) for base, _, nombres in os.walk(editados) for nombre in nombres]
+        self.assertEqual(len(archivos), 1)
+        self.assertIn("videoyaeditado_Luna_café_semana_", archivos[0])
+        self.assertEqual(calcular_sha256(archivos[0]), sha_clip)
+        capcut = os.path.join(self.montaje, "CapCut")
+        os.makedirs(capcut)
+        export = os.path.join(capcut, "1010(8).mp4")
+        with open(export, "xb") as f:
+            f.write(b"video final de Luna")
+        copia = copiar_export_a_videos_completos(export, sesion, self.montaje, self.db, "LucieSinReglas", bitacora)
+        self.assertTrue(copia["exito"])
+        self.assertEqual(os.path.basename(copia["destino"]), "Luna café.mp4")
+        self.assertIn("videos sin publicar/luna/", copia["destino"].replace(os.sep, "/"))
+        sha = calcular_sha256(export)
+        entrada = next(a for a in self.gestor.listar()["archivos"] if a["nombre"] == "Luna café.mp4")
+        self.assertEqual(entrada["personaje"], "luna")
+        plan = self.gestor.simular([entrada["id"]], self.dispositivo["id"])
+        destino = plan["archivos"][0]["destino"]
+        self.assertIn("videosPublicados/luna/", destino.replace(os.sep, "/"))
+        os.makedirs(os.path.dirname(destino), exist_ok=True)
+        with open(destino, "xb") as f:
+            f.write(b"version previa conservada")
+        with self.assertRaises(FileExistsError):
+            self.gestor.simular([entrada["id"]], self.dispositivo["id"])
+        with open(destino, "rb") as f:
+            self.assertEqual(f.read(), b"version previa conservada")
+        os.rename(destino, destino + ".conservado")
+        plan = self.gestor.simular([entrada["id"]], self.dispositivo["id"])
+        resultado = self.esperar(self.gestor.iniciar_envio(plan["token"], True)["id"])
+        self.assertEqual(resultado["estado"], "completado", resultado)
+        self.assertEqual(len(resultado["publicados"]), 1)
+        self.assertEqual(calcular_sha256(destino), sha)
+        with open(export, "rb") as f:
+            self.assertEqual(self.receptor.archivos[entrada["id"]], f.read())
+        self.gestor.deshacer(resultado["publicados"][0]["id_operacion"])
+        self.assertEqual(calcular_sha256(copia["destino"]), sha)
+        self.assertTrue(os.path.isfile(self.video), "No se envió el video ajeno de Lucie")
+        deshacer_copia_completo(copia["destino"], self.montaje, self.db, "LucieSinReglas", bitacora)
+        self.assertEqual(calcular_sha256(export), sha)
+        undo = deshacer_finalizar_edicion(self.db, sesion["id"], self.montaje, "LucieSinReglas", bitacora)
+        self.assertTrue(undo["exito"], undo)
+        self.assertEqual(calcular_sha256(clip), sha_clip)
+
     def test_inventario_y_preview_excluyen_capcut_crudos_y_completos_publicados(self):
         for carpeta in ("CapCut", "videos sin editar", "videos ya editados", "videos completos"):
             ruta = os.path.join(self.raiz, carpeta, "ajeno.mp4")

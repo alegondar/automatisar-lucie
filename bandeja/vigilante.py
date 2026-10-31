@@ -383,7 +383,7 @@ class VigilanteBandeja:
         # También descubrir escenas ya creadas en el destino base
         if os.path.exists(self.config.ruta_destino_base):
             try:
-                for pers in ("lucie", "roli", "mailen"):
+                for pers in ("lucie", "roli", "mailen", "luna"):
                     # Sala de espera plana: <destino>/<personaje>/<escena>
                     carpeta_pers = os.path.join(self.config.ruta_destino_base, pers)
                     sub_fotos = getattr(self.config, "subcarpeta_fotos", "fotos").lower()

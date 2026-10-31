@@ -1377,8 +1377,8 @@ def simular_resguardo_export(exp, pendrive_montaje, carpeta_raiz, titulo=None, p
     if titulo is not None or personaje is not None:
         if not isinstance(titulo, str) or not titulo.strip() or len(titulo) > 160:
             raise ValueError("Escribí el título del video o elegí su sesión de edición.")
-        if personaje not in ("lucie", "roli", "mailen"):
-            raise ValueError("Elegí Lucie, Roli o Mailen para guardar el video.")
+        if personaje not in ("lucie", "roli", "mailen", "luna"):
+            raise ValueError("Elegí Lucie, Roli, Mailen o Luna para guardar el video.")
         titulo = nombre_video_legible(titulo)
         if re.fullmatch(r"\d+(?:\(\d+\))?", titulo):
             raise ValueError("Usá el título del video, no el número de CapCut.")

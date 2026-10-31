@@ -1,6 +1,10 @@
 # 🎬 Lucie & Personajes Digitales — Bandeja de Descargas y Bóveda Multimedia
 
-Plataforma integral desarrollada en Python para la automatización, clasificación, resguardo y auditoría continua del flujo de producción multimedia de personajes digitales (**Lucie**, **Magui la Roli** y **Mailen**).
+Protagonistas: **Lucie, Roli, Mailen y Luna**. Luna usa el mismo circuito de
+capítulos, imágenes, audio, edición y publicación. Elegila en «Empezar capítulo»;
+su identificador de carpetas es `luna`, con el formato mensual y de nombres vigente.
+
+Plataforma integral desarrollada en Python para la automatización, clasificación, resguardo y auditoría continua del flujo de producción multimedia de personajes digitales (**Lucie**, **Magui la Roli**, **Mailen** y **Luna**).
 
 Para entender qué hace cada módulo y cómo se conectan, abrí el
 [manual HTML del funcionamiento interno](docs/manual-interno.html) en el navegador.

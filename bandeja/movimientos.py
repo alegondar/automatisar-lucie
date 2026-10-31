@@ -165,7 +165,8 @@ class GestorMovimientosBandeja:
         alias_map: Dict[str, Set[str]] = {
             "lucie": {"lucie", "luci"},
             "roli": {"roli", "laroli", "magui"},
-            "mailen": {"mailen"}
+            "mailen": {"mailen"},
+            "luna": {"luna"}
         }
         if ruta_alias and os.path.exists(ruta_alias):
             try:

@@ -19,7 +19,7 @@
   let timer = null;
   let observadorPreviews = null;
   let consultaLista = 0;
-  const etiquetasPersonaje = {lucie: 'Lucie', roli: 'Roli', mailen: 'Mailen', sin_asignar: 'Sin asignar'};
+  const etiquetasPersonaje = {lucie: 'Lucie', roli: 'Roli', mailen: 'Mailen', luna: 'Luna', sin_asignar: 'Sin asignar'};
   const dispositivos = new Map();
   const el = id => document.getElementById(id);
   const texto = (id, mensaje) => { el(id).textContent = mensaje; };
@@ -46,7 +46,7 @@
     const selector = document.createElement('select');
     selector.setAttribute('aria-label', 'Personaje de ' + archivo.nombre);
     selector.add(new Option('Elegí el personaje', ''));
-    for (const p of ['lucie', 'roli', 'mailen']) selector.add(new Option(etiquetasPersonaje[p], p));
+    for (const p of ['lucie', 'roli', 'mailen', 'luna']) selector.add(new Option(etiquetasPersonaje[p], p));
     selector.value = personajesElegidos.get(archivo.id) || '';
     selector.disabled = Boolean(trabajo) || enviando;
     selector.addEventListener('change', () => {
@@ -342,7 +342,7 @@
         personaje = document.createElement('select');
         personaje.setAttribute('aria-label', 'Personaje de ' + candidato.ruta);
         personaje.add(new Option('Elegí el personaje', ''));
-        for (const p of ['lucie', 'roli', 'mailen']) personaje.add(new Option(etiquetasPersonaje[p], p));
+        for (const p of ['lucie', 'roli', 'mailen', 'luna']) personaje.add(new Option(etiquetasPersonaje[p], p));
         fila.append(personaje);
       }
       const invalidar = () => { organizacionPlan = null; el('wifi-organizacion-plan').replaceChildren(); };

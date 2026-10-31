@@ -63,7 +63,7 @@ class FiltroListaBlanca:
         self._regex_nano_banana = re.compile(regex_nb, re.IGNORECASE)
 
     def _cargar_alias(self, ruta_alias: str) -> List[str]:
-        alias_set = {"lucie", "luci", "roli", "laroli", "magui", "mailen"}
+        alias_set = {"lucie", "luci", "roli", "laroli", "magui", "mailen", "luna"}
         if os.path.exists(ruta_alias):
             try:
                 with open(ruta_alias, "r", encoding="utf-8", newline="\n") as f:
@@ -94,6 +94,8 @@ class FiltroListaBlanca:
     def obtener_personaje_de_carpeta_escena(self, nombre_carpeta: str) -> str:
         """Deduce el personaje principal a partir del nombre de la carpeta con alias."""
         nombre_lower = unicodedata.normalize("NFC", nombre_carpeta).strip().lower()
+        if nombre_lower.startswith("luna"):
+            return "luna"
         if "roli" in nombre_lower or "magui" in nombre_lower:
             return "roli"
         if "lucie" in nombre_lower or "luci" in nombre_lower:
@@ -116,6 +118,8 @@ class FiltroListaBlanca:
                     return "roli"
                 if al in ("lucie", "luci"):
                     return "lucie"
+                if al == "luna":
+                    return "luna"
                 if al in ("mailen",):
                     return "mailen"
                 if "roli" in al or "magui" in al:
@@ -290,8 +294,8 @@ def asegurar_carpeta_capitulo(
     """
     nombre_limpio = unicodedata.normalize("NFC", (nombre or "").strip())
     personaje_limpio = unicodedata.normalize("NFC", (personaje or "").strip().lower())
-    if personaje_limpio not in ("lucie", "roli", "mailen"):
-        raise ValueError(f"Personaje inválido: '{personaje}'. Debe ser 'lucie', 'roli' o 'mailen'.")
+    if personaje_limpio not in ("lucie", "roli", "mailen", "luna"):
+        raise ValueError(f"Personaje inválido: '{personaje}'. Debe ser 'lucie', 'roli', 'mailen' o 'luna'.")
 
     if not nombre_limpio:
         raise ValueError("El nombre del capítulo no puede estar vacío.")

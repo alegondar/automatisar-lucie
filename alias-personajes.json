@@ -18,6 +18,12 @@
       "destino_carpeta": "mailen",
       "requiere_confirmacion": true,
       "nota": "a confirmar"
+    },
+    {
+      "patrones": ["luna*"],
+      "personaje": "luna",
+      "destino_carpeta": "luna",
+      "requiere_confirmacion": false
     }
   ]
 }

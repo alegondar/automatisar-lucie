@@ -32,6 +32,12 @@ ESTADO_ACTUAL.md. Los nuevos lotes siguen sujetos a la regla de publicación.
   subirla cuando el usuario lo autorice; no versionar bases, configuraciones
   locales, exports, logs ni informes generados.
 
+Personajes vigentes (2026-10-31): Lucie, Roli, Mailen y Luna. Luna usa
+el identificador `luna` y el mismo circuito de capítulos, clasificación, edición,
+imágenes/audio/videos, guardado mensual, publicación y Deshacer. Conservar los
+personajes y rutas históricos; no reasignar material automáticamente al incorporar
+personajes nuevos.
+
 La estructura de nuevas salidas de video, imágenes y audio (2026-10-19) es
 `<categoria>/<personaje>/<mes - año>/<nombre - día - semana del mes - mes - año>/`.
 Completos conserva primero `videos sin publicar` o `videosPublicados`, luego

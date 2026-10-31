@@ -32,7 +32,7 @@ def personaje_conocido(nombre):
     texto = "".join(c for c in unicodedata.normalize("NFD", str(nombre).casefold())
                     if not unicodedata.combining(c)).strip()
     return {"lucie": "lucie", "roli": "roli", "magui": "roli", "magui la roli": "roli",
-            "mailen": "mailen"}.get(texto)
+            "mailen": "mailen", "luna": "luna"}.get(texto)
 
 
 def sin_enlaces(ruta):
@@ -129,7 +129,7 @@ class GestorPublicacion:
                     # no asigna una sesión ni mueve o renombra material.
                     nombre_base = unicodedata.normalize("NFD", nombre.casefold())
                     nombre_base = "".join(c for c in nombre_base if not unicodedata.combining(c))
-                    for prefijo in ("lucie", "roli", "mailen", "magui"):
+                    for prefijo in ("lucie", "roli", "mailen", "luna", "magui"):
                         if nombre_base.startswith(prefijo):
                             personaje = personaje_conocido(prefijo)
                             criterio = "nombre"
@@ -295,7 +295,7 @@ class GestorPublicacion:
                 raise ValueError("Un video seleccionado ya no está en Videos sin publicar.")
             personaje = personaje_conocido(personajes.get(identificador, entrada["personaje"]))
             if not personaje:
-                raise ValueError("Elegí Lucie, Roli o Mailen para " + entrada["nombre"] + " antes de enviar.")
+                raise ValueError("Elegí Lucie, Roli, Mailen o Luna para " + entrada["nombre"] + " antes de enviar.")
             if entrada["personaje"] != "sin_asignar" and personaje != entrada["personaje"]:
                 raise ValueError("La asignación contradice el personaje de la carpeta o sesión.")
             origen = self._ruta(identidad[1], entrada["ruta"])

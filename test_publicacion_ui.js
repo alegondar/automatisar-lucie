@@ -25,7 +25,7 @@ class Elemento {
   set innerHTML(_) { throw Error('Los nombres de archivos deben usar textContent.'); }
 }
 
-async function probar() {
+async function probar(personajeAlternativo = 'mailen') {
   const html = fs.readFileSync('bandeja/web/panel.html', 'utf8');
   const elementos = new Map([...html.matchAll(/id="([^"]+)"/g)].map(m => [m[1], new Elemento()]));
   const el = id => { assert(elementos.has(id), 'ID inexistente: ' + id); return elementos.get(id); };
@@ -37,7 +37,7 @@ async function probar() {
     ['lucie', 'Cafe.mp4', 'video', 'lucie/Cafe'],
     ['lucie', '<archivo especial>.mp4', 'video', 'lucie/Cafe'],
     ['roli', 'Roli.mp4', 'video', 'roli/Cancion'],
-    ['mailen', 'Foto.png', 'imagen', 'mailen/Plaza'],
+    [personajeAlternativo, 'Foto.png', 'imagen', personajeAlternativo + '/Plaza'],
     ['sin_asignar', '1010(5).mp4', 'video', 'Sin publicar (raíz)']
   ].map(([personaje, nombre, tipo, carpeta_relativa], indice) => ({id: 'archivo-' + indice,
     nombre, personaje, tipo, carpeta_relativa, tamano: 5000, mtime: 1,
@@ -59,7 +59,7 @@ async function probar() {
   let respuestaEstado = null;
   const sondeos = [];
   const llamadas = [];
-  const evento = {id_operacion: 'operacion-temporal', ruta_destino: 'videos completos/videosPublicados/mailen/Foto.png',
+  const evento = {id_operacion: 'operacion-temporal', ruta_destino: 'videos completos/videosPublicados/' + personajeAlternativo + '/Foto.png',
     dispositivo: receptor.alias, fecha: '2026-10-12'};
   async function apiFetch(url, opciones) {
     const cuerpo = opciones ? JSON.parse(opciones.body) : null;
@@ -154,7 +154,7 @@ async function probar() {
   esperados = ['archivo-2'];
   await el('wifi-preparar').emitir('click');
   const confirmacionAnterior = el('wifi-plan').children[3];
-  el('wifi-personaje').value = 'mailen';
+  el('wifi-personaje').value = personajeAlternativo;
   await el('wifi-personaje').emitir('change');
   assert.strictEqual(el('wifi-plan').style.display, 'none');
   await confirmacionAnterior.emitir('click');
@@ -236,7 +236,7 @@ async function probar() {
   conexionRespuesta = receptor; await el('wifi-conectar').emitir('click');
   assert.strictEqual(el('wifi-dispositivo').value, receptor.id);
   assert(el('wifi-destino').textContent.includes('Lucie Recibir'));
-  el('wifi-personaje').value = 'mailen'; await el('wifi-personaje').emitir('change');
+  el('wifi-personaje').value = personajeAlternativo; await el('wifi-personaje').emitir('change');
   await el('wifi-todos').emitir('click'); esperados = ['archivo-3'];
   retenerPlan = true;
   const pendiente = el('wifi-preparar').emitir('click');
@@ -311,4 +311,4 @@ async function probar() {
   console.log('UI OK: grupos, imágenes/video, rutas, filtros, selección visible, invalidación, envío e historial. ' + llamadas.length + ' llamadas simuladas.');
 }
 
-probar().catch(error => { console.error(error); process.exitCode = 1; });
+probar().then(() => probar('luna')).catch(error => { console.error(error); process.exitCode = 1; });
