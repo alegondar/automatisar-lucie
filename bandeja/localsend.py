@@ -4,6 +4,7 @@ Referencia: https://github.com/localsend/protocol (v2.2).
 Solo se conecta a direcciones IP locales elegidas desde el dashboard.
 """
 import hashlib
+import concurrent.futures
 import http.client
 import functools
 import io
@@ -179,8 +180,18 @@ class ClienteLocalSend:
                     con.close()
         raise ValueError("No se pudo conectar al receptor. Abrí Lucie Recibir en el celular, verificá Wi-Fi, IP y puerto. " + "; ".join(errores))
 
-    def descubrir(self, segundos=3, receptor=None):
+    def descubrir(self, segundos=None, receptor=None):
         validar_receptor(receptor)
+        intentos = 2 if receptor == "lucie" and segundos is None else 1
+        if segundos is None:
+            segundos = 3 if receptor == "localsend" else 6
+        for _ in range(intentos):
+            dispositivos = self._descubrir_intento(segundos, receptor)
+            if dispositivos:
+                return dispositivos
+        return []
+
+    def _descubrir_intento(self, segundos, receptor):
         interfaces = interfaces_locales()
         encontrados = {}
         encontrados_lock = threading.Lock()
@@ -263,7 +274,7 @@ class ClienteLocalSend:
                                 continue
 
             anunciar()
-            limite = time.monotonic() + min(max(segundos, 0.1), 5)
+            limite = time.monotonic() + min(max(segundos, 0.1), 8)
             siguiente_anuncio = time.monotonic() + 0.8
             while time.monotonic() < limite:
                 if time.monotonic() >= siguiente_anuncio:
@@ -293,22 +304,30 @@ class ClienteLocalSend:
                 servidor.shutdown()
                 servidor.server_close()
                 hilo.join(timeout=2)
-        dispositivos = []
-        for ip, puerto, protocolo in list(encontrados.values())[:32]:
-            try:
-                dispositivo = self.probar(ip, puerto, protocolo)
-                if receptor is None or tipo_receptor(dispositivo) == receptor:
-                    dispositivos.append(dispositivo)
-            except ValueError:
-                pass
-        if receptor != "localsend" and not any(tipo_receptor(d) == "lucie" for d in dispositivos):
-            for ip in buscar_puerto_lucie(interfaces):
+        def verificar(candidato):
+            ip, puerto, protocolo = candidato
+            # Un anuncio UDP o un puerto abierto todavía no verifica la app.
+            # Un primer fallo TLS/GET no descarta un teléfono que está arrancando.
+            for _ in range(2):
                 try:
-                    dispositivo = self.probar(ip, PUERTO_LUCIE, "https", timeout=1)
-                    if tipo_receptor(dispositivo) == "lucie":
-                        dispositivos.append(dispositivo)
+                    dispositivo = self.probar(ip, puerto, protocolo, timeout=3)
+                    if receptor is None or tipo_receptor(dispositivo) == receptor:
+                        return dispositivo
+                    return None
                 except ValueError:
-                    continue
+                    pass
+            return None
+
+        def verificar_todos(candidatos):
+            # Un vecino lento no impide verificar los demás; conservar el límite
+            # de candidatos y evitar muchas conexiones simultáneas al receptor.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as grupo:
+                return [d for d in grupo.map(verificar, candidatos) if d]
+
+        dispositivos = verificar_todos(list(encontrados.values())[:32])
+        if receptor != "localsend" and not any(tipo_receptor(d) == "lucie" for d in dispositivos):
+            candidatos = [(ip, PUERTO_LUCIE, "https") for ip in buscar_puerto_lucie(interfaces)]
+            dispositivos.extend(d for d in verificar_todos(candidatos) if tipo_receptor(d) == "lucie")
         return dispositivos
 
     def enviar(self, dispositivo, archivos, recibido, progreso, cancelar, pin=""):

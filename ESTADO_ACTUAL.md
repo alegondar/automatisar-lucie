@@ -1,4 +1,54 @@
-# Estado actual del sistema — 2026-10-31
+# Estado actual del sistema — 2026-11-05
+
+## Búsqueda del celular con reintentos dentro de un clic (2026-11-05)
+
+El usuario informó que Buscar celular necesitaba varios clics con Lucie Recibir
+abierta. El código escuchaba UDP tres segundos, sondeaba TCP solo 220 ms y
+descartaba una primera verificación HTTPS fallida. Tres mediciones iniciales
+encontraron al Motorola; una comprobación posterior de la API reprodujo una
+búsqueda vacía seguida de dos exitosas. Esto confirma la intermitencia, sin
+atribuirla a una causa única del teléfono o de la red.
+
+La búsqueda de Lucie escucha seis segundos y verifica cada candidato hasta dos
+veces, con tres segundos por intento HTTPS. El respaldo conserva cuatro
+interfaces, hasta 254 vecinos por interfaz, el bloque /24 en redes mayores y
+exclusivamente TCP 53318; admite dos intentos de 600 ms, con 48 comprobaciones
+TCP simultáneas y hasta cuatro verificaciones HTTPS. Si la ronda completa no
+encuentra ningún receptor válido, se repite una sola vez consultando las
+interfaces actuales. No se guardan IP anteriores. LocalSend conserva su escucha
+inicial de tres segundos y se mantiene separado de Lucie.
+
+El botón muestra Buscando celular mientras espera. Se impiden búsquedas o
+conexiones manuales simultáneas. Cambiar de app invalida resultados y errores
+pendientes, incluso al volver a la app anterior. El descubrimiento sigue sin
+seleccionar destinos ni iniciar envíos; la selección, revisión y confirmación
+permanecen explícitas. No se modificó el APK, firewall/router ni material real.
+
+Validación Windows/Python 3.13 con UTF-8: **519 pruebas, OK con 24 omisiones**,
+**102.602 s**. Las omisiones corresponden a capacidades Linux y privilegios de
+enlaces simbólicos ausentes. Guardia y aserciones conservadas; fixtures solo
+temporales. Cinco regresiones Python nuevas cubren primer paquete perdido,
+anuncio tardío, primer fallo HTTPS, ronda vacía seguida de receptor disponible y
+repetición acotada sin cambiar de app. La regresión UI añade búsquedas pendientes,
+clic duplicado, conexión concurrente y respuesta/error de una app anterior.
+Cinco suites UI y sintaxis JS correctas. Primera suite: 517 OK con 24 omisiones;
+la repetición completa añade el caso de ronda vacía observado en la API.
+Manifiesto exclusivamente contado: **1058 / 1058** en ambas suites. Logs fuera
+de Git: `%TEMP%/lucie-busqueda-20261105-242fd42d.log` y
+`%TEMP%/lucie-busqueda-final-20261105-4612c689.log`. Linux nativo no ejecutado.
+
+Lucie real se cerró normalmente mediante su icono antes de cada suite, sin
+cerrar CapCut ni iniciar vigilantes como fixture. Después se reabrió para uso
+habitual: panel HTTP 200 y cinco búsquedas consecutivas de la API encontraron
+al Moto G54 5G con una solicitud por búsqueda, entre **7.24 y 7.40 s**.
+Diagnóstico real separado de las pruebas; sin enviar archivos al celular.
+La búsqueda puede tardar más si necesita el respaldo o la segunda ronda;
+no se garantiza detectar un receptor cerrado o una red que lo aísle.
+Recargar el dashboard con **Ctrl+F5**. El usuario autorizó expresamente el
+commit y push de este lote el 2026-11-05 en `feat/lucie-recibir`, desde
+`6aab692`. Revisión previa: sin novedades remotas ni commits locales anteriores
+pendientes; auditorías AST 0/36 y repo/historial 0/260 correctas.
+
 
 ## Títulos con mayúsculas, acentos y números (2026-10-31)
 

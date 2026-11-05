@@ -49,10 +49,10 @@ class TestRedLocal(unittest.TestCase):
         with patch('bandeja.red_local.socket.create_connection', side_effect=conectar):
             encontrados = buscar_puerto_lucie([ipaddress.ip_interface('10.2.3.25/16'), ipaddress.ip_interface('8.8.8.8/24')])
         self.assertEqual(encontrados, ['10.2.3.70'])
-        self.assertEqual(len(llamadas), 253)
+        self.assertEqual(len(llamadas), 505)  # Un éxito y dos intentos por vecino sin receptor.
         self.assertTrue(all(ipaddress.ip_address(ip) in ipaddress.ip_network('10.2.3.0/24') and puerto == 53318
                             for (ip, puerto), _ in llamadas))
-        self.assertTrue(all(espera == .22 for _, espera in llamadas))
+        self.assertTrue(all(espera == .6 for _, espera in llamadas))
 
     def test_multicast_por_interfaz_y_broadcast_dirigido_sin_localsend(self):
         destinos, opciones = [], []
@@ -77,7 +77,7 @@ class TestRedLocal(unittest.TestCase):
             self.assertEqual(cliente.descubrir(.1, receptor='lucie'), [receptor])
             servidor.assert_not_called()
             respaldo.assert_called_once()
-            verificar.assert_called_once_with('192.168.4.70', 53318, 'https', timeout=1)
+            verificar.assert_called_once_with('192.168.4.70', 53318, 'https', timeout=3)
         self.assertIn(('192.168.4.255', 53319), destinos)
         self.assertTrue(all(puerto == 53319 for _, puerto in destinos))
         self.assertIn((socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton('192.168.4.20')), opciones)
@@ -90,6 +90,128 @@ class TestRedLocal(unittest.TestCase):
              patch('bandeja.localsend.buscar_puerto_lucie', return_value=['192.168.1.2']), \
              patch.object(cliente, 'probar', return_value=otra_app):
             self.assertEqual(cliente.descubrir(.1, receptor='lucie'), [])
+
+    def test_respaldo_recupera_primer_paquete_perdido_en_una_busqueda(self):
+        intentos = {}
+
+        class Conexion:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+
+        def conectar(destino, timeout):
+            ip, puerto = destino
+            self.assertEqual(puerto, 53318)
+            intentos[ip] = intentos.get(ip, 0) + 1
+            if ip == '192.168.4.6' and intentos[ip] == 2 and timeout >= .5:
+                return Conexion()
+            raise socket.timeout('Primer paquete sin respuesta')
+
+        with patch('bandeja.red_local.socket.create_connection', side_effect=conectar):
+            encontrados = buscar_puerto_lucie([ipaddress.ip_interface('192.168.4.1/29')])
+        self.assertEqual(encontrados, ['192.168.4.6'])
+        self.assertEqual(set(intentos), {'192.168.4.2', '192.168.4.3', '192.168.4.4', '192.168.4.5', '192.168.4.6'})
+        self.assertTrue(all(cantidad == 2 for cantidad in intentos.values()))
+
+    def test_un_clic_recupera_anuncio_tardio_y_primer_fallo_https(self):
+        cliente = ClienteLocalSend()
+        reloj = [0.0]
+        anuncios = []
+        receptor = {'ip': '192.168.4.70', 'port': 53318, 'protocol': 'https',
+                    'alias': 'Lucie Recibir · temporal', 'fingerprint': 'verificada'}
+
+        class Udp:
+            entregado = False
+            def setsockopt(self, *args): pass
+            def bind(self, *args): pass
+            def settimeout(self, *args): pass
+            def sendto(self, cuerpo, destino): anuncios.append((reloj[0], destino))
+            def close(self): pass
+            def recvfrom(self, *args):
+                reloj[0] += .1
+                if reloj[0] >= 4 and not self.entregado:
+                    self.entregado = True
+                    return json.dumps({'version': '2.0', 'port': 53318, 'protocol': 'https',
+                                       'fingerprint': 'anuncio'}).encode(), ('192.168.4.70', 53319)
+                raise socket.timeout()
+
+        with patch('bandeja.localsend.interfaces_locales', return_value=[ipaddress.ip_interface('192.168.4.20/24')]), \
+             patch('bandeja.localsend.socket.socket', return_value=Udp()), \
+             patch('bandeja.localsend.time.monotonic', side_effect=lambda: reloj[0]), \
+             patch('bandeja.localsend.ThreadingHTTPServer') as servidor, \
+             patch('bandeja.localsend.buscar_puerto_lucie') as respaldo, \
+             patch.object(cliente, 'probar', side_effect=[ValueError('TLS todavía no listo'), receptor]) as verificar:
+            self.assertEqual(cliente.descubrir(receptor='lucie'), [receptor])
+        servidor.assert_not_called()
+        respaldo.assert_not_called()
+        self.assertEqual(verificar.call_count, 2)
+        self.assertTrue(all(c.args == ('192.168.4.70', 53318, 'https') and c.kwargs == {'timeout': 3}
+                            for c in verificar.call_args_list))
+        self.assertTrue(any(instante > 3 for instante, _ in anuncios))
+        self.assertTrue(all(puerto == 53319 for _, (_, puerto) in anuncios))
+        self.assertLessEqual(reloj[0], 6.2)
+
+    def test_respaldo_reintenta_https_pero_no_sustituye_por_localsend(self):
+        cliente = ClienteLocalSend()
+        otra_app = {'ip': '192.168.1.2', 'port': 53318, 'alias': 'LocalSend', 'protocol': 'https'}
+        with patch('bandeja.localsend.interfaces_locales', return_value=[]), \
+             patch('bandeja.localsend.socket.socket', side_effect=OSError('UDP bloqueado')), \
+             patch('bandeja.localsend.buscar_puerto_lucie', return_value=['192.168.1.2']), \
+             patch.object(cliente, 'probar', side_effect=[ValueError('Primer intento falló'), otra_app]) as verificar:
+            self.assertEqual(cliente.descubrir(.1, receptor='lucie'), [])
+        self.assertEqual(verificar.call_count, 2)
+
+    def test_un_clic_repite_busqueda_vacia_y_recupera_receptor_que_arranca_tarde(self):
+        cliente = ClienteLocalSend()
+        reloj = [0.0]
+        sockets = []
+        receptor = {'ip': '192.168.4.70', 'port': 53318, 'protocol': 'https',
+                    'alias': 'Lucie Recibir · temporal', 'fingerprint': 'verificada'}
+
+        class Udp:
+            entregado = False
+            cerrado = False
+            def setsockopt(self, *args): pass
+            def bind(self, *args): pass
+            def settimeout(self, *args): pass
+            def sendto(self, *args): pass
+            def close(self): self.cerrado = True
+            def recvfrom(self, *args):
+                reloj[0] += .1
+                if reloj[0] > 7 and not self.entregado:
+                    self.entregado = True
+                    return json.dumps({'version': '2.0', 'port': 53318, 'protocol': 'https',
+                                       'fingerprint': 'anuncio'}).encode(), ('192.168.4.70', 53319)
+                raise socket.timeout()
+
+        def crear_udp(*args):
+            udp = Udp()
+            sockets.append(udp)
+            return udp
+
+        with patch('bandeja.localsend.interfaces_locales', return_value=[]) as interfaces, \
+             patch('bandeja.localsend.socket.socket', side_effect=crear_udp), \
+             patch('bandeja.localsend.time.monotonic', side_effect=lambda: reloj[0]), \
+             patch('bandeja.localsend.buscar_puerto_lucie', return_value=[]) as respaldo, \
+             patch.object(cliente, 'probar', return_value=receptor) as verificar:
+            self.assertEqual(cliente.descubrir(receptor='lucie'), [receptor])
+        self.assertEqual(len(sockets), 2)
+        self.assertTrue(all(udp.cerrado for udp in sockets))
+        self.assertEqual(interfaces.call_count, 2, 'La repetición consulta interfaces vigentes, no una IP recordada.')
+        respaldo.assert_called_once()
+        verificar.assert_called_once_with('192.168.4.70', 53318, 'https', timeout=3)
+        self.assertLessEqual(reloj[0], 12.4)
+
+    def test_repeticion_de_busqueda_es_acotada_y_no_cambia_de_app(self):
+        cliente = ClienteLocalSend()
+        with patch.object(cliente, '_descubrir_intento', return_value=[]) as intento:
+            self.assertEqual(cliente.descubrir(receptor='lucie'), [])
+            self.assertEqual(intento.call_args_list, [unittest.mock.call(6, 'lucie')] * 2)
+            intento.reset_mock()
+            self.assertEqual(cliente.descubrir(receptor='localsend'), [])
+            intento.assert_called_once_with(3, 'localsend')
+            intento.reset_mock()
+            self.assertEqual(cliente.descubrir(.1, receptor='lucie'), [])
+            intento.assert_called_once_with(.1, 'lucie')
 
 
 if __name__ == '__main__':

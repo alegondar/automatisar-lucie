@@ -785,7 +785,7 @@ class TestDescubrimientoUdpLocalSend(unittest.TestCase):
              patch('bandeja.localsend.interfaces_locales', return_value=[]), \
              patch.object(cliente,'probar',return_value=receptor) as verificar:
             self.assertEqual(cliente.descubrir(.1),[receptor])
-            verificar.assert_called_once_with('127.0.0.1',53318,'https')
+            verificar.assert_called_once_with('127.0.0.1',53318,'https',timeout=3)
             self.assertEqual(udp.bound, ('0.0.0.0', 0))
             self.assertIn(('224.0.0.167', 53319), udp.destinations)
             self.assertIn(('255.255.255.255', 53319), udp.destinations)
@@ -807,7 +807,7 @@ class TestDescubrimientoUdpLocalSend(unittest.TestCase):
                 return json.dumps({'version':'2.0','fingerprint':'fixture-'+str(port),
                                    'port':port,'protocol':'https'}).encode(),('127.0.0.1',53319)
         original=socket.socket;udp=UdpTemporal();cliente=ClienteLocalSend()
-        def verified(ip,port,protocol):
+        def verified(ip,port,protocol,timeout=3):
             return {'ip':ip,'port':port,'protocol':protocol,'alias':'fixture-'+str(port),'fingerprint':'fixture'}
         with patch('bandeja.localsend.socket.socket',side_effect=lambda family,kind,proto=0,*a,**k:
                    udp if kind==socket.SOCK_DGRAM else original(family,kind,proto,*a,**k)), \

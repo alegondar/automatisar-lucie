@@ -311,4 +311,48 @@ async function probar(personajeAlternativo = 'mailen') {
   console.log('UI OK: grupos, imágenes/video, rutas, filtros, selección visible, invalidación, envío e historial. ' + llamadas.length + ' llamadas simuladas.');
 }
 
-probar().then(() => probar('luna')).catch(error => { console.error(error); process.exitCode = 1; });
+async function probarBusquedaPendiente() {
+  const html = fs.readFileSync('bandeja/web/panel.html', 'utf8');
+  const elementos = new Map([...html.matchAll(/id="([^"]+)"/g)].map(m => [m[1], new Elemento()]));
+  const el = id => elementos.get(id);
+  const peticiones = [];
+  const receptor = {id: 'telefono', alias: 'Lucie Recibir · temporal', ip: '192.168.4.70', port: 53318, receptor: 'lucie'};
+  el('wifi-app').value = 'lucie';
+  vm.runInNewContext(fs.readFileSync('bandeja/web/wifi.js', 'utf8'), {
+    document: {getElementById: el, createElement: tag => new Elemento(tag)}, window: {},
+    apiFetch: (url, opciones) => new Promise((resolve, reject) => peticiones.push({url, opciones, resolve, reject})),
+    Option: function(t, v) { const o = new Elemento('option'); o.textContent = t; o.value = v; return o; },
+    sessionStorage: {getItem: () => null}
+  });
+  const buscando = el('wifi-buscar').emitir('click');
+  assert.strictEqual(el('wifi-buscar').disabled, true);
+  assert.strictEqual(el('wifi-buscar').textContent, 'Buscando celular…');
+  assert.strictEqual(el('wifi-conectar').disabled, true);
+  await el('wifi-buscar').emitir('click');
+  await el('wifi-conectar').emitir('click');
+  assert.strictEqual(peticiones.length, 1, 'Un doble clic o conectar manualmente no duplica una búsqueda pendiente.');
+  el('wifi-app').value = 'localsend'; await el('wifi-app').emitir('change');
+  el('wifi-app').value = 'lucie'; await el('wifi-app').emitir('change');
+  const avisoActual = el('wifi-busqueda-estado').textContent;
+  peticiones[0].resolve({dispositivos: [receptor]}); await buscando;
+  assert.strictEqual(el('wifi-dispositivo').children.length, 1, 'Cambiar de app y volver descarta la respuesta vieja.');
+  assert.strictEqual(el('wifi-busqueda-estado').textContent, avisoActual);
+  assert.strictEqual(el('wifi-buscar').disabled, false);
+  assert.strictEqual(el('wifi-buscar').textContent, 'Buscar celular');
+
+  const tardia = el('wifi-buscar').emitir('click');
+  el('wifi-app').value = 'localsend'; await el('wifi-app').emitir('change');
+  const avisoOtraApp = el('wifi-busqueda-estado').textContent;
+  peticiones[1].reject(Error('Fallo de la búsqueda anterior')); await tardia;
+  assert.strictEqual(el('wifi-busqueda-estado').textContent, avisoOtraApp, 'Un error viejo no reemplaza el estado de la app nueva.');
+
+  el('wifi-app').value = 'lucie'; await el('wifi-app').emitir('change');
+  const nueva = el('wifi-buscar').emitir('click');
+  peticiones[2].resolve({dispositivos: [receptor]}); await nueva;
+  assert.strictEqual(el('wifi-dispositivo').children.length, 2);
+  assert.strictEqual(el('wifi-dispositivo').value, '', 'Un resultado no selecciona ni envía automáticamente.');
+  assert(peticiones.every(p => p.url.endsWith('/buscar')), 'Buscar solo descubre; no prepara ni envía archivos.');
+  console.log('Búsqueda UI OK: un clic, estado pendiente, bloqueo de duplicados y respuestas/errores obsoletos descartados.');
+}
+
+probar().then(() => probar('luna')).then(probarBusquedaPendiente).catch(error => { console.error(error); process.exitCode = 1; });

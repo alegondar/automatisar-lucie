@@ -89,6 +89,26 @@ repetidos por interfaz y broadcast dirigido; un fallo de multicast o de un
 adaptador no cancela los demás intentos. Para Lucie, las respuestas vuelven al
 socket UDP emisor y no hace falta una escucha HTTP entrante en la PC.
 
+Un solo clic mantiene la escucha de Lucie durante seis segundos, para incluir
+respuestas tardías al abrir el receptor. Si la primera comprobación HTTPS falla,
+se repite una vez dentro de esa misma búsqueda, con tres segundos por intento.
+El respaldo TCP también admite dos intentos de 600 ms por vecino y conserva
+los límites de direcciones y puerto indicados abajo. Se verifican hasta cuatro
+candidatos a la vez; un vecino lento no retiene todas las comprobaciones.
+No se guardan IP anteriores para adivinar el destino. LocalSend conserva su
+escucha inicial de tres segundos.
+
+Si la búsqueda completa de Lucie no verifica ningún receptor, se repite una sola
+vez dentro del mismo clic, consultando de nuevo las interfaces actuales. Al
+encontrarlo, no se inicia otra ronda. La espera puede superar los seis segundos
+si hace falta el respaldo de red o esta repetición; el botón permanece ocupado.
+
+El botón muestra «Buscando celular…» hasta terminar. Otro clic o la conexión
+manual no inician búsquedas simultáneas. Cambiar la app descarta la respuesta
+pendiente, incluso al volver a la app anterior; también descarta sus errores.
+Encontrar un teléfono sigue requiriendo elegirlo en la lista y revisar/confirmar
+el envío. Abrir y mantener visible la app del celular sigue siendo necesario.
+
 Si no aparece Lucie por UDP, se comprueba exclusivamente su puerto TCP 53318
 en vecinos locales, con un máximo de 254 direcciones por interfaz y cuatro
 interfaces. En una red mayor se limita al bloque /24 de esta PC. No recorre

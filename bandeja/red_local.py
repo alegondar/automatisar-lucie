@@ -54,11 +54,15 @@ def buscar_puerto_lucie(interfaces, puerto=53318):
         candidatos.update(str(ip) for ip in red.hosts() if ip not in propios)
 
     def comprobar(ip):
-        try:
-            with socket.create_connection((ip, puerto), timeout=0.22):
-                return ip
-        except OSError:
-            return None
+        # La primera conexión puede agotarse mientras Wi-Fi resuelve ARP o
+        # despierta al receptor. Reintentar aquí evita exigir otro clic.
+        for _ in range(2):
+            try:
+                with socket.create_connection((ip, puerto), timeout=0.6):
+                    return ip
+            except OSError:
+                pass
+        return None
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=24) as grupo:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=48) as grupo:
         return [ip for ip in grupo.map(comprobar, sorted(candidatos)) if ip][:32]

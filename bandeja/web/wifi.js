@@ -12,6 +12,7 @@
   let revisando = false;
   let buscando = false;
   let conectando = false;
+  let conexionRevision = 0;
   let enviando = false;
   let historialEnvios = [];
   let trabajo = null;
@@ -114,8 +115,9 @@
     el('wifi-paso-celular').dataset.estado = celular ? 'listo' : 'pendiente';
     texto('wifi-conexion-resumen', celular ? 'Cambiar celular o app' : 'Buscar o elegir celular');
     for (const id of ['wifi-app', 'wifi-dispositivo', 'wifi-ip', 'wifi-puerto', 'wifi-todos', 'wifi-ninguno', 'wifi-actualizar', 'wifi-tab-historial', 'wifi-tab-organizacion']) el(id).disabled = ocupado;
-    el('wifi-buscar').disabled = ocupado || buscando;
-    el('wifi-conectar').disabled = ocupado || conectando;
+    el('wifi-buscar').disabled = ocupado || buscando || conectando;
+    el('wifi-buscar').textContent = buscando ? 'Buscando celular…' : 'Buscar celular';
+    el('wifi-conectar').disabled = ocupado || conectando || buscando;
     dibujarSeleccion();
   }
 
@@ -393,35 +395,39 @@
   }
 
   async function buscar() {
-    if (trabajo || enviando || buscando) return;
+    if (trabajo || enviando || buscando || conectando) return;
     buscando = true;
+    const solicitud = ++conexionRevision;
     invalidarPlan();
     const receptor = appElegida();
     dispositivos.clear(); dibujarDispositivos();
     el('wifi-buscar').disabled = true;
-    texto('wifi-busqueda-estado', 'Buscando ' + nombreApp(receptor) + ' en la Wi-Fi actual… Puede tardar unos segundos.');
+    texto('wifi-busqueda-estado', 'Buscando ' + nombreApp(receptor) + ' en la Wi-Fi actual… Mantené la app abierta; reintentamos la conexión si tarda en responder.');
     try {
       const datos = await peticion('buscar', {receptor});
-      if (appElegida() !== receptor) return;
+      if (solicitud !== conexionRevision || appElegida() !== receptor) return;
       dispositivos.clear();
       for (const d of datos.dispositivos || []) if (tipoDispositivo(d) === receptor) dispositivos.set(d.id, d);
       dibujarDispositivos();
       texto('wifi-busqueda-estado', dispositivos.size ? 'Encontramos ' + dispositivos.size + '. Elegí tu celular en la lista.' :
         'No encontramos ' + nombreApp(receptor) + '. Abrí esa app en el celular y buscá de nuevo. También podés usar la conexión manual.');
-    } catch (error) { texto('wifi-busqueda-estado', error.message); }
+    } catch (error) {
+      if (solicitud === conexionRevision) texto('wifi-busqueda-estado', error.message);
+    }
     finally { buscando = false; dibujarConteo(); }
   }
 
   async function conectar() {
-    if (trabajo || enviando || conectando) return;
+    if (trabajo || enviando || conectando || buscando) return;
     conectando = true;
+    const solicitud = ++conexionRevision;
     invalidarPlan();
     const receptor = appElegida();
     el('wifi-conectar').disabled = true;
     texto('wifi-busqueda-estado', 'Comprobando ' + nombreApp(receptor) + '…');
     try {
       const datos = await peticion('conectar', {ip: el('wifi-ip').value.trim(), puerto: Number(el('wifi-puerto').value), receptor});
-      if (appElegida() !== receptor) return;
+      if (solicitud !== conexionRevision || appElegida() !== receptor) return;
       if (tipoDispositivo(datos.dispositivo) !== receptor) throw new Error('En esa dirección responde ' + nombreApp(tipoDispositivo(datos.dispositivo)) + '. Cambiá la app elegida o revisá el puerto.');
       dispositivos.set(datos.dispositivo.id, datos.dispositivo);
       dibujarDispositivos();
@@ -429,7 +435,9 @@
       el('wifi-conexion').open = false;
       invalidarPlan();
       texto('wifi-busqueda-estado', 'Conectado con ' + nombreApp(receptor) + '. El destino está listo para revisar.');
-    } catch (error) { texto('wifi-busqueda-estado', error.message); }
+    } catch (error) {
+      if (solicitud === conexionRevision) texto('wifi-busqueda-estado', error.message);
+    }
     finally { conectando = false; dibujarConteo(); }
   }
 
@@ -582,6 +590,7 @@
   el('wifi-historial-filtro').addEventListener('input', dibujarHistorial);
   el('wifi-app').addEventListener('change', () => {
     if (trabajo) return;
+    conexionRevision++;
     dispositivos.clear(); dibujarDispositivos(); invalidarPlan();
     el('wifi-conexion').open = true;
     el('wifi-puerto').value = appElegida() === 'lucie' ? '53318' : '53317';
