@@ -87,6 +87,18 @@ pisar accesos ajenos. Ver README_WINDOWS.md. No iniciar la bandeja real como
 fixture: las pruebas del icono usan callbacks falsos y el instalador solo carpetas
 temporales. Una bandeja existente puede recibir el icono sin nuevos vigilantes.
 
+Reapertura autorizada (2026-11-06): el usuario autoriza abrir Lucie para uso
+habitual y reabrirla después de una actualización o de cerrar normalmente el
+servicio para validar, sin volver a pedir confirmación. Usar el acceso de Inicio
+existente o `iniciar_bandeja_windows.py --sin-navegador` con `pythonw.exe`, en
+segundo plano con icono. Comprobar primero si el panel ya responde para no crear
+otra instancia. La reapertura es uso habitual posterior a las pruebas, nunca
+un fixture; mantener los vigilantes reales cerrados durante las suites que
+requieren contar el manifiesto. Conservar el inicio de sesión de Windows y las
+configuraciones locales. Esta autorización no modifica las políticas de la
+herramienta: si rechaza el arranque, informar el rechazo y el estado real del
+servicio, sin cambiar reglas de seguridad ni intentar vías indirectas.
+
 Inicio Kali/Linux (2026-10-25): el usuario solicitó el mismo arranque de sesión
 en segundo plano con icono y opciones Abrir panel / Salir. El backend Linux
 usa GTK3 y bandeja X11 (Kali/XFCE), con bloqueo por usuario/puerto y callbacks
