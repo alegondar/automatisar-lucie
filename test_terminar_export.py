@@ -224,3 +224,22 @@ class TestTerminarExport(unittest.TestCase):
         self.assertEqual(sesion["clips"], [])
         self.assertEqual(sesion["revision_export_solicitada"], 0)
         self.assertEqual(GestorBaseDatosBandeja(ruta).obtener_sesion_por_id(42), sesion)
+
+    def test_export_abierto_en_solo_lectura_por_vista_previa_se_copia_y_escritor_se_rechaza(self):
+        origen = self.export(nombre="1105 (1)(2).mp4", registrar=False)
+        self.terminar()
+        vigilante = crear_vigilante_capcut(self.config, self.db, self.bitacora)
+        vigilante.tomar_fotografia_inicial()
+        with patch("bandeja_descargas.detectar_pendrive", return_value={"conectado": True, "punto_montaje": self.montaje}):
+            if os.name == "nt":
+                with open(origen, "r+b"):
+                    for _ in range(4):
+                        vigilante.escanear()
+                    self.assertIsNone(self.db.obtener_sesion_por_id(self.sesion["id"])["video_completo_ruta"])
+            with open(origen, "rb"):
+                for _ in range(4):
+                    vigilante.escanear()
+        sesion = self.db.obtener_sesion_por_id(self.sesion["id"])
+        self.assertEqual(sesion["estado"], "completado")
+        self.assertTrue(os.path.isfile(sesion["video_completo_ruta"]))
+        self.assertEqual(os.path.basename(sesion["video_completo_ruta"]), "Cafe.mp4")

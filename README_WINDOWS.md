@@ -199,7 +199,13 @@ nombre de la sesión al pendrive vinculado y muestra el estado en **Videos
 completados**. Para exigir el botón de envío antes de copiar, usar
 `"envio_exports_capcut": "manual"` en `config_bandeja.local.json`.
 
-La exclusividad Windows se comprueba con `CreateFileW` sin compartir el archivo;
+La exclusividad Windows se comprueba con `CreateFileW`: para traslados y renombrados
+(`os.rename` de crudos y organización mensual) usa `dwShareMode = 0` (`permitir_lectura=False`),
+mientras que para la lectura y copia de exports de CapCut usa `permitir_lectura=True`
+(`FILE_SHARE_READ` + `LockFile`/`UnlockFile` del byte 0), permitiendo copiar el export
+de inmediato aunque el reproductor de vista previa de CapCut lo mantenga abierto en
+solo lectura, pero rechazando cualquier escritor activo (`GENERIC_WRITE`). En capítulos
+con un único clip compactado y numerado, se recupera el título con espacios del capítulo;
 un simple bloqueo de bytes `msvcrt` no detectaba todos los escritores abiertos.
 El visor de Edición conserva ahora sus identificadores entre sondeos y distingue
 errores HTTP de formatos no admitidos por el navegador. Después de actualizar,

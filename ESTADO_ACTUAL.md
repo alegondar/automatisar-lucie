@@ -1783,3 +1783,13 @@ Esta regla sustituye el anterior sufijo de solo mes y año. Las carpetas y rutas
 históricas no se renombran ni migran automáticamente. Reintentos y deshacer usan
 las rutas registradas. La nueva excepción de limpieza solo retira directorios
 vacíos de capítulos enviados; los originales siguen conservados en `_enviados`.
+
+
+## Detección de exports de CapCut con vista previa abierta y títulos de un único clip (2026-11-06)
+
+En Windows, al finalizar la exportación de un video (`.mp4`/`.mov`), CapCut cierra su manejador de escritura pero mantiene abierto un manejador de solo lectura (`GENERIC_READ`, `FILE_SHARE_READ`) para su reproductor interno de vista previa hasta que se exporta otro proyecto o se cierra la vista previa. Como `verificar_archivo_exclusivo` abría con `dwShareMode = 0`, `VigilanteCapCut` y la revisión de «Terminé de editar» interpretaban que el export seguía en escritura y demoraban la copia a `videos completos/videos sin publicar/<personaje>/<mes - año>/<título - fecha>/<título>.mp4` hasta la siguiente exportación.
+
+- `verificar_archivo_exclusivo` en `bandeja/plataforma.py` incorpora `permitir_lectura: bool = False`. El valor por defecto (`False`, `dwShareMode = 0`) se mantiene intacto para traslados y renombrados (`os.rename` de crudos y organización mensual). Para lecturas y copias de exports de CapCut (`bandeja/capcut.py` y `bandeja/edicion.py`), `permitir_lectura=True` usa `FILE_SHARE_READ` (`0x1`) y comprueba `LockFile`/`UnlockFile` en el primer byte, rechazando cualquier escritor activo (`GENERIC_WRITE`) o bloqueo de bytes pero admitiendo el lector de vista previa de CapCut.
+- En capítulos con un único clip compactado y numerado (como `lunallegoelviernes1.mp4` dentro de `luna llego el viernes - viernes - semana 1 - noviembre - 2026`), `nombre_video_sesion` y `calcular_nombre_defecto` en `bandeja/edicion.py` recuperan el título legible con espacios del capítulo (`luna llego el viernes.mp4`).
+
+Validación en Windows (Python 3.13): 106/106 pruebas focalizadas OK (`test_terminar_export.py`, `test_edicion.py`, `test_capcut.py`, `test_compatibilidad_windows.py`); suite completa 524/526 OK, 24 saltadas y 2 errores conocidos de `Shell_NotifyIconW` en subshell no interactiva (`test_icono_windows.py`). Manifiesto real contado antes y después de la suite: **1112 / 1112** líneas. AST `seguridad_anti_borrado.py` (0/36) y `auditar_repo.py --historial` (0/260) sin infracciones. Tras reabrir el servicio en segundo plano (`HTTP 200` en `127.0.0.1:8766`), la sesión 47 (`luna`) detectó y copió automáticamente `1105 (1)(4).mp4` como `luna llego el viernes.mp4` en `videos completos/videos sin publicar/luna/noviembre - 2026/luna llego el viernes - viernes - semana 1 - noviembre - 2026/`. Linux no ejecutado en esta sesión.

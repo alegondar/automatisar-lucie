@@ -1,64 +1,575 @@
 <!DOCTYPE html>
-<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark light"><meta name="description" content="Manual paso a paso del funcionamiento interno de la Bandeja Lucie: módulos, archivos, memoria, pendrive, edición y seguridad."><title>Cómo funciona por dentro · Lucie Sin Reglas</title><style>
-:root{color-scheme:dark;--bg:#050811;--surface:#0c1423;--text:#edf3fa;--muted:#a6b7cc;--cyan:#00e4ee;--pink:#ff63b0;--line:#293a50}*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:24px}body{margin:0;background:var(--bg);color:var(--text);font:17px/1.75 "Segoe UI",sans-serif}a{color:var(--cyan);text-underline-offset:4px}a:hover{color:#fff}button,input{font:inherit}button{cursor:pointer;border:1px solid var(--line);border-radius:7px;background:#112137;color:var(--text);padding:9px 14px}button:hover:not(:disabled),button[aria-pressed=true]{border-color:var(--cyan);background:#0a3441}button:disabled{opacity:.4;cursor:default}:focus-visible{outline:2px solid var(--cyan);outline-offset:4px}.skip{position:absolute;top:-100px;left:16px;padding:10px;background:var(--surface);z-index:10}.skip:focus{top:12px}.layout{max-width:1500px;margin:auto;display:grid;grid-template-columns:260px minmax(0,1fr);gap:48px;padding:36px}.sidebar{position:sticky;top:24px;align-self:start;max-height:calc(100vh - 48px);overflow:auto;padding-right:16px}.brand{font-size:22px;font-weight:800;letter-spacing:-1px;color:var(--cyan)}.brand span{color:var(--pink)}.sidebar p{color:var(--muted);font-size:13px}.sidebar nav{display:grid;gap:3px;margin-top:24px}.sidebar a{color:var(--muted);text-decoration:none;font-size:13px;padding:7px 10px;border-left:2px solid transparent}.sidebar a:hover,.sidebar a[aria-current=true]{color:var(--cyan);border-left-color:var(--cyan);background:#00e4ee08}main{min-width:0;max-width:960px}.hero{padding:34px 0 40px;border-bottom:1px solid var(--line)}.eyebrow{font:12px/1.5 ui-monospace,monospace;letter-spacing:1px;text-transform:uppercase;color:var(--cyan)}h1{font-size:clamp(32px,5vw,56px);line-height:1.12;letter-spacing:-2px;margin:18px 0 24px;max-width:780px}h1 span{color:var(--pink)}.hero>p:not(.eyebrow){max-width:720px;color:var(--muted);font-size:19px}.acciones{display:flex;flex-wrap:wrap;gap:12px;margin-top:24px}.acciones a{display:inline-block;text-decoration:none;padding:9px 14px;border:1px solid var(--cyan);border-radius:7px}.meta{font-size:13px!important}.contenido{padding:44px 0;border-bottom:1px solid var(--line)}h2{font-size:27px;line-height:1.3;letter-spacing:-.5px;margin:0 0 22px}h3{font-size:20px;line-height:1.4;margin:28px 0 12px}p{margin:12px 0 18px}li{margin-bottom:12px}ol,ul{padding-left:26px}code{font: .86em/1.6 ui-monospace,monospace;color:#8cf0f5;background:#112234;padding:2px 5px;border-radius:4px;overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:24px;background:var(--surface);border:1px solid var(--line);border-radius:10px;font:14px/1.8 ui-monospace,monospace;color:#bbcadc}.nota{border-left:3px solid var(--cyan);background:#0d1d2d;padding:18px 22px;margin:24px 0;border-radius:0 8px 8px 0}.nota p{margin-bottom:0}.nota strong{color:#a0f6fb}.flujo{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;padding:0;list-style:none}.flujo li{position:relative;background:var(--surface);border:1px solid var(--line);border-top:2px solid var(--cyan);padding:18px 12px;border-radius:8px;min-width:0}.flujo li:not(:last-child)::after{content:'→';position:absolute;right:-18px;top:28px;color:var(--cyan)}.flujo b{display:block;font-size:15px}.flujo span{display:block;font-size:12px;color:var(--muted);margin-top:7px}.leyenda{font-size:13px;color:var(--muted)}.cadena{padding:24px;border:1px solid var(--line);border-radius:8px;font-family:ui-monospace,monospace;font-size:15px;color:var(--cyan)}.modulos{display:flex;flex-wrap:wrap;gap:8px}.modulos button{font-size:12px;font-family:ui-monospace,monospace}.detalle,.simulador{background:var(--surface);border:1px solid var(--line);padding:24px;border-radius:10px;margin-top:18px;min-height:130px}.detalle h3{margin-top:0}.conexiones{font-size:14px;color:var(--cyan)}dt{font-weight:700;margin-top:16px}dd{margin:4px 0 12px;color:var(--muted)}.tabla{overflow:auto;max-width:100%;margin:24px 0;border:1px solid var(--line);border-radius:8px}table{border-collapse:collapse;width:100%;font-size:14px;text-align:left}th{background:#102033;color:var(--cyan)}th,td{padding:14px 16px;border-bottom:1px solid var(--line);vertical-align:top}td:first-child{font-weight:600}details{padding:16px 20px;margin:12px 0;border:1px solid var(--line);border-radius:8px;background:var(--surface)}summary{cursor:pointer;font-weight:600}details p{font-size:15px}footer{padding:32px 0;color:var(--muted);font-size:13px}.busqueda{margin-top:24px}.busqueda label{font-size:13px;color:var(--muted)}.busqueda input{margin-top:6px;width:100%;padding:10px;border-radius:6px;border:1px solid var(--line);background:var(--surface);color:var(--text)}#resultado-busqueda{font-size:12px;color:var(--muted)}[hidden]{display:none!important}
-@media(max-width:1000px){.layout{grid-template-columns:210px minmax(0,1fr);gap:28px;padding:24px}.flujo{grid-template-columns:repeat(2,1fr)}.flujo li::after{display:none}}
-@media(max-width:700px){.layout{display:block;padding:20px}.sidebar{position:static;max-height:none;overflow:visible;padding:0}.sidebar nav{display:flex;overflow:auto;gap:8px;margin:18px 0}.sidebar a{white-space:nowrap;padding:8px;font-size:12px}.hero{padding-top:20px}.hero>p:not(.eyebrow){font-size:17px}.contenido{padding:32px 0}h2{font-size:24px}.flujo{gap:10px}.flujo li{padding:14px 10px}.detalle,.simulador{padding:18px}.tabla{font-size:13px}th,td{padding:10px}.busqueda{max-width:420px}}
-@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
-@media print{:root{color-scheme:light;--bg:#fff;--surface:#fff;--text:#111;--muted:#333;--cyan:#005d69;--pink:#8e1651;--line:#ccc}body{font-size:11pt}.layout{display:block;max-width:none;padding:0}.sidebar,.acciones,.skip,.modulos,#modulo-detalle,.simulador,noscript{display:none!important}main{max-width:none}.hero{padding:0 0 18px}h1{font-size:32pt}.hero>p:not(.eyebrow){font-size:12pt}.contenido{padding:20px 0}h2{font-size:19pt}h3{font-size:14pt}p,li,td,details p{font-size:11pt}.nota,pre,th{background:#f4f6f8}code{background:#f1f3f4;color:#16434b}details{break-inside:avoid}.tabla{overflow:visible}table{font-size:10pt}a{color:#16434b}.contenido[hidden],section{display:block!important}.flujo{grid-template-columns:repeat(4,1fr)}@page{margin:18mm}}
-</style></head>
-<body><a class="skip" href="#contenido">Ir al contenido</a><div class="layout"><aside class="sidebar"><div class="brand">lucie<span>Sinreglas</span></div><p>Manual del funcionamiento interno</p><search class="busqueda"><label for="buscar">Buscar una palabra en el manual</label><input id="buscar" type="search" placeholder="Ej.: MP3, sesión, hash"><p id="resultado-busqueda" role="status" aria-live="polite"></p></search><nav aria-label="Índice del manual"><a href="#idea">1. Qué hace el proyecto</a><a href="#mapa">2. Cómo se conecta todo</a><a href="#arranque">3. Qué sucede cuando lo iniciás</a><a href="#recorrido">4. Seguí un archivo paso a paso</a><a href="#deteccion">5. Cómo reconoce y agrupa material</a><a href="#pantallas">6. Qué representa cada pestaña</a><a href="#movimiento">7. Mover, copiar y deshacer</a><a href="#carpetas">8. Qué vive en cada lugar</a><a href="#memoria">9. Base de datos, hash y registros</a><a href="#envio">10. El envío seguro al pendrive</a><a href="#edicion">11. Edición y CapCut: qué está conectado</a><a href="#seguridad">12. Seguridad y eliminación manual</a><a href="#comunicacion">13. Cómo habla el panel con Python</a><a href="#problemas">14. Qué revisar cuando algo no aparece</a><a href="#fuentes">15. Dónde mirar el código y cómo se verifica</a></nav></aside><main id="contenido"><header class="hero"><p class="eyebrow">Del archivo a la historia</p><h1>Entendé el proyecto<br><span>desde adentro.</span></h1><p>Qué hace cada pieza, cómo se conecta con las demás y qué pasa realmente cuando usás la bandeja. Explicado en orden y con ejemplos.</p><p class="meta">Basado en el código local revisado el 11/10/2026 · Lectura sin conexión · Actualizado para 6304a53 · Sin acceso a tus archivos</p><div class="acciones"><a href="#idea">Empezar a leer →</a><button type="button" id="imprimir">Imprimir / guardar como PDF</button></div></header><section class="contenido" id="idea" aria-labelledby="idea-titulo"><h2 id="idea-titulo">1. Qué hace el proyecto</h2><p>Imaginá un taller de producción. <strong>Descargas es la mesa de entrada</strong>; la bandeja es la persona que mira qué llegó; la sala de espera es el material ya ordenado; el pendrive es la bóveda que llevás a la máquina de edición. El dashboard es la mesa desde la que vos decidís.</p><p>El proyecto ayuda a detectar, identificar, agrupar, ordenar, trasladar y registrar imágenes, videos y MP3 de Lucie y otros personajes. No genera el contenido de IA ni monta los videos por vos. CapCut sigue siendo un programa externo.</p><div class="nota"><strong>Tres cosas distintas</strong><p><strong>Ver un archivo</strong> es detectarlo. <strong>Asignarlo a un capítulo</strong> es guardar una relación. <strong>Moverlo</strong> es cambiarlo físicamente de carpeta. Esas acciones pueden ocurrir en momentos distintos.</p></div></section><section class="contenido" id="mapa" aria-labelledby="mapa-titulo"><h2 id="mapa-titulo">2. Cómo se conecta todo</h2><p>Hay dos recorridos: <strong>los archivos recorren carpetas</strong>, mientras que <strong>las órdenes y los estados recorren módulos</strong>.</p><h3>El recorrido del material</h3><ol class="flujo"><li><b>Descargas</b><span>Material recién llegado</span></li><li><b>Sala de espera</b><span>Ordenado con tu aprobación</span></li><li><b>LucieSinReglas</b><span>Copia verificada en el pendrive</span></li><li><b>Edición</b><span>Clips, montaje y export final</span></li></ol><p class="leyenda">Las flechas representan el orden habitual. La sesión de edición por sí sola no mueve archivos.</p><h3>El recorrido de una orden</h3><div class="cadena">Vos → panel.js → servidor.py → módulo encargado → disco / SQLite / bitácora → respuesta → panel</div><p>Por ejemplo: hacés clic en mover un lote. JavaScript envía la selección por HTTP al servidor local. Python llama a <code>movimientos.py</code>; este valida y ejecuta. El servidor devuelve el resultado y el panel actualiza lo que ves.</p><h3>Explorá cada módulo</h3><p>Elegí un componente para ver su responsabilidad y sus conexiones.</p><div class="modulos"><button type="button" data-modulo="arranque" aria-pressed="false">bandeja_descargas.py</button><button type="button" data-modulo="config" aria-pressed="false">bandeja/config.py</button><button type="button" data-modulo="vigilante" aria-pressed="false">bandeja/vigilante.py</button><button type="button" data-modulo="filtro" aria-pressed="false">bandeja/clasificacion.py</button><button type="button" data-modulo="lotes" aria-pressed="false">bandeja/lotes.py</button><button type="button" data-modulo="db" aria-pressed="false">bandeja/db.py</button><button type="button" data-modulo="capitulos" aria-pressed="false">bandeja/capitulos.py</button><button type="button" data-modulo="movimientos" aria-pressed="false">bandeja/movimientos.py</button><button type="button" data-modulo="pendrive" aria-pressed="false">bandeja/pendrive.py</button><button type="button" data-modulo="plataforma" aria-pressed="false">bandeja/plataforma.py</button><button type="button" data-modulo="servidor" aria-pressed="false">bandeja/servidor.py</button><button type="button" data-modulo="edicion" aria-pressed="false">bandeja/edicion.py</button><button type="button" data-modulo="capcut" aria-pressed="false">bandeja/capcut.py</button><button type="button" data-modulo="eliminacion" aria-pressed="false">bandeja/eliminacion.py</button><button type="button" data-modulo="web" aria-pressed="false">bandeja/web/panel.js</button></div><div id="modulo-detalle" class="detalle" aria-live="polite"><p>Elegí un módulo de la lista. Sus funciones se explican también en el catálogo al final.</p></div></section><section class="contenido" id="arranque" aria-labelledby="arranque-titulo"><h2 id="arranque-titulo">3. Qué sucede cuando lo iniciás</h2><p>El comando habitual es <code>python3 bandeja_descargas.py</code> en Linux o <code>py -3 bandeja_descargas.py</code> en Windows. Se ejecuta en la carpeta del repositorio.</p><ol><li><strong>Lee la configuración.</strong> Parte de valores por defecto, carga el JSON general, aplica el JSON local y luego los argumentos disponibles de la línea de comandos.</li><li><strong>Abre la memoria SQLite.</strong> Crea las tablas necesarias y prepara acceso coordinado.</li><li><strong>Construye los trabajadores.</strong> Filtro, detector de estabilidad, agrupador de lotes, gestor de movimientos y generador de miniaturas.</li><li><strong>Une las piezas.</strong> El vigilante recibe configuración, base de datos, filtro, detector y agrupador. El servidor recibe esos objetos y el gestor de movimientos.</li><li><strong>Prepara un token de sesión.</strong> Sirve para comprobar las acciones que llegan desde el panel.</li><li><strong>Conecta CapCut.</strong> Crea su vigilante, conecta el aviso de nuevo export con la asociación a sesiones y el aviso de sondeo con los reintentos pendientes.</li><li><strong>Inicia la observación y HTTP.</strong> Ambos vigilantes corren en segundo plano y el servidor atiende al navegador.</li></ol><p>La dirección por defecto es <code>http://127.0.0.1:8766</code>. <code>127.0.0.1</code> significa tu propia computadora; <code>8766</code> identifica el servicio. Si el puerto ya está ocupado, el arranque lo informa.</p><div class="nota"><strong>Hay tareas que ocurren a la vez</strong><p>El vigilante revisa Descargas mientras el servidor responde a tus clics. Por eso se usan bloqueos: evitan que dos operaciones incompatibles trabajen simultáneamente sobre el mismo recurso.</p></div></section><section class="contenido" id="recorrido" aria-labelledby="recorrido-titulo"><h2 id="recorrido-titulo">4. Seguí un archivo paso a paso</h2><p>Este recorrido es una explicación interactiva. Los botones solo cambian el texto de este manual: no contactan al dashboard ni operan sobre tus archivos.</p><div class="simulador"><p class="eyebrow" id="paso-numero"></p><h3 id="paso-titulo"></h3><p id="paso-texto"></p><dl><dt>Quién interviene</dt><dd id="paso-modulo"></dd><dt>Dónde está el material</dt><dd id="paso-ruta"></dd><dt>Qué cambia</dt><dd id="paso-cambio"></dd></dl><div class="acciones"><button type="button" id="anterior">← Anterior</button><button type="button" id="siguiente">Siguiente →</button></div></div><details><summary>Leer todos los pasos sin usar los botones</summary><ol><li><strong>Descargás el material</strong><p>Un video, una imagen o un MP3 llega a la carpeta de descargas. Puede seguir escribiéndose: verlo en el disco todavía no significa que esté listo.</p><p><b>Intervienen:</b> Navegador o herramienta externa. <b>Ubicación:</b> Descargas. <b>Cambio:</b> Ninguno todavía.</p></li><li><strong>El vigilante observa</strong><p>vigilante.py revisa la carpeta. El filtro descarta temporales y nombres excluidos; el detector espera a que el tamaño permanezca igual durante la ventana de estabilidad.</p><p><b>Intervienen:</b> vigilante.py + clasificacion.py + lotes.py. <b>Ubicación:</b> Descargas. <b>Cambio:</b> Se preparan observaciones; el archivo no se mueve.</p></li><li><strong>Se decide dónde mostrarlo</strong><p>El sistema consulta SQLite y el capítulo en foco, calcula o reutiliza la huella y prepara lotes. Un nombre desconocido puede necesitar adopción manual. El material anterior se trata por separado.</p><p><b>Intervienen:</b> vigilante.py + db.py. <b>Ubicación:</b> Descargas. <b>Cambio:</b> Se registra estado y clasificación cuando corresponde.</p></li><li><strong>Revisás la simulación</strong><p>Elegís el personaje, capítulo y archivos. El servidor llama a movimientos.py para calcular orígenes, destinos y nombres. Todavía no se ejecuta el traslado.</p><p><b>Intervienen:</b> panel.js → servidor.py → movimientos.py. <b>Ubicación:</b> Descargas. <b>Cambio:</b> Se genera un plan para tu revisión.</p></li><li><strong>Confirmás el traslado</strong><p>El servidor ejecuta el lote: valida rutas, resuelve nombres ocupados y renombra cada archivo hacia la sala de espera. Guarda estado y bitácora. Un archivo bloqueado puede quedar pendiente.</p><p><b>Intervienen:</b> movimientos.py + db.py. <b>Ubicación:</b> Descargas/_lucie/&lt;personaje&gt;/&lt;capítulo&gt;/. <b>Cambio:</b> Cambia la ubicación física; SQLite y bitácora registran la acción.</p></li><li><strong>Enviás al pendrive</strong><p>Con una unidad vinculada, revisás el plan y confirmás. Se copia a un .part, se sincroniza, se verifica SHA-256 y se publica el destino final. Los originales enviados se conservan organizados.</p><p><b>Intervienen:</b> pendrive.py + plataforma.py. <b>Ubicación:</b> Pendrive/LucieSinReglas/. <b>Cambio:</b> Se añaden copias y eventos al manifiesto; no hay borrado automático.</p></li><li><strong>Seguís la edición</strong><p>Una sesión agrupa los clips elegidos en SQLite. Editás realmente en CapCut. Marcar edición terminada reclasifica crudos dentro del pendrive; un export es un archivo nuevo, no el mismo crudo.</p><p><b>Intervienen:</b> edicion.py + db.py + CapCut externo. <b>Ubicación:</b> Crudos, ya editados y videos completos. <b>Cambio:</b> Cambian estados; las acciones físicas dependen de la operación elegida.</p></li></ol></details><noscript><p>El recorrido interactivo requiere JavaScript. El resto del manual se puede leer sin él.</p></noscript></section><section class="contenido" id="deteccion" aria-labelledby="deteccion-titulo"><h2 id="deteccion-titulo">5. Cómo reconoce y agrupa material</h2><h3>Primero espera</h3><p>Una descarga parcial puede acabar en <code>.crdownload</code>, <code>.part</code> o <code>.tmp</code>. Se excluye. Para un archivo normal, el detector compara su tamaño entre observaciones; si cambia, reinicia la espera. Por defecto exige unos cinco segundos de tamaño estable. Esto ayuda a esperar una descarga, pero no demuestra por sí solo que el video sea válido.</p><h3>Después aplica reglas</h3><p>La lista de extensiones permite videos, imágenes y MP3. Los patrones reconocen ciertos nombres de herramientas, y los alias ayudan a identificar personajes. Un alias al principio del nombre puede sugerir el personaje: no se analiza visualmente el video ni se interpreta su historia.</p><h3>El capítulo en foco da contexto</h3><p>Si hay un capítulo habilitado en foco, el material nuevo elegible puede quedar asignado a él. El material anterior a su inicio se separa según la fecha de llegada y el margen configurado. Las decisiones manuales guardadas también cuentan: un archivo adoptado o ignorado tiene un tratamiento específico.</p><h3>Un lote es un grupo para revisar</h3><p>Con capítulo o raíz de escena reconocible, el agrupador usa esa relación. Sin raíz usa cercanía temporal, por defecto una ventana de diez minutos. No mezcla raíces distintas ni material anterior con reciente.</p><div class="nota"><strong>Ejemplo con MP3</strong><p>Si <code>voz.mp3</code> no tiene un alias y no queda clasificado por el contexto, puede aparecer en «Sin identificar». Elegir «Del proyecto» guarda la adopción. Al trasladarlo se organiza en <code>audios/</code>; no se une ni mezcla automáticamente con un video.</p></div></section><section class="contenido" id="pantallas" aria-labelledby="pantallas-titulo"><h2 id="pantallas-titulo">6. Qué representa cada pestaña</h2><div class="tabla"><table><thead><tr><th scope="col">Pestaña</th><th scope="col">Qué ves y qué significa</th></tr></thead><tbody><tr><td>Lotes Detectados</td><td>Grupos de material para revisar, asignar y mover. Detectado no equivale a trasladado.</td></tr><tr><td>Sin Identificar</td><td>Archivos que necesitan una decisión manual sobre si pertenecen al proyecto.</td></tr><tr><td>Capítulos Abiertos</td><td>Historias en preparación; el foco orienta la asignación de material reciente.</td></tr><tr><td>Capítulos Cerrados</td><td>Capítulos con estado cerrado. Cerrado no significa automáticamente editado ni enviado.</td></tr><tr><td>Descartados</td><td>Material apartado mediante los flujos de descarte. Descartar no es el borrado permanente manual.</td></tr><tr><td>Pendrive</td><td>Estado de la unidad vinculada, selección, simulación y operaciones de envío.</td></tr><tr><td>Eliminar capítulos</td><td>Navegación dentro del proyecto y selección explícita de carpetas o medios para eliminar.</td></tr><tr><td>Edición</td><td>Clips para editar, sesiones y registros de exports asociados.</td></tr><tr><td>Historial</td><td>Operaciones registradas y opciones de deshacer cuando la operación lo permite.</td></tr></tbody></table></div></section><section class="contenido" id="movimiento" aria-labelledby="movimiento-titulo"><h2 id="movimiento-titulo">7. Mover, copiar y deshacer</h2><h3>Mover a la sala de espera</h3><p>La simulación calcula dónde quedaría cada archivo. Tras la confirmación, <code>movimientos.py</code> vuelve a comprobar rutas y existencia. Usa <code>os.rename</code>: el archivo cambia de ubicación, sin copiar primero todos sus bytes. Resuelve colisiones para evitar ocupar un nombre existente y registra el resultado.</p><p>El traslado espera ubicaciones compatibles con ese renombrado. En Windows se rechazan unidades diferentes; entre sistemas de archivos distintos también puede fallar. La copia al pendrive usa otro procedimiento.</p><h3>Copiar al pendrive</h3><p>La copia lee el original y escribe un archivo nuevo en la unidad. Es apropiada para cruzar entre discos. El envío no se considera correcto solo porque se vea un archivo: verifica el contenido antes de publicar el nombre final.</p><h3>Deshacer</h3><p>La bitácora conserva rutas anteriores y nuevas. Deshacer intenta revertir sin pisar otro archivo. Si la ruta anterior está ocupada o hay cambios incompatibles, puede rechazar la operación. La reversión de envío conserva material mediante los destinos de reversión; no debe entenderse como borrar copias a ciegas.</p><div class="nota"><strong>No todas las acciones tienen reversión</strong><p>La eliminación manual permanente no se puede deshacer. Cancelar una sesión de edición es distinto de deshacer un movimiento físico. Siempre mirá el tipo de acción y su resultado.</p></div></section><section class="contenido" id="carpetas" aria-labelledby="carpetas-titulo"><h2 id="carpetas-titulo">8. Qué vive en cada lugar</h2><p>Desde el 12/10/2026 las carpetas nuevas llevan nombre, día, semana del mes, mes y año. Ejemplo: <code>oloraculo - lunes - semana 2 - octubre - 2026</code>. La semana del mes agrupa días 1–7, 8–14, 15–21, 22–28 y 29–31. Las carpetas anteriores mantienen su nombre.</p><p>Estas rutas son ejemplos. Los valores reales dependen de la configuración y del sistema. En Windows la carpeta de descargas se resuelve con las funciones del sistema; no se debe asumir siempre una ruta Linux.</p><pre>Descargas/
-  archivo recién descargado.mp4
-  _lucie/
-    lucie/
-      plaza/
-        fotos/
-        videos/
-        audios/</pre><p>La sala de espera agrupa por personaje y capítulo. Los nombres de las subcarpetas de fotos y videos son configurables. Las carpetas existentes reconocidas en Descargas tienen un tratamiento adicional.</p><pre>UNIDAD/
-  .lucie_pendrive.json       ← identidad de la unidad vinculada
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<meta name="description" content="Manual completo de uso diario y funcionamiento interno de Lucie Sin Reglas: flujo de capítulos, sala de espera, pendrive mensual, edición con CapCut, envío Wi-Fi al celular y reglas de seguridad.">
+<title>Manual de Uso y Funcionamiento Interno · Lucie Sin Reglas</title>
+<style>
+:root{color-scheme:dark;--bg:#050811;--surface:#0c1423;--surface2:#101c30;--text:#edf3fa;--muted:#a6b7cc;--cyan:#00e4ee;--pink:#ff63b0;--amber:#fbbf24;--green:#34d399;--line:#293a50}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:24px}
+body{margin:0;background:var(--bg);color:var(--text);font:16.5px/1.72 "Segoe UI",system-ui,sans-serif}
+a{color:var(--cyan);text-underline-offset:4px}
+a:hover{color:#fff}
+button,input{font:inherit}
+button{cursor:pointer;border:1px solid var(--line);border-radius:7px;background:#112137;color:var(--text);padding:9px 14px}
+button:hover:not(:disabled),button[aria-pressed=true]{border-color:var(--cyan);background:#0a3441}
+button:disabled{opacity:.4;cursor:default}
+:focus-visible{outline:2px solid var(--cyan);outline-offset:4px}
+.skip{position:absolute;top:-100px;left:16px;padding:10px;background:var(--surface);z-index:10}
+.skip:focus{top:12px}
+.layout{max-width:1520px;margin:auto;display:grid;grid-template-columns:280px minmax(0,1fr);gap:44px;padding:36px}
+.sidebar{position:sticky;top:24px;align-self:start;max-height:calc(100vh - 48px);overflow:auto;padding-right:14px}
+.brand{font-size:23px;font-weight:800;letter-spacing:-.8px;color:var(--cyan)}
+.brand span{color:var(--pink)}
+.sidebar p{color:var(--muted);font-size:13px;margin:6px 0}
+.sidebar nav{display:grid;gap:3px;margin-top:18px}
+.sidebar a{color:var(--muted);text-decoration:none;font-size:13px;padding:6px 10px;border-left:2px solid transparent;border-radius:0 6px 6px 0}
+.sidebar a:hover,.sidebar a[aria-current=true]{color:var(--cyan);border-left-color:var(--cyan);background:#00e4ee12}
+main{min-width:0;max-width:980px}
+.hero{padding:28px 0 36px;border-bottom:1px solid var(--line)}
+.eyebrow{font:12px/1.5 ui-monospace,monospace;letter-spacing:1.2px;text-transform:uppercase;color:var(--cyan);margin:0}
+h1{font-size:clamp(30px,4.5vw,52px);line-height:1.12;letter-spacing:-1.5px;margin:14px 0 20px;max-width:820px}
+h1 span{color:var(--pink)}
+.hero>p:not(.eyebrow){max-width:780px;color:var(--muted);font-size:18px}
+.acciones{display:flex;flex-wrap:wrap;gap:12px;margin-top:22px}
+.acciones a{display:inline-block;text-decoration:none;padding:9px 14px;border:1px solid var(--cyan);border-radius:7px}
+.meta{font-size:13px!important}
+.contenido{padding:40px 0;border-bottom:1px solid var(--line)}
+h2{font-size:26px;line-height:1.3;letter-spacing:-.4px;margin:0 0 18px;color:#fff}
+h3{font-size:19.5px;line-height:1.4;margin:26px 0 10px;color:#e2edf8}
+p{margin:10px 0 16px}
+li{margin-bottom:10px}
+ol,ul{padding-left:24px}
+code{font:.86em/1.55 ui-monospace,monospace;color:#8cf0f5;background:#112234;padding:2px 6px;border-radius:4px;overflow-wrap:anywhere}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:20px;background:var(--surface);border:1px solid var(--line);border-radius:10px;font:13.5px/1.75 ui-monospace,monospace;color:#bbcadc}
+.nota{border-left:3px solid var(--cyan);background:#0d1d2d;padding:16px 20px;margin:20px 0;border-radius:0 8px 8px 0}
+.nota.alerta{border-left-color:var(--amber);background:#1f1a0d}
+.nota.alerta strong{color:var(--amber)}
+.nota p{margin-bottom:0}
+.nota strong{color:#a0f6fb}
+.flujo{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;padding:0;list-style:none}
+.flujo li{position:relative;background:var(--surface);border:1px solid var(--line);border-top:2px solid var(--cyan);padding:16px 14px;border-radius:8px;min-width:0}
+.flujo b{display:block;font-size:15px;color:#fff}
+.flujo span{display:block;font-size:12.5px;color:var(--muted);margin-top:6px}
+.leyenda{font-size:13px;color:var(--muted)}
+.cadena{padding:18px 22px;border:1px solid var(--line);background:var(--surface2);border-radius:8px;font-family:ui-monospace,monospace;font-size:14px;color:var(--cyan)}
+.modulos{display:flex;flex-wrap:wrap;gap:8px}
+.modulos button{font-size:12px;font-family:ui-monospace,monospace}
+.detalle,.simulador{background:var(--surface);border:1px solid var(--line);padding:22px;border-radius:10px;margin-top:16px;min-height:130px}
+.detalle h3{margin-top:0}
+.conexiones{font-size:14px;color:var(--cyan)}
+dt{font-weight:700;margin-top:14px;color:#fff}
+dd{margin:4px 0 10px;color:var(--muted)}
+.tabla{overflow:auto;max-width:100%;margin:20px 0;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;font-size:14px;text-align:left}
+th{background:#102033;color:var(--cyan)}
+th,td{padding:12px 15px;border-bottom:1px solid var(--line);vertical-align:top}
+td:first-child{font-weight:600;color:#fff}
+details{padding:14px 18px;margin:10px 0;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+summary{cursor:pointer;font-weight:600;color:#fff}
+details p{font-size:15px}
+footer{padding:28px 0;color:var(--muted);font-size:13px}
+.busqueda{margin-top:16px}
+.busqueda label{font-size:12.5px;color:var(--muted)}
+.busqueda input{margin-top:6px;width:100%;padding:9px 11px;border-radius:6px;border:1px solid var(--line);background:var(--surface);color:var(--text)}
+#resultado-busqueda{font-size:12px;color:var(--muted)}
+.badges{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}
+.badge{font:12px/1.4 ui-monospace,monospace;padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:var(--surface2);color:var(--cyan)}
+[hidden]{display:none!important}
+@media(max-width:1000px){.layout{grid-template-columns:220px minmax(0,1fr);gap:24px;padding:22px}.flujo{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:720px){.layout{display:block;padding:18px}.sidebar{position:static;max-height:none;overflow:visible;padding:0}.sidebar nav{display:flex;overflow:auto;gap:8px;margin:14px 0}.sidebar a{white-space:nowrap;padding:8px;font-size:12px}.flujo{grid-template-columns:1fr}}
+@media print{:root{color-scheme:light;--bg:#fff;--surface:#fff;--surface2:#f6f8fa;--text:#111;--muted:#333;--cyan:#005d69;--pink:#8e1651;--line:#ccc}body{font-size:10.5pt}.layout{display:block;max-width:none;padding:0}.sidebar,.acciones,.skip,.modulos,#modulo-detalle,.simulador,noscript{display:none!important}main{max-width:none}.contenido[hidden],section{display:block!important}details{break-inside:avoid}@page{margin:16mm}}
+</style>
+</head>
+<body>
+<a class="skip" href="#contenido">Ir al contenido</a>
+<div class="layout">
+<aside class="sidebar">
+  <div class="brand">lucie<span>Sinreglas</span></div>
+  <p>Manual de Uso y Funcionamiento Interno</p>
+  <search class="busqueda">
+    <label for="buscar">Filtrar secciones por palabra clave</label>
+    <input id="buscar" type="search" placeholder="Ej.: CapCut, Luna, Wi-Fi, hash">
+    <p id="resultado-busqueda" role="status" aria-live="polite"></p>
+  </search>
+  <nav aria-label="Índice del manual">
+    <a href="#idea">1. Qué hace el proyecto</a>
+    <a href="#uso-diario">2. Manual de uso paso a paso</a>
+    <a href="#mapa">3. Arquitectura y módulos</a>
+    <a href="#arranque">4. Arranque e icono junto al reloj</a>
+    <a href="#recorrido">5. Recorrido interactivo de un archivo</a>
+    <a href="#deteccion">6. Detección, alias y capítulos</a>
+    <a href="#pantallas">7. Guía de pestañas del dashboard</a>
+    <a href="#carpetas">8. Estructura de carpetas y fechas</a>
+    <a href="#envio">9. Envío seguro al pendrive y meses</a>
+    <a href="#edicion">10. Edición con CapCut y exports</a>
+    <a href="#wifi">11. Enviar al celular por Wi-Fi</a>
+    <a href="#memoria">12. SQLite, SHA-256 y bitácoras</a>
+    <a href="#seguridad">13. Las 7 Reglas de Oro y borrado manual</a>
+    <a href="#comunicacion">14. API HTTP entre panel y Python</a>
+    <a href="#problemas">15. Diagnóstico y reglas para agentes</a>
+    <a href="#fuentes">16. Catálogo de archivos del código</a>
+  </nav>
+</aside>
+
+<main id="contenido">
+  <header class="hero">
+    <p class="eyebrow">Guía Operativa + Arquitectura Interna · Actualizado 06/11/2026</p>
+    <h1>Manual de Uso y<br><span>Funcionamiento Interno.</span></h1>
+    <p>Todo lo necesario para usar el dashboard a diario (capítulos, sala de espera, pendrive mensual, edición en CapCut y envío por Wi-Fi al celular) y para comprender cómo trabajan sus módulos por dentro.</p>
+    <div class="badges">
+      <span class="badge">Personajes: Lucie · Roli · Mailen · Luna</span>
+      <span class="badge">Panel local: http://127.0.0.1:8766</span>
+      <span class="badge">Receptor Android: TCP 53318</span>
+      <span class="badge">7 Reglas de Oro + Auditoría AST</span>
+    </div>
+    <p class="meta">Funciona 100% sin conexión · No modifica ni accede a tus archivos al abrirlo · Listo para imprimir en PDF</p>
+    <div class="acciones">
+      <a href="#uso-diario">Ir al Manual de Uso →</a>
+      <a href="#edicion">Ir a Edición y CapCut →</a>
+      <button type="button" id="imprimir">Imprimir / Guardar como PDF</button>
+    </div>
+  </header>
+
+  <section class="contenido" id="idea" aria-labelledby="idea-titulo">
+    <h2 id="idea-titulo">1. Qué hace el proyecto</h2>
+    <p>La plataforma automatiza y resguarda todo el circuito de producción multimedia de los cuatro personajes vigentes: <strong>Lucie</strong> (<code>lucie</code>), <strong>Magui la Roli</strong> (<code>roli</code>), <strong>Mailen</strong> (<code>mailen</code>) y <strong>Luna</strong> (<code>luna</code>).</p>
+    <p>Imaginá un estudio de producción dividido en seis estaciones conectadas:</p>
+    <ol class="flujo">
+      <li><b>1. Descargas</b><span>Capturá videos, fotos y audios MP3 generados con IA sin tocar archivos mientras se escriben.</span></li>
+      <li><b>2. Sala de Espera</b><span>Clasificá por personaje y capítulo fechado con simulación previa en <code>Descargas/_lucie/</code>.</span></li>
+      <li><b>3. Bóveda Pendrive</b><span>Copiá con verificación SHA-256 hacia <code>LucieSinReglas/</code> agrupado por <code>&lt;mes - año&gt;</code>.</span></li>
+      <li><b>4. Edición CapCut</b><span>Armá sesiones de edición; al terminar, archivá los crudos en <code>videos ya editados</code>.</span></li>
+      <li><b>5. Export Completo</b><span>Detectá el video final de CapCut y copialo con título legible a <code>videos sin publicar</code>.</span></li>
+      <li><b>6. Envío Wi-Fi</b><span>Transferí al celular con <strong>Lucie Recibir</strong> o LocalSend y archivá en <code>videosPublicados</code>.</span></li>
+    </ol>
+    <div class="nota">
+      <strong>Principio fundamental</strong>
+      <p>Ninguna operación borra ni sobrescribe archivos automáticamente. Cada traslado o copia exige simulación previa, verifica integridad por hash <strong>SHA-256</strong> y registra una bitácora auditable con soporte de <strong>Deshacer</strong>.</p>
+    </div>
+  </section>
+
+  <section class="contenido" id="uso-diario" aria-labelledby="uso-titulo">
+    <h2 id="uso-titulo">2. Manual de uso paso a paso (Operación diaria)</h2>
+
+    <h3>Paso A · Empezar o enfocar un capítulo antes de descargar</h3>
+    <ol>
+      <li>Abrí el dashboard en <code>http://127.0.0.1:8766</code> (o hacé clic izquierdo en el icono <strong>L</strong> junto al reloj de Windows/Linux).</li>
+      <li>En la barra superior, pulsá <strong>Empezar capítulo</strong>, elegí el personaje (<strong>Lucie</strong>, <strong>Roli</strong>, <strong>Mailen</strong> o <strong>Luna</strong>) y escribí el nombre de la historia o escena (por ejemplo, <code>magui dormida</code> o <code>luna llego el viernes</code>).</li>
+      <li>El sistema le agrega automáticamente la fecha documentada (ej. <code>magui dormida - viernes - semana 1 - noviembre - 2026</code>) y lo deja <strong>en foco</strong>. Todo lo que descargues a partir de ese momento se preasignará a ese capítulo.</li>
+    </ol>
+
+    <h3>Paso B · Revisar descargas y mover a la Sala de Espera</h3>
+    <ol>
+      <li>En <strong>Lotes Detectados</strong> verás los archivos descargados una vez que su tamaño se estabiliza (~5 segundos).</li>
+      <li>Si descargaste un audio <code>.mp3</code> o imagen sin alias en el nombre y apareció en <strong>Sin Identificar</strong>, podés pulsar <strong>Del proyecto</strong> para adoptarlo.</li>
+      <li>Seleccioná el lote, pulsá <strong>Simular movimiento</strong> para revisar cómo quedarán renombrados (por ejemplo, <code>maguidormida1.mp4</code> ... <code>maguidormida6.mp4</code>) y confirmá. Los archivos pasan atómicamente a <code>Descargas/_lucie/&lt;personaje&gt;/&lt;capítulo&gt;/</code>.</li>
+      <li>Cuando hayas terminado de reunir el material de esa escena, pulsá <strong>Terminar capítulo</strong>.</li>
+    </ol>
+
+    <h3>Paso C · Enviar de la Sala de Espera al Pendrive</h3>
+    <ol>
+      <li>Conectá el pendrive vinculado y abrí la pestaña <strong>Pendrive</strong>.</li>
+      <li>Marcá los capítulos cerrados que quieras llevar al pendrive y pulsá <strong>Simular envío</strong>.</li>
+      <li>Si algún archivo ya existía con otro contenido, el modal te permite elegir por archivo entre <strong>Renombrar y agregar</strong> (agrega <code>_1</code>, <code>_2</code>) o <strong>No agregar</strong>.</li>
+      <li>Confirmá el envío: se copia mediante archivo temporal <code>.part</code> + <code>fsync</code> + verificación <strong>SHA-256</strong> hacia <code>LucieSinReglas/videos sin editar/&lt;personaje&gt;/&lt;mes - año&gt;/&lt;capítulo&gt;/</code> (y análogamente en <code>imagenes/</code> y <code>audios/</code>).</li>
+    </ol>
+
+    <h3>Paso D · Editar en CapCut y usar «Terminé de editar»</h3>
+    <ol>
+      <li>En la pestaña <strong>Edición</strong>, dentro de <strong>1. Para editar</strong>, tildá los clips del capítulo que vas a montar y pulsá <strong>Crear sesión de edición</strong>.</li>
+      <li>El dashboard sugiere automáticamente el título legible del capítulo (ej. <code>magui dormida</code> o <code>luna llego el viernes</code>) y <strong>abre el Explorador de Windows en la carpeta exacta del pendrive</strong> para que arrastres los clips a CapCut.</li>
+      <li>Si mientras editás querés agregar otro clip más del mismo capítulo, usá el botón <strong>Sumar video</strong> en la tarjeta de la sesión activa.</li>
+      <li>Cuando termines de montar el proyecto en CapCut, pulsá <strong>Exportar en CapCut</strong> (que guarda el archivo en <code>%LOCALAPPDATA%\CapCut\Videos</code>, por ejemplo <code>1105 (1)(2).mp4</code>).</li>
+      <li>Volvé al dashboard y pulsá <strong>Terminé de editar</strong> en esa sesión:
+        <ul>
+          <li><strong>Los clips crudos en partes</strong> se guardan automáticamente como respaldo en <code>videos ya editados/&lt;personaje&gt;/&lt;mes - año&gt;/videoyaeditado_&lt;titulo&gt;_semana_&lt;N&gt;_&lt;mes&gt;_&lt;año&gt;/</code> (si CapCut todavía los tiene abiertos, hace una copia segura y retira los originales de <code>videos sin editar</code> en segundo plano cuando CapCut los suelta).</li>
+          <li><strong>El video final exportado por CapCut</strong> se detecta en <code>CapCut\Videos</code> (incluso si el reproductor de vista previa de CapCut sigue abierto) y se copia automáticamente con el nombre del capítulo (ej. <code>magui dormida.mp4</code> o <code>luna llego el viernes.mp4</code>) dentro de <code>videos completos/videos sin publicar/&lt;personaje&gt;/&lt;mes - año&gt;/&lt;capítulo&gt;/</code>.</li>
+        </ul>
+      </li>
+    </ol>
+
+    <h3>Paso E · Enviar al celular por Wi-Fi</h3>
+    <ol>
+      <li>Abrí la pestaña <strong>Sin publicar · Enviar al celular</strong>. Verás automáticamente todos los videos finales copiados en <code>videos completos/videos sin publicar/</code>, agrupados o filtrables por <strong>Lucie</strong>, <strong>Roli</strong>, <strong>Mailen</strong>, <strong>Luna</strong> o <strong>Sin asignar</strong>.</li>
+      <li>Tildá los videos o fotos que quieras pasar al teléfono.</li>
+      <li>Abrí <strong>Lucie Recibir</strong> (o LocalSend) en el celular conectado al mismo Wi-Fi, pulsá <strong>Buscar celular</strong> en el dashboard y elegí tu dispositivo.</li>
+      <li>Pulsá <strong>Revisar envío</strong> y luego <strong>Confirmar y enviar</strong>. Al aceptar en el teléfono y verificarse la recepción íntegra, el video se traslada automáticamente a <code>videos completos/videosPublicados/&lt;personaje&gt;/&lt;mes - año&gt;/&lt;capítulo&gt;/</code> y queda registrado en la vista <strong>Enviados</strong> con botón <strong>Deshacer</strong>.</li>
+    </ol>
+  </section>
+
+  <section class="contenido" id="mapa" aria-labelledby="mapa-titulo">
+    <h2 id="mapa-titulo">3. Arquitectura y cómo se conecta todo</h2>
+    <p>Cada acción que ejecutás en el navegador recorre una cadena determinista entre el frontend y los módulos de Python:</p>
+    <div class="cadena">Vos → panel.js / wifi.js → servidor.py (CSRF + Host) → módulo especialista → disco (.part + fsync + SHA-256) + SQLite + bitácora/manifiesto → respuesta JSON → panel</div>
+    <h3>Explorador interactivo de módulos</h3>
+    <p>Hacé clic en cualquier módulo para consultar su responsabilidad exacta y con qué piezas interactúa:</p>
+    <div class="modulos">
+      <button type="button" data-modulo="arranque" aria-pressed="false">bandeja_descargas.py</button>
+      <button type="button" data-modulo="config" aria-pressed="false">bandeja/config.py</button>
+      <button type="button" data-modulo="vigilante" aria-pressed="false">bandeja/vigilante.py</button>
+      <button type="button" data-modulo="filtro" aria-pressed="false">bandeja/clasificacion.py</button>
+      <button type="button" data-modulo="lotes" aria-pressed="false">bandeja/lotes.py</button>
+      <button type="button" data-modulo="db" aria-pressed="false">bandeja/db.py</button>
+      <button type="button" data-modulo="capitulos" aria-pressed="false">bandeja/capitulos.py</button>
+      <button type="button" data-modulo="movimientos" aria-pressed="false">bandeja/movimientos.py</button>
+      <button type="button" data-modulo="pendrive" aria-pressed="false">bandeja/pendrive.py</button>
+      <button type="button" data-modulo="meses" aria-pressed="false">bandeja/organizacion_mensual.py</button>
+      <button type="button" data-modulo="plataforma" aria-pressed="false">bandeja/plataforma.py</button>
+      <button type="button" data-modulo="servidor" aria-pressed="false">bandeja/servidor.py</button>
+      <button type="button" data-modulo="edicion" aria-pressed="false">bandeja/edicion.py</button>
+      <button type="button" data-modulo="capcut" aria-pressed="false">bandeja/capcut.py</button>
+      <button type="button" data-modulo="publicacion" aria-pressed="false">bandeja/publicacion.py</button>
+      <button type="button" data-modulo="localsend" aria-pressed="false">bandeja/localsend.py</button>
+      <button type="button" data-modulo="eliminacion" aria-pressed="false">bandeja/eliminacion.py</button>
+      <button type="button" data-modulo="icono" aria-pressed="false">bandeja/icono_windows.py</button>
+      <button type="button" data-modulo="web" aria-pressed="false">bandeja/web/panel.js + wifi.js</button>
+    </div>
+    <div id="modulo-detalle" class="detalle" aria-live="polite">
+      <p>Seleccioná un módulo arriba para ver su función interna y sus conexiones.</p>
+    </div>
+  </section>
+
+  <section class="contenido" id="arranque" aria-labelledby="arranque-titulo">
+    <h2 id="arranque-titulo">4. Arranque e icono junto al reloj (Windows y Linux)</h2>
+    <p>Podés iniciar Lucie de tres formas equivalentes:</p>
+    <ul>
+      <li><strong>Automáticamente al iniciar sesión en Windows o Kali/Linux</strong>: corre en segundo plano sin ventana de consola (`iniciar_bandeja_windows.py` con `pythonw.exe` o `iniciar_bandeja_linux.py`) y muestra el icono <strong>L</strong> junto al reloj. Un clic izquierdo abre el panel en Google Chrome; el clic derecho permite <strong>Abrir panel</strong> o <strong>Salir</strong>.</li>
+      <li><strong>Con doble clic en <code>iniciar_bandeja.bat</code> (Windows)</strong>: abre consola de logs, añade el icono junto al reloj y abre Chrome en <code>http://127.0.0.1:8766</code>.</li>
+      <li><strong>Desde terminal</strong>: <code>py -3 bandeja_descargas.py</code> en Windows o <code>python3 bandeja_descargas.py</code> en Linux (agregando <code>--sin-navegador</code> si no querés que abra Chrome al arrancar).</li>
+    </ul>
+    <p>Si el servicio ya está corriendo en el puerto <code>8766</code>, cualquier intento de abrirlo nuevamente detecta la instancia activa y abre el navegador sin duplicar vigilantes.</p>
+  </section>
+
+  <section class="contenido" id="recorrido" aria-labelledby="recorrido-titulo">
+    <h2 id="recorrido-titulo">5. Recorrido interactivo de un archivo</h2>
+    <p>Usá los botones <strong>Anterior</strong> y <strong>Siguiente</strong> para seguir el viaje completo de un video desde que cae en Descargas hasta que llega al celular:</p>
+    <div class="simulador">
+      <p class="eyebrow" id="paso-numero"></p>
+      <h3 id="paso-titulo"></h3>
+      <p id="paso-texto"></p>
+      <dl>
+        <dt>Módulos que intervienen</dt>
+        <dd id="paso-modulo"></dd>
+        <dt>Ubicación física del archivo</dt>
+        <dd id="paso-ruta"></dd>
+        <dt>Qué cambia en el sistema</dt>
+        <dd id="paso-cambio"></dd>
+      </dl>
+      <div class="acciones">
+        <button type="button" id="anterior">← Anterior</button>
+        <button type="button" id="siguiente">Siguiente →</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="contenido" id="deteccion" aria-labelledby="deteccion-titulo">
+    <h2 id="deteccion-titulo">6. Detección, alias y capítulos</h2>
+    <h3>Estabilidad antes de tocar</h3>
+    <p>Los archivos temporales de navegadores (<code>.crdownload</code>, <code>.part</code>, <code>.tmp</code>) se ignoran. Para los videos, fotos y MP3, <code>DetectorDescargasActivas</code> exige que el tamaño en bytes permanezca estable durante la ventana configurada (~5 s) y que ningún proceso lo tenga abierto para escritura.</p>
+    <h3>Personajes y alias</h3>
+    <p>El clasificador reconoce a <strong>Lucie</strong> (<code>lucie</code>), <strong>Roli</strong> (<code>roli</code>, incluyendo los alias <code>magui</code> y <code>magui la roli</code>), <strong>Mailen</strong> (<code>mailen</code>) y <strong>Luna</strong> (<code>luna</code>) mediante <code>alias-personajes.json</code> o mediante el <strong>capítulo en foco</strong> activo.</p>
+    <h3>Nombres compactos de clips crudos</h3>
+    <p>Al mover un lote a la sala de espera, <code>calcular_base_escena</code> genera nombres secuenciales compactos para los clips crudos (por ejemplo, para el capítulo <code>magui dormida</code> enumera <code>maguidormida1.mp4</code>, <code>maguidormida2.mp4</code>, etc.; para <code>luna llego el viernes</code> enumera <code>lunallegoelviernes1.mp4</code>), mientras que la carpeta del capítulo conserva todos sus espacios y la fecha completa.</p>
+  </section>
+
+  <section class="contenido" id="pantallas" aria-labelledby="pantallas-titulo">
+    <h2 id="pantallas-titulo">7. Guía de pestañas del dashboard</h2>
+    <div class="tabla">
+      <table>
+        <thead>
+          <tr><th scope="col">Pestaña / Vista</th><th scope="col">Función operativa y qué muestra</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Lotes Detectados</td><td>Archivos estables en Descargas agrupados por capítulo o ventana temporal, listos para simular y mover a la sala de espera.</td></tr>
+          <tr><td>Sin Identificar</td><td>Archivos multimedia sin alias conocido ni capítulo en foco; permite adoptarlos con «Del proyecto» o ignorarlos.</td></tr>
+          <tr><td>Capítulos Abiertos / Cerrados</td><td>Gestión de escenas en curso, cambio de foco y cierre de proyectos antes de enviarlos al pendrive.</td></tr>
+          <tr><td>Pendrive</td><td>Estado de conexión y espacio libre de la unidad vinculada, simulación de envío, resolución de colisiones («Renombrar y agregar» o «No agregar») y organización mensual.</td></tr>
+          <tr><td>Edición</td><td>Tres bloques: <strong>1. Para editar</strong> (clips en <code>videos sin editar</code>), <strong>2. En edición</strong> (sesiones abiertas y «Terminé de editar») y <strong>3. Videos completados</strong> (exports de CapCut, sesiones esperando export y resguardo con título para exports numéricos sin sesión).</td></tr>
+          <tr><td>Sin publicar · Enviar al celular</td><td>Galería de <code>videos completos/videos sin publicar</code> filtrable por personaje (Lucie, Roli, Mailen, Luna, Sin asignar), búsqueda de celular (Lucie Recibir / LocalSend), envío Wi-Fi verificado, historial de <strong>Enviados</strong> y <strong>Organizar anteriores</strong>.</td></tr>
+          <tr><td>Eliminar capítulos</td><td>Única vía autorizada de eliminación manual permanente dentro de <code>LucieSinReglas</code>, con simulación obligatoria, token de un uso y confirmación escribiendo <code>ELIMINAR</code>.</td></tr>
+          <tr><td>Historial</td><td>Registro cronológico de movimientos, envíos, ediciones y publicaciones con botones de <strong>Deshacer</strong>.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="contenido" id="carpetas" aria-labelledby="carpetas-titulo">
+    <h2 id="carpetas-titulo">8. Estructura de carpetas y formato de fechas</h2>
+    <p>Todas las carpetas nuevas incluyen el nombre legible del capítulo o video y la fecha local en español con el bloque de semana del mes (días <code>1–7</code> = semana 1, <code>8–14</code> = semana 2, <code>15–21</code> = semana 3, <code>22–28</code> = semana 4, <code>29–31</code> = semana 5):</p>
+    <pre>&lt;nombre del video o capítulo&gt; - &lt;día de la semana&gt; - semana &lt;1..5&gt; - &lt;mes&gt; - &lt;año&gt;
+Ejemplo: magui dormida - viernes - semana 1 - noviembre - 2026</pre>
+    <p>En el pendrive vinculado, todas las categorías se organizan además bajo la carpeta mensual <code>&lt;mes - año&gt;</code>:</p>
+    <pre>UNIDAD_USB/
+  .lucie_pendrive.json
   LucieSinReglas/
-    imagenes/&lt;personaje&gt;/&lt;capítulo&gt;/
-    audios/&lt;personaje&gt;/&lt;capítulo&gt;/
-    videos sin editar/&lt;personaje&gt;/&lt;capítulo&gt;/
-    videos ya editados/&lt;personaje&gt;/&lt;nombre - día - semana del mes - mes - año&gt;/
-    videos completos/&lt;personaje&gt;/&lt;nombre - día - semana del mes - mes - año&gt;/
+    imagenes/&lt;personaje&gt;/&lt;mes - año&gt;/&lt;capítulo fechado&gt;/
+    audios/&lt;personaje&gt;/&lt;mes - año&gt;/&lt;capítulo fechado&gt;/
+    videos sin editar/&lt;personaje&gt;/&lt;mes - año&gt;/&lt;capítulo fechado&gt;/
+      maguidormida1.mp4 ... maguidormida6.mp4
+    videos ya editados/&lt;personaje&gt;/&lt;mes - año&gt;/videoyaeditado_&lt;nombre&gt;_semana_&lt;N&gt;_&lt;mes&gt;_&lt;año&gt;/
+      maguidormida1.mp4 ... maguidormida6.mp4
+    videos completos/
+      videos sin publicar/&lt;personaje&gt;/&lt;mes - año&gt;/&lt;título - día - semana N - mes - año&gt;/
+        magui dormida.mp4
+      videosPublicados/&lt;personaje&gt;/&lt;mes - año&gt;/&lt;título - día - semana N - mes - año&gt;/
+        magui dormida.mp4
+    _enviados/edicion/     ← resguardo de crudos retenidos cuando CapCut los suelta
+    _revertidos/           ← copias preservadas al ejecutar Deshacer
+    _a_revisar/            ← evidencia preservada si falla un hash en vuelo
     .lucie/
-      manifiesto.jsonl
-      eliminaciones.jsonl</pre><p>El marcador de unidad queda fuera de <code>LucieSinReglas</code>. Los registros internos quedan dentro de <code>.lucie</code>. Al vincular se crea la estructura base; las carpetas necesarias para contenido se crean según las operaciones.</p><div class="tabla"><table><thead><tr><th scope="col">Dato</th><th scope="col">Dónde se guarda por defecto</th><th scope="col">Para qué sirve</th></tr></thead><tbody><tr><td>Configuración común</td><td><code>config_bandeja.json</code></td><td>Comportamiento compartido del proyecto.</td></tr><tr><td>Configuración de esta máquina</td><td><code>config_bandeja.local.json</code></td><td>Ajustes que sustituyen valores del archivo general.</td></tr><tr><td>Alias</td><td><code>alias-personajes.json</code></td><td>Reglas para reconocer nombres de personajes.</td></tr><tr><td>Memoria SQLite</td><td><code>.cache/inventario_pendrive_cache.sqlite</code></td><td>Estados y relaciones de la aplicación; no almacena los bytes de tus videos.</td></tr><tr><td>Bitácora local</td><td><code>bitacora_bandeja.jsonl</code></td><td>Historia de operaciones del taller.</td></tr><tr><td>Manifiesto del pendrive</td><td><code>LucieSinReglas/.lucie/manifiesto.jsonl</code></td><td>Eventos y huellas que viajan con la unidad.</td></tr><tr><td>Journal de borrado</td><td><code>LucieSinReglas/.lucie/eliminaciones.jsonl</code></td><td>Plan confirmado y eliminaciones realizadas.</td></tr></tbody></table></div></section><section class="contenido" id="memoria" aria-labelledby="memoria-titulo"><h2 id="memoria-titulo">9. Base de datos, hash y registros</h2><p><strong>SQLite es la memoria de trabajo.</strong> Puede recordar que elegiste ignorar un archivo, qué capítulo está en foco, dónde quedó material movido y qué clips pertenecen a una sesión. El código organiza estas tablas y accede a ellas con bloqueos. El modo WAL permite coordinar lecturas y escrituras.</p><p><strong>SHA-256 es una huella del contenido.</strong> Dos archivos con distinto nombre pueden tener la misma huella. Si cambia el contenido, normalmente cambia la huella. Se usa para detectar duplicados y comprobar copias. No es un identificador del personaje ni del capítulo.</p><p><strong>JSONL es un registro por líneas.</strong> Cada línea contiene un evento en formato JSON. Se añaden eventos al final: es una cronología, no una lista que se reescribe para esconder el pasado. Un evento de reversión también se registra.</p><div class="nota"><strong>Por qué se necesitan los tres</strong><p>El disco contiene los archivos. SQLite recuerda cómo los está tratando esta aplicación. La bitácora explica qué operaciones ocurrieron. El manifiesto añade información transportable con el pendrive. Ninguno sustituye por completo a los demás.</p></div></section><section class="contenido" id="envio" aria-labelledby="envio-titulo"><h2 id="envio-titulo">10. El envío seguro al pendrive</h2><ol><li><strong>Reconoce una unidad vinculada.</strong> El marcador con identificador distingue la unidad; una etiqueta como MIUNIDAD es una pista, no reemplaza la identidad.</li><li><strong>Inspecciona el material elegido.</strong> Calcula destinos, cantidades, tamaños, posibles conflictos y espacio disponible.</li><li><strong>Muestra la simulación.</strong> La operación espera la aprobación desde el panel.</li><li><strong>Copia en un destino parcial.</strong> Se usa creación exclusiva para que un archivo existente no sea pisado.</li><li><strong>Sincroniza y verifica.</strong> Se sincronizan buffers y se calcula la huella del destino para compararla con el original.</li><li><strong>Publica y registra.</strong> Si corresponde, el parcial pasa al nombre final y el manifiesto registra el envío. El flujo conserva los originales y organiza los enviados.</li></ol><p>Si la copia no coincide, el procedimiento conserva evidencia en el área de revisión de copias fallidas. Un <code>.part</code> huérfano puede indicar una interrupción; el inventario puede mostrarlo sin borrarlo.</p><p>Envío, reversión de envío y borrado manual comparten un bloqueo exclusivo. La aplicación evita desmontar mientras esa operación está marcada como activa. Eso no impide una desconexión física, por lo que los controles de error siguen siendo necesarios.</p><div class="nota"><strong>Carpetas de trabajo vacías tras el envío</strong><p>Después de verificar todas las copias y escribir los registros, el envío retira únicamente las subcarpetas vacías y la carpeta del capítulo enviado. No elimina archivos ni respaldos de <code>_enviados</code>, no atraviesa enlaces y conserva cualquier carpeta con contenido. Deshacer recrea los directorios necesarios. Esta excepción fue autorizada el 12/10/2026; no es una limpieza retroactiva del disco.</p></div></section><section class="contenido" id="edicion" aria-labelledby="edicion-titulo"><h2 id="edicion-titulo">11. Edición y CapCut: qué está conectado</h2><h3>Una sesión es una relación, no un editor</h3><p>Seleccionás clips de «videos sin editar». Crear una sesión guarda en SQLite su identificador, personaje, capítulo, nombre y lista de clips; no los mueve físicamente. CapCut es donde hacés el montaje real.</p><p>Finalizar la edición comprueba todos los clips y destinos antes de trasladar nuevos archivos. Si falta un origen o hay un conflicto, conserva la sesión abierta. Los crudos quedan en «videos ya editados» dentro de una carpeta con el nombre de edición, día de la semana, número de semana del mes, mes en español y año; no se usan niveles anidados ni subcarpetas de capítulo. Cambios del disco posteriores a la comprobación pueden interrumpir una operación iniciada: no hay atomicidad de todo el lote. Un video exportado se copia a «videos completos» mediante las funciones correspondientes. Son acciones distintas.</p><h3>Qué sabe hacer VigilanteCapCut</h3><p>Cuando se instancia e inicia, toma una fotografía inicial de la carpeta de exports y excluye esos archivos preexistentes. Busca nuevos videos también en subcarpetas, con profundidad limitada a tres niveles; ignora temporales y ocultos. Espera tamaño estable durante varios sondeos y comprueba disponibilidad antes de avisar a un callback.</p><h3>Cómo se asocia un export en el código</h3><p>El callback del vigilante llama a <code>vincular_nuevo_export</code>. Si exactamente una sesión espera un export, en estado <code>en_edicion</code> o <code>editado</code>, lo asocia. Si no hay una única candidata, queda sin asignar para elección manual. <code>envio_exports_capcut=automatico</code> permite copiar a la unidad vinculada; si falta la unidad queda pendiente y los sondeos reintentan al reconectar. En modo <code>manual</code>, la asociación puede ser automática pero la copia espera «Enviar al pendrive». El original de CapCut se conserva.</p><div class="nota"><strong>Conexión actual, comprobada en el código</strong><p><code>bandeja_descargas.py</code> crea e inicia <code>VigilanteCapCut</code>, conecta asociación y reintentos y lo entrega al servidor. «Videos completados» muestra exports, sesión, estado, errores y destino. «Sumar video» agrega clips a una sesión abierta del mismo personaje sin moverlos, tras validarlos y confirmar la lista. Deshacer un envío conserva el video en <code>_revertidos</code> y lo deja disponible para un envío explícito, sin volver a copiarlo automáticamente.</p></div></section><section class="contenido" id="seguridad" aria-labelledby="seguridad-titulo"><h2 id="seguridad-titulo">12. Seguridad y eliminación manual</h2><p>La regla vigente prohíbe el borrado automático y el pisado ciego. La excepción autorizada es el flujo manual de «Eliminar capítulos» dentro de la raíz del proyecto del pendrive.</p><ol><li>La lista muestra carpetas y formatos multimedia reconocidos dentro del proyecto.</li><li>Vos marcás los elementos; nada se selecciona automáticamente.</li><li>El servidor prepara un inventario y guarda un plan privado de un solo uso, válido cinco minutos.</li><li>Revisás los elementos y escribís exactamente <code>ELIMINAR</code>.</li><li>El servidor comprueba token, identidad de unidad, rutas, contenido y cambios desde la simulación.</li><li>Registra el plan antes de borrar y cada elemento eliminado después. Borra hijos antes de carpetas y se detiene ante el primer error.</li></ol><p>La raíz, los metadatos ocultos, las rutas que escapan del proyecto y los enlaces o junctions están protegidos. Si elegís una carpeta, su plan incluye el contenido que se eliminaría, incluso archivos que no eran seleccionables individualmente como multimedia. Revisá el inventario completo.</p><p>Las peticiones de acción llevan controles de Host y CSRF. En palabras simples: el servidor verifica que la solicitud llegue por el canal esperado y con el token del panel. El analizador AST revisa llamadas prohibidas y admite solo las dos primitivas expresas del método manual.</p><div class="nota"><strong>Irreversible y posiblemente parcial</strong><p>Una eliminación permanente no es mover a una papelera. No tiene deshacer. Si aparece un error después de borrar algunos elementos, esos elementos ya están eliminados; el resultado y el journal indican lo que alcanzó a hacerse.</p></div></section><section class="contenido" id="comunicacion" aria-labelledby="comunicacion-titulo"><h2 id="comunicacion-titulo">13. Cómo habla el panel con Python</h2><p>El navegador carga <code>panel.html</code>, <code>panel.css</code> y <code>panel.js</code>. HTML define los elementos, CSS su apariencia y JavaScript las interacciones. Python atiende las rutas API y devuelve datos JSON.</p><p>El panel consulta periódicamente <code>/api/estado-version</code>. Si el token de versión cambia, actualiza la vista preservando estado cuando corresponde. El sondeo se pausa con pestaña oculta o diálogos abiertos. Este flujo usa consultas periódicas; no necesita una conexión de eventos SSE.</p><div class="tabla"><table><thead><tr><th scope="col">Intención</th><th scope="col">Ruta HTTP</th><th scope="col">Qué componente interviene</th></tr></thead><tbody><tr><td>Consultar cambios</td><td><code>GET /api/estado-version</code></td><td>Servidor y versión preparada por el vigilante.</td></tr><tr><td>Preparar un traslado</td><td><code>POST /api/simular-mover</code></td><td>Servidor → movimientos.</td></tr><tr><td>Ejecutar el lote</td><td><code>POST /api/mover-lote</code></td><td>Servidor → movimientos → disco, SQLite y bitácora.</td></tr><tr><td>Preparar envío</td><td><code>POST /api/pendrive/envio-simular</code></td><td>Servidor → pendrive.</td></tr><tr><td>Ejecutar envío</td><td><code>POST /api/pendrive/envio</code></td><td>Servidor → pendrive y plataforma.</td></tr><tr><td>Consultar edición</td><td><code>GET /api/edicion/secciones</code></td><td>Servidor → unidad, edición y SQLite.</td></tr><tr><td>Sumar clips a una sesión</td><td><code>POST /api/edicion/sumar-videos</code></td><td>Servidor → edición → SQLite, sin mover ni borrar archivos.</td></tr><tr><td>Enviar un export registrado</td><td><code>POST /api/capcut/enviar-export</code></td><td>Servidor → asociación, validaciones y copia de export.</td></tr><tr><td>Crear sesión</td><td><code>POST /api/edicion/crear-sesion</code></td><td>Servidor → edición → SQLite.</td></tr><tr><td>Asignar export existente</td><td><code>POST /api/capcut/asignar-export</code></td><td>Servidor → edición, copia o cola pendiente.</td></tr><tr><td>Listar selección de borrado</td><td><code>GET /api/pendrive/eliminacion</code></td><td>Servidor → eliminación; registra identificadores de medios.</td></tr><tr><td>Preparar y confirmar borrado</td><td><code>POST /api/pendrive/eliminacion-simular</code><br><code>POST /api/pendrive/eliminar</code></td><td>Servidor → servicio de eliminación manual.</td></tr><tr><td>Mostrar medio</td><td><code>GET /api/media?id=…</code></td><td>Servidor resuelve un identificador opaco y valida la raíz autorizada.</td></tr></tbody></table></div><p>Estas rutas explican la conexión; no son botones para ejecutar operaciones desde este manual. Un identificador de medio evita entregar una ruta arbitraria como orden al servidor.</p></section><section class="contenido" id="problemas" aria-labelledby="problemas-titulo"><h2 id="problemas-titulo">14. Qué revisar cuando algo no aparece</h2><details><summary>Un archivo de Descargas no aparece</summary><p>Comprobá la carpeta configurada, extensión permitida, exclusiones, estabilidad y fecha. También puede tener una decisión previa de ignorado, figurar como duplicado o estar en «Sin identificar». Estar en disco no garantiza aparecer en el lote actual.</p></details><details><summary>Una carpeta de eliminación parece vacía</summary><p>La vista muestra solamente hijos del nivel actual y medios con extensiones reconocidas. Metadatos, enlaces y rutas rechazadas no aparecen. Revisá el nombre completo y la ubicación. Existe un reporte pendiente de archivos invisibles en una carpeta real: aún falta un ejemplo concreto para reproducir y confirmar la causa.</p></details><details><summary>La pestaña Edición no detecta exports nuevos</summary><p>El arranque habitual conecta VigilanteCapCut. Comprobá la carpeta configurada y si el export es posterior a su fotografía inicial: los preexistentes quedan excluidos. Los nuevos deben estabilizarse y estar disponibles; revisá también los estados y errores de «Videos completados».</p></details><details><summary>Un traslado o envío quedó a medias</summary><p>Leé el resultado de la operación: bloqueo, desconexión, espacio o conflicto pueden impedir algunos elementos. Contrastá bitácora, manifiesto y archivos existentes antes de decidir otra acción. No asumas que todos los elementos cambiaron solo porque algunos sí.</p></details><details><summary>El panel no responde</summary><p>Verificá que el proceso esté funcionando y que la dirección use su puerto. Una actualización estética puede requerir recargar el navegador; una actualización de Python requiere reiniciar el proceso para cargar el nuevo código.</p></details></section><section class="contenido" id="fuentes" aria-labelledby="fuentes-titulo"><h2 id="fuentes-titulo">15. Dónde mirar el código y cómo se verifica</h2><p>Estos enlaces apuntan a archivos de este repositorio. Si abrís el manual como archivo local, el navegador puede mostrarlos como texto o descargarlos.</p><details><summary>bandeja_descargas.py · El encargado de abrir el taller</summary><p>Lee los argumentos, construye los componentes, inicia los vigilantes de descargas y CapCut y mantiene el servidor funcionando. Al cerrar, detiene ambos vigilantes y el servidor.</p><p class="conexiones">Configuración → componentes → vigilante + servidor</p><a href="../bandeja_descargas.py">Abrir fuente</a></details><details><summary>bandeja/config.py · La hoja de instrucciones</summary><p>Resuelve carpetas, puerto, extensiones, intervalos y opciones. También calcula SHA-256, la huella del contenido.</p><p class="conexiones">JSON general + JSON local + argumentos → valores que usan los módulos</p><a href="../bandeja/config.py">Abrir fuente</a></details><details><summary>bandeja/vigilante.py · Los ojos sobre Descargas</summary><p>Revisa entradas, espera estabilidad, aplica clasificación, consulta decisiones guardadas, reconoce duplicados y prepara los datos que muestra el panel. No ejecuta el traslado de lotes.</p><p class="conexiones">Filtro + detector + SQLite + agrupador → lotes y archivos sin identificar</p><a href="../bandeja/vigilante.py">Abrir fuente</a></details><details><summary>bandeja/clasificacion.py · El filtro de entrada</summary><p>Distingue candidatos, nombres desconocidos y elementos ignorados usando extensiones, patrones y alias. Sugiere personaje y escena por reglas de nombres; no comprende el contenido del video.</p><p class="conexiones">Configuración + alias-personajes.json → clasificación</p><a href="../bandeja/clasificacion.py">Abrir fuente</a></details><details><summary>bandeja/lotes.py · El reloj y el agrupador</summary><p>DetectorDescargasActivas comprueba si el tamaño deja de cambiar. AgrupadorLotes reúne material por raíz de escena o capítulo; sin raíz reconocible usa cercanía temporal. Separa material anterior y reciente.</p><p class="conexiones">Archivos estables y clasificados → grupos para revisar</p><a href="../bandeja/lotes.py">Abrir fuente</a></details><details><summary>bandeja/db.py · La memoria del taller</summary><p>Guarda en SQLite archivos, hashes, decisiones, capítulos, foco, sesiones de edición y exports pendientes. Usa conexiones y bloqueos para coordinar acceso.</p><p class="conexiones">Vigilante, servidor, movimientos y edición ↔ SQLite</p><a href="../bandeja/db.py">Abrir fuente</a></details><details><summary>bandeja/capitulos.py · La organización de historias</summary><p>Gestiona acciones de capítulos y sus estados. El foco ayuda a asignar material reciente. Cerrar un capítulo cambia su organización; no convierte sus videos en un montaje final.</p><p class="conexiones">Acciones del panel → estado de capítulos + memoria y carpetas</p><a href="../bandeja/capitulos.py">Abrir fuente</a></details><details><summary>bandeja/movimientos.py · Las manos que ordenan</summary><p>Calcula una simulación, valida rutas, evita colisiones y ejecuta traslados con os.rename. Actualiza SQLite y escribe la bitácora. También permite deshacer operaciones compatibles.</p><p class="conexiones">Selección confirmada → sala de espera + SQLite + bitácora</p><a href="../bandeja/movimientos.py">Abrir fuente</a></details><details><summary>bandeja/pendrive.py · El transporte y la bóveda</summary><p>Detecta unidades vinculadas, simula envíos y copia con archivos parciales, sincronización y verificación de hash. Mantiene el manifiesto y organiza originales enviados.</p><p class="conexiones">Sala de espera + identidad de unidad → LucieSinReglas + registros</p><a href="../bandeja/pendrive.py">Abrir fuente</a></details><details><summary>bandeja/plataforma.py · El adaptador Linux / Windows</summary><p>Resuelve carpetas del sistema, unidades, espacio, rutas y disponibilidad de archivos con mecanismos apropiados a cada sistema operativo.</p><p class="conexiones">Consultas del resto de módulos → operaciones del sistema</p><a href="../bandeja/plataforma.py">Abrir fuente</a></details><details><summary>bandeja/servidor.py · El puente con el navegador</summary><p>Sirve HTML/CSS/JS, recibe peticiones API, valida las solicitudes y llama al componente encargado. Sirve medios por identificadores y genera miniaturas.</p><p class="conexiones">Navegador ↔ HTTP local ↔ servicios Python</p><a href="../bandeja/servidor.py">Abrir fuente</a></details><details><summary>bandeja/edicion.py · El seguimiento de montaje</summary><p>Crea sesiones, registra clips en edición, finaliza crudos y copia exports terminados. Contiene reglas de asociación de exports a sesiones.</p><p class="conexiones">Clips del pendrive + SQLite + export → estados y videos completos</p><a href="../bandeja/edicion.py">Abrir fuente</a></details><details><summary>bandeja/capcut.py · Los ojos sobre exports, cuando se conecta</summary><p>VigilanteCapCut ignora archivos preexistentes, temporales y ocultos; busca videos nuevos, estables y disponibles. Puede notificar un callback. El arranque habitual lo inicia y conecta sus callbacks.</p><p class="conexiones">Carpeta de exportación → detección → callback configurado</p><a href="../bandeja/capcut.py">Abrir fuente</a></details><details><summary>bandeja/eliminacion.py · La excepción de borrado manual</summary><p>Lista elementos del proyecto, emite un plan privado y verifica identidad y contenido antes de eliminar una selección expresamente confirmada. No se invoca automáticamente.</p><p class="conexiones">Selección → simulación + ELIMINAR → borrado + journal</p><a href="../bandeja/eliminacion.py">Abrir fuente</a></details><details><summary>bandeja/web/panel.js · La mesa de trabajo que ves</summary><p>Controla pestañas, selección, vistas previas y llamadas API. panel.html pone la estructura; panel.css define la estética. JavaScript no mueve por sí solo los archivos del disco.</p><p class="conexiones">Tus acciones → solicitudes HTTP; respuestas → interfaz</p><a href="../bandeja/web/panel.js">Abrir fuente</a></details><h3>Herramientas adicionales</h3><div class="tabla"><table><thead><tr><th scope="col">Archivo</th><th scope="col">Función</th></tr></thead><tbody><tr><td><a href="../inventario_pendrive.py">inventario_pendrive.py</a></td><td>Auditoría de inventario y duplicados en modo de lectura.</td></tr><tr><td><a href="../plan_limpieza.py">plan_limpieza.py</a></td><td>Generación y validación de planes simulados de ordenamiento.</td></tr><tr><td><a href="../seguridad_anti_borrado.py">seguridad_anti_borrado.py</a></td><td>Análisis AST de primitivas prohibidas y excepción manual acotada.</td></tr><tr><td><a href="../auditar_repo.py">auditar_repo.py</a></td><td>Auditoría de archivos y, opcionalmente, historial para detectar datos que no deban publicarse.</td></tr><tr><td><a href="../guardia_hermetica.py">guardia_hermetica.py</a></td><td>Aislamiento de pruebas para bloquear acceso a rutas reales protegidas.</td></tr><tr><td><a href="../verificar_windows.py">verificar_windows.py</a></td><td>Diagnóstico de compatibilidad en Windows.</td></tr><tr><td><a href="../instalar_hooks.py">instalar_hooks.py</a></td><td>Instalación segura del control previo a push.</td></tr></tbody></table></div><h3>Cómo se comprueba el comportamiento</h3><p>La suite <code>test_*.py</code> ejercita los componentes. Por ejemplo, <code>test_audio_mp3.py</code> verifica audio y transferencia; <code>test_eliminacion_pendrive.py</code> cubre el flujo manual; <code>test_edicion.py</code> cubre sesiones y exports. Las pruebas deben usar temporales y la guardia hermética.</p><p>La suite Linux tras actualizar el host a 6304a53 pasó 310 pruebas con cuatro saltados de Windows nativo. Es una verificación registrada de esa versión, no una promesa de que todos los entornos Windows ya se comprobaron.</p><h3>Glosario rápido</h3><dl><dt>API / endpoint</dt><dd>Una dirección por la que el panel solicita datos o una acción a Python.</dd><dt>Hilo</dt><dd>Una tarea que puede avanzar mientras otra atiende al navegador.</dd><dt>Callback</dt><dd>Una función que se llama cuando ocurre algo, como detectar un export.</dd><dt>Confinamiento</dt><dd>Comprobar que una ruta permanezca dentro de las carpetas autorizadas.</dd><dt>Colisión</dt><dd>El nombre de destino ya existe; se necesita otro nombre o rechazar la acción.</dd><dt>Dry-run / simulación</dt><dd>Calcular y mostrar una operación antes de ejecutarla.</dd><dt>Export</dt><dd>El archivo nuevo que produce CapCut al guardar el montaje terminado.</dd><dt>Append-only</dt><dd>Un registro al que se agregan eventos al final conservando los anteriores.</dd></dl></section><footer>Este documento es informativo y autónomo: no llama a la API del dashboard, no lee tus descargas y no opera sobre el pendrive. Las rutas de ejemplo son ilustrativas. Si el código cambia, el manual puede necesitar actualización.</footer></main></div><script>
-const modulos = [["arranque", "bandeja_descargas.py", "El encargado de abrir el taller", "Lee los argumentos, construye los componentes, inicia los vigilantes de descargas y CapCut y mantiene el servidor funcionando. Al cerrar, detiene ambos vigilantes y el servidor.", "Configuración → componentes → vigilante + servidor"], ["config", "bandeja/config.py", "La hoja de instrucciones", "Resuelve carpetas, puerto, extensiones, intervalos y opciones. También calcula SHA-256, la huella del contenido.", "JSON general + JSON local + argumentos → valores que usan los módulos"], ["vigilante", "bandeja/vigilante.py", "Los ojos sobre Descargas", "Revisa entradas, espera estabilidad, aplica clasificación, consulta decisiones guardadas, reconoce duplicados y prepara los datos que muestra el panel. No ejecuta el traslado de lotes.", "Filtro + detector + SQLite + agrupador → lotes y archivos sin identificar"], ["filtro", "bandeja/clasificacion.py", "El filtro de entrada", "Distingue candidatos, nombres desconocidos y elementos ignorados usando extensiones, patrones y alias. Sugiere personaje y escena por reglas de nombres; no comprende el contenido del video.", "Configuración + alias-personajes.json → clasificación"], ["lotes", "bandeja/lotes.py", "El reloj y el agrupador", "DetectorDescargasActivas comprueba si el tamaño deja de cambiar. AgrupadorLotes reúne material por raíz de escena o capítulo; sin raíz reconocible usa cercanía temporal. Separa material anterior y reciente.", "Archivos estables y clasificados → grupos para revisar"], ["db", "bandeja/db.py", "La memoria del taller", "Guarda en SQLite archivos, hashes, decisiones, capítulos, foco, sesiones de edición y exports pendientes. Usa conexiones y bloqueos para coordinar acceso.", "Vigilante, servidor, movimientos y edición ↔ SQLite"], ["capitulos", "bandeja/capitulos.py", "La organización de historias", "Gestiona acciones de capítulos y sus estados. El foco ayuda a asignar material reciente. Cerrar un capítulo cambia su organización; no convierte sus videos en un montaje final.", "Acciones del panel → estado de capítulos + memoria y carpetas"], ["movimientos", "bandeja/movimientos.py", "Las manos que ordenan", "Calcula una simulación, valida rutas, evita colisiones y ejecuta traslados con os.rename. Actualiza SQLite y escribe la bitácora. También permite deshacer operaciones compatibles.", "Selección confirmada → sala de espera + SQLite + bitácora"], ["pendrive", "bandeja/pendrive.py", "El transporte y la bóveda", "Detecta unidades vinculadas, simula envíos y copia con archivos parciales, sincronización y verificación de hash. Mantiene el manifiesto y organiza originales enviados.", "Sala de espera + identidad de unidad → LucieSinReglas + registros"], ["plataforma", "bandeja/plataforma.py", "El adaptador Linux / Windows", "Resuelve carpetas del sistema, unidades, espacio, rutas y disponibilidad de archivos con mecanismos apropiados a cada sistema operativo.", "Consultas del resto de módulos → operaciones del sistema"], ["servidor", "bandeja/servidor.py", "El puente con el navegador", "Sirve HTML/CSS/JS, recibe peticiones API, valida las solicitudes y llama al componente encargado. Sirve medios por identificadores y genera miniaturas.", "Navegador ↔ HTTP local ↔ servicios Python"], ["edicion", "bandeja/edicion.py", "El seguimiento de montaje", "Crea sesiones, registra clips en edición, finaliza crudos y copia exports terminados. Contiene reglas de asociación de exports a sesiones.", "Clips del pendrive + SQLite + export → estados y videos completos"], ["capcut", "bandeja/capcut.py", "Los ojos sobre exports, cuando se conecta", "VigilanteCapCut ignora archivos preexistentes, temporales y ocultos; busca videos nuevos, estables y disponibles. Puede notificar un callback. El arranque habitual lo inicia y conecta sus callbacks.", "Carpeta de exportación → detección → callback configurado"], ["eliminacion", "bandeja/eliminacion.py", "La excepción de borrado manual", "Lista elementos del proyecto, emite un plan privado y verifica identidad y contenido antes de eliminar una selección expresamente confirmada. No se invoca automáticamente.", "Selección → simulación + ELIMINAR → borrado + journal"], ["web", "bandeja/web/panel.js", "La mesa de trabajo que ves", "Controla pestañas, selección, vistas previas y llamadas API. panel.html pone la estructura; panel.css define la estética. JavaScript no mueve por sí solo los archivos del disco.", "Tus acciones → solicitudes HTTP; respuestas → interfaz"]];
-const pasos = [["Descargás el material", "Un video, una imagen o un MP3 llega a la carpeta de descargas. Puede seguir escribiéndose: verlo en el disco todavía no significa que esté listo.", "Navegador o herramienta externa", "Descargas", "Ninguno todavía."], ["El vigilante observa", "vigilante.py revisa la carpeta. El filtro descarta temporales y nombres excluidos; el detector espera a que el tamaño permanezca igual durante la ventana de estabilidad.", "vigilante.py + clasificacion.py + lotes.py", "Descargas", "Se preparan observaciones; el archivo no se mueve."], ["Se decide dónde mostrarlo", "El sistema consulta SQLite y el capítulo en foco, calcula o reutiliza la huella y prepara lotes. Un nombre desconocido puede necesitar adopción manual. El material anterior se trata por separado.", "vigilante.py + db.py", "Descargas", "Se registra estado y clasificación cuando corresponde."], ["Revisás la simulación", "Elegís el personaje, capítulo y archivos. El servidor llama a movimientos.py para calcular orígenes, destinos y nombres. Todavía no se ejecuta el traslado.", "panel.js → servidor.py → movimientos.py", "Descargas", "Se genera un plan para tu revisión."], ["Confirmás el traslado", "El servidor ejecuta el lote: valida rutas, resuelve nombres ocupados y renombra cada archivo hacia la sala de espera. Guarda estado y bitácora. Un archivo bloqueado puede quedar pendiente.", "movimientos.py + db.py", "Descargas/_lucie/<personaje>/<capítulo>/", "Cambia la ubicación física; SQLite y bitácora registran la acción."], ["Enviás al pendrive", "Con una unidad vinculada, revisás el plan y confirmás. Se copia a un .part, se sincroniza, se verifica SHA-256 y se publica el destino final. Los originales enviados se conservan organizados.", "pendrive.py + plataforma.py", "Pendrive/LucieSinReglas/", "Se añaden copias y eventos al manifiesto; no hay borrado automático."], ["Seguís la edición", "Una sesión agrupa los clips elegidos en SQLite. Editás realmente en CapCut. Marcar edición terminada reclasifica crudos dentro del pendrive; un export es un archivo nuevo, no el mismo crudo.", "edicion.py + db.py + CapCut externo", "Crudos, ya editados y videos completos", "Cambian estados; las acciones físicas dependen de la operación elegida."]];
+      manifiesto.jsonl     ← registro inmutable de envíos, ediciones, meses y Wi-Fi
+      eliminaciones.jsonl  ← auditoría de eliminaciones manuales confirmadas</pre>
+  </section>
+
+  <section class="contenido" id="envio" aria-labelledby="envio-titulo">
+    <h2 id="envio-titulo">9. Envío seguro al pendrive y organización mensual</h2>
+    <ol>
+      <li><strong>Verificación de unidad vinculada</strong>: comprueba <code>.lucie_pendrive.json</code> y que no existan enlaces simbólicos ni junctions en la ruta.</li>
+      <li><strong>Deduplicación por destino relativo + SHA-256</strong>: permite reutilizar el mismo archivo en otro proyecto o con otro nombre; si el nombre ya existe en el mismo destino con distinto contenido, ofrece <strong>Renombrar y agregar</strong> o <strong>No agregar</strong>.</li>
+      <li><strong>Escritura atómica</strong>: escribe en <code>&lt;archivo&gt;.part</code> con creación exclusiva (<code>xb</code>), ejecuta <code>os.fsync</code>, recalcula el <strong>SHA-256</strong> desde el pendrive y recién entonces renombra al destino final.</li>
+      <li><strong>Limpieza acotada de carpetas vacías</strong>: tras confirmar integridad y escribir los registros, retira únicamente los directorios padres que hayan quedado vacíos en la sala de espera (nunca borra archivos, raíces, personajes ni <code>_enviados</code>).</li>
+    </ol>
+  </section>
+
+  <section class="contenido" id="edicion" aria-labelledby="edicion-titulo">
+    <h2 id="edicion-titulo">10. Edición con CapCut y detección del video final</h2>
+    <h3>Separación entre clips crudos y video completo exportado</h3>
+    <p>Es fundamental distinguir los dos destinos que se actualizan cuando pulsás <strong>Terminé de editar</strong>:</p>
+    <ul>
+      <li><strong><code>videos ya editados/</code></strong>: guarda los <strong>clips crudos originales en partes</strong> (ej. <code>maguidormida1.mp4</code> ... <code>maguidormida6.mp4</code>) dentro de <code>videoyaeditado_magui_dormida_semana_1_noviembre_2026/</code> para liberar la bandeja de pendientes sin perder las tomas crudas.</li>
+      <li><strong><code>videos completos/videos sin publicar/</code></strong>: recibe el <strong>video final único ya editado y exportado por CapCut</strong> desde <code>%LOCALAPPDATA%\CapCut\Videos</code> (ej. <code>1105 (1)(2).mp4</code>), renombrado automáticamente al título legible del proyecto (<code>magui dormida.mp4</code> o <code>luna llego el viernes.mp4</code>).</li>
+    </ul>
+
+    <div class="nota alerta">
+      <strong>Regla técnica crítica en Windows (2026-11-06): Vista previa de CapCut y <code>permitir_lectura=True</code></strong>
+      <p>En Windows, apenas CapCut termina de exportar un archivo <code>.mp4</code> o <code>.mov</code>, cierra su manejador de escritura pero <strong>abre inmediatamente un manejador de solo lectura (<code>GENERIC_READ</code>, <code>FILE_SHARE_READ</code>)</strong> para mostrar el reproductor de vista previa dentro de CapCut. Por eso <code>verificar_archivo_exclusivo(ruta, permitir_lectura=False)</code> en <code>bandeja/plataforma.py</code> opera en dos modos:</p>
+      <ul>
+        <li><strong><code>permitir_lectura=False</code> (por defecto, <code>dwShareMode = 0</code>)</strong>: obligatorio cuando el sistema va a mover o renombrar físicamente un archivo con <code>os.rename</code> (retiro de crudos en edición y organización mensual), porque Windows bloquea el renombrado si existe cualquier lector abierto.</li>
+        <li><strong><code>permitir_lectura=True</code> (<code>dwShareMode = FILE_SHARE_READ</code> + <code>LockFile</code> del byte 0)</strong>: obligatorio al detectar, simular y copiar exports de CapCut en <code>bandeja/capcut.py</code> y <code>bandeja/edicion.py</code>. Rechaza cualquier proceso escritor activo (<code>GENERIC_WRITE</code>) o bloqueo de bytes, pero permite copiar el export de inmediato aunque el reproductor de vista previa de CapCut siga abierto.</li>
+      </ul>
+    </div>
+
+    <h3>Recuperación del título legible en capítulos de un único clip (2026-11-06)</h3>
+    <p>Cuando un capítulo tiene varios clips, el título por defecto de la sesión se toma del capítulo (ej. <code>magui dormida.mp4</code>). Cuando un capítulo tiene <strong>un único clip</strong> cuyo archivo fue compactado con número al final al pasar por la sala de espera (por ejemplo, <code>lunallegoelviernes1.mp4</code> dentro del capítulo <code>luna llego el viernes - viernes - semana 1 - noviembre - 2026</code>), <code>calcular_nombre_defecto</code> y <code>nombre_video_sesion</code> en <code>bandeja/edicion.py</code> comparan la raíz alfanumérica sin el número final contra el título del capítulo y recuperan automáticamente los espacios originales: <strong><code>luna llego el viernes.mp4</code></strong>.</p>
+
+    <h3>Exports numéricos sin sesión</h3>
+    <p>Si exportás un video en CapCut con nombre numérico (como <code>1005.mp4</code> o <code>1105 (1).mp4</code>) cuando no había ninguna sesión activa o había varias superpuestas, el archivo no se copia con ese número a ciegas: queda en <strong>3. Videos completados</strong> para que elijas a qué sesión pertenece o escribas su título y personaje (Lucie, Roli, Mailen o Luna) con simulación previa.</p>
+  </section>
+
+  <section class="contenido" id="wifi" aria-labelledby="wifi-titulo">
+    <h2 id="wifi-titulo">11. Cola Sin publicar y envío Wi-Fi al celular</h2>
+    <p>La vista <strong>Sin publicar · Enviar al celular</strong> lee exclusivamente la carpeta <code>LucieSinReglas/videos completos/videos sin publicar/</code>. Todo video final copiado al terminar una edición aparece automáticamente allí bajo su personaje (<strong>Lucie</strong>, <strong>Roli</strong>, <strong>Mailen</strong> o <strong>Luna</strong>).</p>
+    <ol>
+      <li><strong>Descubrimiento de dispositivos</strong>: busca en todas las interfaces de red locales por multicast UDP y respaldo TCP directo en el puerto <code>53318</code> para <strong>Lucie Recibir</strong> (la app Android propia del proyecto) o puerto <code>53317</code> para <strong>LocalSend</strong>.</li>
+      <li><strong>Simulación e invalidación</strong>: cambiar la selección de archivos, el personaje o el teléfono invalida automáticamente cualquier revisión previa para evitar envíos equivocados.</li>
+      <li><strong>Confirmación de recepción y archivo en Publicados</strong>: solo cuando el teléfono acepta la transferencia y confirma que recibió todos los bytes íntegros, el sistema traslada el archivo desde <code>videos sin publicar</code> hacia <code>videos completos/videosPublicados/&lt;personaje&gt;/&lt;mes - año&gt;/&lt;capítulo&gt;/</code>, retirando las subcarpetas vacías de la cola y habilitando <strong>Deshacer</strong> en la pestaña <strong>Enviados</strong>.</li>
+    </ol>
+  </section>
+
+  <section class="contenido" id="memoria" aria-labelledby="memoria-titulo">
+    <h2 id="memoria-titulo">12. Base de datos SQLite, hashes SHA-256 y bitácoras</h2>
+    <div class="tabla">
+      <table>
+        <thead>
+          <tr><th scope="col">Archivo / Registro</th><th scope="col">Ubicación</th><th scope="col">Qué almacena y reglas de uso</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Configuración compartida</td><td><code>config_bandeja.json</code></td><td>Parámetros base versionados en Git (extensiones, ventanas de estabilidad, puerto 8766).</td></tr>
+          <tr><td>Configuración local</td><td><code>config_bandeja.local.json</code></td><td>Rutas propias de cada máquina; ignorado por Git. Nunca subir al repositorio.</td></tr>
+          <tr><td>Base SQLite (WAL)</td><td><code>.cache/inventario_pendrive_cache.sqlite</code></td><td>Estado local de descargas, capítulos, sesiones de edición y <code>exports_pendientes</code>. Es local a cada PC: nunca copiar entre Linux y Windows.</td></tr>
+          <tr><td>Bitácora local</td><td><code>bitacora_bandeja.jsonl</code></td><td>Historial append-only de movimientos en el host y operaciones de edición/resguardo.</td></tr>
+          <tr><td>Manifiesto del pendrive</td><td><code>LucieSinReglas/.lucie/manifiesto.jsonl</code></td><td>Fuente de verdad transportable en el pendrive: registra envíos, SHA-256, traslados de edición, migraciones mensuales y publicaciones Wi-Fi.</td></tr>
+          <tr><td>Journal de eliminaciones</td><td><code>LucieSinReglas/.lucie/eliminaciones.jsonl</code></td><td>Auditoría append-only de los planes confirmados en «Eliminar capítulos».</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="contenido" id="seguridad" aria-labelledby="seguridad-titulo">
+    <h2 id="seguridad-titulo">13. Las 7 Reglas de Oro y borrado manual</h2>
+    <ol>
+      <li><strong>Prohibición absoluta de borrado automático y sobrescritura destructiva</strong>: ningún flujo automático invoca funciones de borrado ni pisa archivos existentes.</li>
+      <li><strong>Simulación previa obligatoria (Dry-Run)</strong> antes de mover, copiar, organizar o eliminar.</li>
+      <li><strong>Confirmación explícita del usuario</strong> en cada lote o plan.</li>
+      <li><strong>Confinamiento canónico de rutas</strong> con <code>os.path.realpath</code> y <code>os.path.commonpath</code>, rechazando enlaces simbólicos y junctions.</li>
+      <li><strong>Integridad SHA-256 y escritura con <code>.part</code> + <code>fsync</code></strong> en toda copia hacia el pendrive.</li>
+      <li><strong>Registros append-only (<code>.jsonl</code>) y operaciones reversibles con Deshacer</strong> (excepto la eliminación manual permanente).</li>
+      <li><strong>Auditoría estática AST (<code>seguridad_anti_borrado.py</code>) y auditoría de repositorio (<code>auditar_repo.py --historial</code>)</strong> con 0 infracciones antes de cada commit o push.</li>
+    </ol>
+  </section>
+
+  <section class="contenido" id="comunicacion" aria-labelledby="comunicacion-titulo">
+    <h2 id="comunicacion-titulo">14. API HTTP entre el panel y Python</h2>
+    <div class="tabla">
+      <table>
+        <thead>
+          <tr><th scope="col">Operación</th><th scope="col">Endpoint HTTP</th><th scope="col">Módulo encargado</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Sondeo reactivo de versión</td><td><code>GET /api/estado-version</code></td><td><code>servidor.py</code> + contadores de vigilantes</td></tr>
+          <tr><td>Crear / enfocar / cerrar capítulo</td><td><code>POST /api/capitulos/*</code></td><td><code>capitulos.py</code> + <code>db.py</code></td></tr>
+          <tr><td>Simular y mover lote a espera</td><td><code>POST /api/simular-mover</code> · <code>POST /api/mover-lote</code></td><td><code>movimientos.py</code></td></tr>
+          <tr><td>Simular y enviar al pendrive</td><td><code>POST /api/pendrive/envio-simular</code> · <code>POST /api/pendrive/envio</code></td><td><code>pendrive.py</code></td></tr>
+          <tr><td>Crear sesión y terminar edición</td><td><code>POST /api/edicion/crear-sesion</code> · <code>POST /api/edicion/terminar</code></td><td><code>edicion.py</code> + <code>capcut.py</code></td></tr>
+          <tr><td>Revisar video final de sesión</td><td><code>POST /api/edicion/revisar-export</code></td><td><code>edicion.py</code> + <code>capcut.py</code></td></tr>
+          <tr><td>Resguardar export numérico con título</td><td><code>POST /api/publicacion/resguardar-simular</code> · <code>POST /api/publicacion/resguardar</code></td><td><code>publicacion.py</code> + <code>edicion.py</code></td></tr>
+          <tr><td>Listar cola Wi-Fi, buscar y enviar</td><td><code>GET /api/publicacion/lista</code> · <code>POST /api/publicacion/buscar</code> · <code>POST /api/publicacion/simular</code> · <code>POST /api/publicacion/enviar</code></td><td><code>publicacion.py</code> + <code>localsend.py</code></td></tr>
+          <tr><td>Streaming seguro de vista previa</td><td><code>GET /api/media?id=…</code></td><td><code>servidor.py</code> (soporta HTTP <code>206 Partial Content</code> y <code>Range</code>)</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="contenido" id="problemas" aria-labelledby="problemas-titulo">
+    <h2 id="problemas-titulo">15. Diagnóstico rápido y reglas para agentes</h2>
+    <details open>
+      <summary>¿Qué debe leer cualquier agente IA antes de modificar el proyecto?</summary>
+      <p>Antes de tocar código o configuraciones, leer obligatoriamente en este orden: <code>AGENTS.md</code>, <code>ESTADO_ACTUAL.md</code>, <code>README.md</code>, <code>README_WINDOWS.md</code> (o <code>README_KALI.md</code> en Linux) y <code>openspec/config.yaml</code>. Nunca ejecutar pruebas sobre carpetas reales ni con la bandeja real abierta; contar las líneas de <code>.lucie/manifiesto.jsonl</code> antes y después de la suite.</p>
+    </details>
+    <details>
+      <summary>Un video editado aparece en «videos ya editados» pero no en «Enviar al celular»</summary>
+      <p>Verificá primero que hayas pulsado <strong>Exportar</strong> dentro de CapCut hacia <code>%LOCALAPPDATA%\CapCut\Videos</code>. Con la corrección del 06/11/2026 (<code>permitir_lectura=True</code>), el vigilante copia el export aunque CapCut lo tenga abierto en su vista previa. Si el export se creó fuera de la ventana de la sesión o sin sesión activa, buscalo en la pestaña <strong>Edición → 3. Videos completados</strong> para asociarlo o asignarle título y personaje.</p>
+    </details>
+    <details>
+      <summary>Un clip crudo sigue viéndose en «videos sin editar» después de «Terminé de editar»</summary>
+      <p>Si CapCut tenía el clip bloqueado en Windows al momento de terminar, el sistema ya creó su copia verificada en <code>videos ya editados</code> y dejó programado el retiro automático. No hace falta cerrar CapCut: apenas cambies de proyecto o cierres CapCut, el sondeo retirará el original redundante hacia <code>_enviados/edicion</code>.</p>
+    </details>
+    <details>
+      <summary>El celular no aparece al pulsar «Buscar celular»</summary>
+      <p>Comprobá que el teléfono y la PC estén en la misma red Wi-Fi, que la app elegida en el selector (<strong>Lucie Recibir</strong> o <strong>LocalSend</strong>) esté abierta en pantalla en el teléfono, o usá el desplegable <strong>Conectar por IP</strong> indicando la IP local que muestra la app.</p>
+    </details>
+  </section>
+
+  <section class="contenido" id="fuentes" aria-labelledby="fuentes-titulo">
+    <h2 id="fuentes-titulo">16. Catálogo de archivos del código y verificación</h2>
+    <div class="tabla">
+      <table>
+        <thead>
+          <tr><th scope="col">Archivo</th><th scope="col">Responsabilidad principal</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><a href="../bandeja_descargas.py">bandeja_descargas.py</a></td><td>Punto de entrada principal, orquestación de vigilantes (`VigilanteBandeja` y `VigilanteCapCut`), icono de bandeja y servidor HTTP.</td></tr>
+          <tr><td><a href="../bandeja/edicion.py">bandeja/edicion.py</a></td><td>Sesiones de edición, recuperación de títulos con espacios (`nombre_video_sesion`, `calcular_nombre_defecto`), traslado de crudos y copia verificada de exports a `videos completos/videos sin publicar`.</td></tr>
+          <tr><td><a href="../bandeja/capcut.py">bandeja/capcut.py</a></td><td>Monitoreo de `%LOCALAPPDATA%\CapCut\Videos`, ventana de estabilidad, verificación `permitir_lectura=True` y recuperación por ventana de sesión.</td></tr>
+          <tr><td><a href="../bandeja/plataforma.py">bandeja/plataforma.py</a></td><td>Funciones nativas Windows/Linux, `verificar_archivo_exclusivo(ruta, permitir_lectura)` con `CreateFileW` y `LockFile`, confinamiento de rutas y renombrado sin pisar.</td></tr>
+          <tr><td><a href="../bandeja/publicacion.py">bandeja/publicacion.py</a></td><td>Inventario de `videos sin publicar`, simulación y envío Wi-Fi, traslado confirmado a `videosPublicados/<personaje>/` y reversión.</td></tr>
+          <tr><td><a href="../bandeja/localsend.py">bandeja/localsend.py</a></td><td>Protocolo de descubrimiento y transferencia hacia **Lucie Recibir** (TCP 53318) y **LocalSend** (53317).</td></tr>
+          <tr><td><a href="../bandeja/organizacion_mensual.py">bandeja/organizacion_mensual.py</a></td><td>Estructura `<mes - año>` para videos, imágenes y audios, resolución de prefijos históricos y migración simulada reversible.</td></tr>
+          <tr><td><a href="../bandeja/pendrive.py">bandeja/pendrive.py</a></td><td>Detección de unidad vinculada `.lucie_pendrive.json`, simulación de envío, copia atómica con `.part` + `fsync` + SHA-256 y limpieza de huérfanas vacías.</td></tr>
+          <tr><td><a href="../bandeja/movimientos.py">bandeja/movimientos.py</a></td><td>Simulación y traslado de lotes desde Descargas hacia la sala de espera (`_lucie`) con numeración compacta de clips.</td></tr>
+          <tr><td><a href="../bandeja/servidor.py">bandeja/servidor.py</a></td><td>Servidor HTTP local, protección Host/CSRF, endpoints JSON, miniaturas y streaming `206 Partial Content`.</td></tr>
+          <tr><td><a href="../seguridad_anti_borrado.py">seguridad_anti_borrado.py</a></td><td>Auditoría estática AST que garantiza las 7 Reglas de Oro en los 36 módulos operativos.</td></tr>
+          <tr><td><a href="../auditar_repo.py">auditar_repo.py</a></td><td>Auditoría de archivos rastreados e historial Git contra fugas de rutas privadas, datos personales o binarios pesados.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    Manual autónomo de uso y funcionamiento interno de Lucie Sin Reglas · Actualizado el 06/11/2026 · No ejecuta peticiones de red ni modifica archivos.
+  </footer>
+</main>
+</div>
+
+<script>
+const modulos = [
+  ["arranque", "bandeja_descargas.py", "Orquestador principal y punto de entrada", "Inicia la configuración, SQLite, el vigilante de Descargas, el vigilante de CapCut (con procesamiento automático de exports y retiros pendientes), el icono de bandeja y el servidor HTTP en 127.0.0.1:8766.", "Configuración → SQLite + VigilanteBandeja + VigilanteCapCut + Servidor HTTP"],
+  ["config", "bandeja/config.py", "Configuración y cálculo SHA-256", "Combina config_bandeja.json con config_bandeja.local.json, resuelve las rutas de Descargas, sala de espera, pendrive y CapCut, y provee calcular_sha256.", "JSON general + JSON local → parámetros para todos los módulos"],
+  ["vigilante", "bandeja/vigilante.py", "Vigilante de la carpeta Descargas", "Monitorea ~/Descargas sin bloquear archivos en descarga, espera estabilidad de tamaño y apertura exclusiva, clasifica por alias o capítulo en foco y arma los lotes.", "DetectorDescargasActivas + FiltroListaBlanca + SQLite → Lotes Detectados"],
+  ["filtro", "bandeja/clasificacion.py", "Clasificador de personajes y escenas", "Reconoce a Lucie, Roli (alias Magui), Mailen y Luna, filtra extensiones válidas (.mp4, .mov, .jpg, .png, .webp, .mp3) y genera los nombres de carpeta fechados.", "alias-personajes.json + nombre_carpeta_documentado → personaje y escena"],
+  ["lotes", "bandeja/lotes.py", "Estabilidad de descargas y agrupación", "Comprueba que un archivo no cambie de tamaño durante la ventana de estabilidad y agrupa archivos por raíz de escena, capítulo o ventana temporal.", "Observaciones de tamaño → lotes listos para revisar"],
+  ["db", "bandeja/db.py", "Persistencia SQLite en modo WAL", "Gestiona tablas de archivos, capítulos, sesiones_edicion, exports_pendientes y omisiones confirmadas con bloqueos thread-safe.", "Todos los módulos ↔ .cache/inventario_pendrive_cache.sqlite"],
+  ["capitulos", "bandeja/capitulos.py", "Gestión de capítulos y foco", "Crea capítulos con formato fechado, administra qué capítulo está en foco para preasignar descargas y controla el cierre seguro antes de enviar al pendrive.", "Panel web → estado de capítulos en SQLite"],
+  ["movimientos", "bandeja/movimientos.py", "Traslado atómico a la Sala de Espera", "Simula y ejecuta el paso de Descargas a ~/Descargas/_lucie/<personaje>/<capítulo>/ separando fotos, videos y audios y numerando los clips de forma compacta.", "Descargas → Sala de espera + bitacora_bandeja.jsonl"],
+  ["pendrive", "bandeja/pendrive.py", "Envío verificado a la bóveda USB", "Valida .lucie_pendrive.json, simula envíos detectando colisiones por destino y SHA-256, copia mediante .part + fsync + SHA-256 y retira carpetas vacías enviadas.", "Sala de espera → LucieSinReglas/ + .lucie/manifiesto.jsonl"],
+  ["meses", "bandeja/organizacion_mensual.py", "Organización mensual <mes - año>", "Ubica nuevas salidas bajo <categoria>/<personaje>/<mes - año>/<capítulo>/, migra históricos seleccionados con simulación y resuelve prefijos antiguos para mantener Deshacer.", "Rutas de capítulos ↔ estructura mensual y registro en manifiesto"],
+  ["plataforma", "bandeja/plataforma.py", "Abstracción Windows / Linux y exclusividad", "Resuelve carpetas nativas, unidades montadas, confinamiento realpath/commonpath y verificar_archivo_exclusivo (dwShareMode=0 para renombrados; permitir_lectura=True con FILE_SHARE_READ + LockFile para exports de CapCut).", "Sistema operativo ↔ todos los módulos de archivos"],
+  ["servidor", "bandeja/servidor.py", "Servidor HTTP, CSRF y streaming 206", "Sirve el dashboard y la API JSON validando Host y token CSRF, genera miniaturas y sirve vistas previas multimedia con soporte de rangos HTTP 206.", "Navegador (panel.js / wifi.js) ↔ módulos Python"],
+  ["edicion", "bandeja/edicion.py", "Sesiones de edición, crudos y videos completos", "Crea sesiones, recupera títulos legibles con espacios (incluso en capítulos de un solo clip compactado), mueve o copia crudos a videos ya editados y copia el export final de CapCut a videos completos/videos sin publicar.", "videos sin editar + CapCut\\Videos → videos ya editados + videos sin publicar"],
+  ["capcut", "bandeja/capcut.py", "Vigilante de exports de CapCut", "Monitorea %LOCALAPPDATA%\\CapCut\\Videos ignorando preexistentes al arranque, exige 3 sondeos de estabilidad y verifica permitir_lectura=True para detectar el export aunque la vista previa de CapCut siga abierta.", "CapCut\\Videos → vincular_nuevo_export / revisar_export_sesion"],
+  ["publicacion", "bandeja/publicacion.py", "Cola Sin publicar y archivo en Publicados", "Inventaría videos completos/videos sin publicar por personaje (Lucie, Roli, Mailen, Luna, Sin asignar), coordina la simulación y envío Wi-Fi y traslada los recibidos a videosPublicados.", "videos sin publicar → envío Wi-Fi → videosPublicados"],
+  ["localsend", "bandeja/localsend.py", "Emisor Wi-Fi Lucie Recibir / LocalSend", "Descubre receptores en la red local (priorizando Lucie Recibir en TCP 53318 y soportando LocalSend en 53317) y transfiere archivos verificando aceptación e integridad.", "GestorPublicacion ↔ Teléfono Android en red local"],
+  ["eliminacion", "bandeja/eliminacion.py", "Eliminación manual confirmada", "Único módulo autorizado a borrar dentro de LucieSinReglas tras selección manual, simulación con token de 5 minutos, palabra ELIMINAR y registro en eliminaciones.jsonl.", "Selección del usuario + ELIMINAR → borrado auditado"],
+  ["icono", "bandeja/icono_windows.py", "Icono de bandeja junto al reloj", "Dibuja el icono propio de Lucie en el área de notificación (Windows Shell_NotifyIconW y Linux GTK3/X11) con acceso directo al panel y salida limpia.", "Sesión de usuario → control en segundo plano"],
+  ["web", "bandeja/web/panel.js + wifi.js", "Interfaz interactiva del dashboard", "Gestiona las pestañas de producción, modales de simulación, reproductores de vista previa, sesiones de edición y flujo de envío Wi-Fi al celular.", "Acciones del usuario ↔ API HTTP local"]
+];
+
+const pasos = [
+  ["1. Iniciás el capítulo y descargás", "Elegís el personaje (Lucie, Roli, Mailen o Luna) y el título del capítulo en el panel. Los videos, fotos o MP3 caen en ~/Descargas mientras el navegador los escribe.", "capitulos.py + navegador externo", "~/Descargas", "El capítulo queda en foco en SQLite; los archivos en escritura aún no se tocan."],
+  ["2. El vigilante detecta estabilidad y clasifica", "VigilanteBandeja espera a que el tamaño del archivo no cambie durante ~5 segundos y que no tenga escritores abiertos. Clasifica por el capítulo en foco o por el alias del nombre.", "vigilante.py + lotes.py + clasificacion.py", "~/Descargas", "El archivo aparece agrupado en la pestaña Lotes Detectados."],
+  ["3. Simulás y movés a la Sala de Espera", "Revisás el plan de nombres compactos (ej. maguidormida1..6.mp4 o lunallegoelviernes1.mp4) y confirmás. Los archivos se mueven atómicamente con os.rename.", "movimientos.py + db.py", "~/Descargas/_lucie/<personaje>/<capítulo fechado>/", "Cambia la ubicación en el host y se escribe bitacora_bandeja.jsonl con soporte de Deshacer."],
+  ["4. Cerrás el capítulo y enviás al Pendrive", "Con el capítulo cerrado y el pendrive conectado, simulás y confirmás el envío. Se copia cada archivo a un .part, se hace fsync y se comprueba su SHA-256.", "pendrive.py + organizacion_mensual.py", "LucieSinReglas/videos sin editar/<personaje>/<mes - año>/<capítulo>/", "Las copias verificadas quedan en el pendrive y se registran en .lucie/manifiesto.jsonl."],
+  ["5. Creás sesión de edición y montás en CapCut", "Seleccionás los clips en la pestaña Edición y creás la sesión. El panel abre la carpeta del pendrive para que arrastres los clips a CapCut y exportes el video final.", "edicion.py + CapCut externo", "Pendrive (crudos) + %LOCALAPPDATA%\\CapCut\\Videos (export)", "Se registra la sesión en_edicion en SQLite con el título legible del capítulo."],
+  ["6. Confirmás «Terminé de editar»", "Los clips crudos pasan a videos ya editados/videoyaeditado_... y VigilanteCapCut detecta el export final (usando permitir_lectura=True aunque la vista previa de CapCut siga abierta) y lo copia con el título del capítulo a videos sin publicar.", "edicion.py + capcut.py + plataforma.py", "videos ya editados/ (crudos) + videos completos/videos sin publicar/<personaje>/<mes - año>/<capítulo>/<título>.mp4", "El video final queda listo automáticamente en la cola de Enviar al celular."],
+  ["7. Enviás por Wi-Fi al celular", "En «Sin publicar · Enviar al celular» marcás el video, buscás tu teléfono con Lucie Recibir o LocalSend, revisás y enviás. Al confirmarse la recepción íntegra, pasa a videosPublicados.", "publicacion.py + localsend.py + wifi.js", "LucieSinReglas/videos completos/videosPublicados/<personaje>/<mes - año>/<capítulo>/", "El video llega al teléfono y queda archivado en videosPublicados con opción de Deshacer."]
+];
+
 let indice = 0;
-const texto = (id, valor) => { document.getElementById(id).textContent = valor; };
+const texto = (id, valor) => { const n = document.getElementById(id); if (n) n.textContent = valor; };
 function mostrarPaso() {
- const p = pasos[indice];
- ['paso-titulo','paso-texto','paso-modulo','paso-ruta','paso-cambio'].forEach((id,i)=>texto(id,p[i]));
- texto('paso-numero',`Paso ${indice+1} de ${pasos.length}`);
- document.getElementById('anterior').disabled = indice === 0;
- document.getElementById('siguiente').disabled = indice === pasos.length-1;
+  const p = pasos[indice];
+  ['paso-titulo','paso-texto','paso-modulo','paso-ruta','paso-cambio'].forEach((id,i)=>texto(id,p[i]));
+  texto('paso-numero',`Paso ${indice+1} de ${pasos.length}`);
+  document.getElementById('anterior').disabled = indice === 0;
+  document.getElementById('siguiente').disabled = indice === pasos.length-1;
 }
 document.getElementById('anterior').addEventListener('click',()=>{ if(indice>0)indice--; mostrarPaso(); });
 document.getElementById('siguiente').addEventListener('click',()=>{ if(indice<pasos.length-1)indice++; mostrarPaso(); });
 mostrarPaso();
+
 document.querySelectorAll('[data-modulo]').forEach(b=>b.addEventListener('click',()=>{
- document.querySelectorAll('[data-modulo]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));
- const m=modulos.find(x=>x[0]===b.dataset.modulo);
- const destino=document.getElementById('modulo-detalle'); destino.replaceChildren();
- for(const [tag,value] of [['h3',m[2]],['p',m[3]],['p',m[4]]]){const el=document.createElement(tag);el.textContent=value;destino.append(el);}
+  document.querySelectorAll('[data-modulo]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));
+  const m=modulos.find(x=>x[0]===b.dataset.modulo);
+  const destino=document.getElementById('modulo-detalle');
+  destino.replaceChildren();
+  for(const [tag,value,cls] of [['h3',m[1]+' · '+m[2],''],['p',m[3],''],['p',m[4],'conexiones']]){
+    const el=document.createElement(tag);
+    if(cls) el.className=cls;
+    el.textContent=value;
+    destino.append(el);
+  }
 }));
+
 const normalizar = valor=>valor.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
 const secciones=Array.from(document.querySelectorAll('.contenido'));
 const datosBusqueda=secciones.map(s=>normalizar(s.textContent));
 const enlaces=Array.from(document.querySelectorAll('.sidebar nav a'));
 document.getElementById('buscar').addEventListener('input',e=>{
- const valor=normalizar(e.target.value.trim()); let cantidad=0;
- secciones.forEach((s,i)=>{s.hidden=!!valor&&!datosBusqueda[i].includes(valor); enlaces[i].hidden=s.hidden;if(!s.hidden)cantidad++;});
- texto('resultado-busqueda',valor?`${cantidad} secciones contienen esa búsqueda.`:'');
+  const valor=normalizar(e.target.value.trim());
+  let cantidad=0;
+  secciones.forEach((s,i)=>{
+    s.hidden=!!valor&&!datosBusqueda[i].includes(valor);
+    if(enlaces[i]) enlaces[i].hidden=s.hidden;
+    if(!s.hidden) cantidad++;
+  });
+  texto('resultado-busqueda',valor?`${cantidad} secciones contienen esa búsqueda.`:'');
 });
+
 if('IntersectionObserver' in window){
- const obs=new IntersectionObserver(entradas=>{for(const entrada of entradas)if(entrada.isIntersecting){enlaces.forEach(a=>{if(a.hash===`#${entrada.target.id}`)a.setAttribute('aria-current','true');else a.removeAttribute('aria-current');});}}, {rootMargin:'-10% 0px -65% 0px'});
- secciones.forEach(s=>obs.observe(s));
+  const obs=new IntersectionObserver(entradas=>{
+    for(const entrada of entradas) if(entrada.isIntersecting){
+      enlaces.forEach(a=>{
+        if(a.hash===`#${entrada.target.id}`) a.setAttribute('aria-current','true');
+        else a.removeAttribute('aria-current');
+      });
+    }
+  }, {rootMargin:'-10% 0px -65% 0px'});
+  secciones.forEach(s=>obs.observe(s));
 }
+
 let abiertos=[];
-window.addEventListener('beforeprint',()=>{abiertos=Array.from(document.querySelectorAll('details[open]'));document.querySelectorAll('details').forEach(d=>d.open=true);});
-window.addEventListener('afterprint',()=>{document.querySelectorAll('details').forEach(d=>d.open=abiertos.includes(d));});
+window.addEventListener('beforeprint',()=>{
+  abiertos=Array.from(document.querySelectorAll('details[open]'));
+  document.querySelectorAll('details').forEach(d=>d.open=true);
+});
+window.addEventListener('afterprint',()=>{
+  document.querySelectorAll('details').forEach(d=>d.open=abiertos.includes(d));
+});
 document.getElementById('imprimir').addEventListener('click',()=>window.print());
-</script></body></html>
+</script>
+</body>
+</html>

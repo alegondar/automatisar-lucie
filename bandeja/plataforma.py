@@ -138,7 +138,7 @@ def obtener_ruta_exportacion_capcut() -> str:
     return os.path.join(base, "CapCut", "Videos")
 
 
-def verificar_archivo_exclusivo(ruta: str) -> bool:
+def verificar_archivo_exclusivo(ruta: str, permitir_lectura: bool = False) -> bool:
     """
     Verifica si un archivo se puede abrir de forma exclusiva o sin bloqueos de escritura activos.
     Retorna True si el archivo está libre y completo, False si está en uso, bloqueado o inaccesible.
@@ -166,7 +166,20 @@ def verificar_archivo_exclusivo(ruta: str) -> bool:
             cerrar_handle.restype = wintypes.BOOL
             # GENERIC_READ, sin comparticion, OPEN_EXISTING: nunca crea ni pisa.
             # Un bloqueo de bytes msvcrt no detecta escritores sin bloqueo explicito.
-            handle = crear_archivo(os.fspath(ruta), 0x80000000, 0, None, 3, 0x80, None)
+            # permitir_lectura=True admite FILE_SHARE_READ (vista previa CapCut), pero rechaza escritores y bloqueos.
+            bloquear = kernel32.LockFile
+            bloquear.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD)
+            bloquear.restype = wintypes.BOOL
+            desbloquear = kernel32.UnlockFile
+            desbloquear.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD)
+            desbloquear.restype = wintypes.BOOL
+            handle = crear_archivo(os.fspath(ruta), 0x80000000, 1 if permitir_lectura else 0, None, 3, 0x80, None)
+            if permitir_lectura and handle != wintypes.HANDLE(-1).value:
+                if bloquear(handle, 0, 0, 1, 0):
+                    desbloquear(handle, 0, 0, 1, 0)
+                else:
+                    cerrar_handle(handle)
+                    handle = wintypes.HANDLE(-1).value
             if handle == wintypes.HANDLE(-1).value:
                 return False
             try:

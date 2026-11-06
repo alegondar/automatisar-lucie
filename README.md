@@ -9,7 +9,20 @@ Plataforma integral desarrollada en Python para la automatización, clasificaci�
 Para entender qué hace cada módulo y cómo se conectan, abrí el
 [manual HTML del funcionamiento interno](docs/manual-interno.html) en el navegador.
 Incluye un recorrido paso a paso, mapa de componentes, glosario y explicación
-de los controles de seguridad. Funciona sin conexión y permite imprimirlo.
+de los controles de seguridad. Funciona sin conexión y permite imprimirlo. También tenés disponible en la raíz del proyecto el **[Manual de Uso y Funcionamiento Interno (`manual_uso_y_funcionamiento.html`)](manual_uso_y_funcionamiento.html)** listo para abrir directamente desde la carpeta del repositorio.
+
+### 🌟 Resumen Ejecutivo: ¿Cómo funciona el proyecto de punta a punta?
+
+1. **Captura y Clasificación Inteligente (`~/Descargas`)**: Un vigilante en segundo plano monitorea `~/Descargas`, espera a que cada video, imagen o audio `.mp3` termine de descargarse (estabilidad de tamaño y apertura sin escritura activa), detecta automáticamente el personaje (**Lucie**, **Roli**, **Mailen** o **Luna**) por alias o por el **Capítulo en Foco** activo en el dashboard, y agrupa las ráfagas en lotes listos para revisar.
+2. **Sala de Espera Local (`~/Descargas/_lucie/`)**: Nada se mueve a ciegas. El usuario revisa la simulación (`dry-run`) con los nombres normalizados (ej. `maguidormida1.mp4` ... `maguidormida6.mp4` dentro de `<capítulo> - <día> - semana <N> - <mes> - <año>`) y confirma el traslado atómico a la sala de espera local, separando `fotos/`, `videos/` y `audios/` con opción de **Deshacer**.
+3. **Bóveda en Pendrive con Estructura Mensual (`LucieSinReglas/`)**: Con el pendrive vinculado (`.lucie_pendrive.json`), el envío copia cada archivo hacia un temporal `.part`, fuerza `fsync`, comprueba el hash **SHA-256** contra el original y publica el archivo final organizado por categoría, personaje y `<mes - año>/<capítulo>/` (`videos sin editar/`, `imagenes/`, `audios/`), registrando cada evento en `.lucie/manifiesto.jsonl`.
+4. **Edición con CapCut y Detección Inmediata del Export Final**:
+   - Al iniciar una sesión en la pestaña **Edición**, el panel agrupa los clips crudos del capítulo y abre automáticamente la carpeta del pendrive en el Explorador para arrastrarlos a CapCut.
+   - Al confirmar **«Terminé de editar»**, los clips crudos pasan a `videos ya editados/<personaje>/<mes - año>/videoyaeditado_<nombre>_semana_<N>_<mes>_<año>/` (si CapCut aún los retiene abiertos en Windows, se copian verificados por SHA-256 y el retiro del original en `videos sin editar` se completa solo en segundo plano cuando CapCut los libera).
+   - Simultáneamente, `VigilanteCapCut` detecta el video final exportado en `%LOCALAPPDATA%\CapCut\Videos` (ej. `1105 (1)(2).mp4`), incluso si el reproductor de vista previa de CapCut lo mantiene abierto en solo lectura (`FILE_SHARE_READ`), le asigna el título legible del capítulo o sesión (ej. `magui dormida.mp4` o `luna llego el viernes.mp4`) y lo copia verificando SHA-256 a `videos completos/videos sin publicar/<personaje>/<mes - año>/<capítulo>/`.
+5. **Cola de Publicación y Envío Wi-Fi al Celular (`Lucie Recibir` / `LocalSend`)**:
+   - La pestaña **Sin publicar · Enviar al celular** muestra exclusivamente los videos y fotos de `videos completos/videos sin publicar/` filtrados por personaje (**Lucie**, **Roli**, **Mailen**, **Luna** y **Sin asignar**).
+   - Permite descubrir el teléfono en la red local (priorizando la app propia **Lucie Recibir** en TCP `53318` o **LocalSend**), simular el envío, transferir con verificación de integridad y, una vez confirmada la recepción en el celular, archivar automáticamente el video en `videos completos/videosPublicados/<personaje>/<mes - año>/<capítulo>/` con soporte de **Deshacer**.
 
 El sistema coordina la captura no invasiva de descargas de inteligencia artificial (Grok, Gemini, Nano Banana, Google Flow), su estructuración por escenas y capítulos, el traslado atómico a la sala de espera y la transferencia segura hacia unidades externas (pendrives compartidos formateados en exFAT) para su posterior montaje y edición en Windows con CapCut.
 
@@ -96,7 +109,13 @@ por suposición y necesitan confirmarse una vez.
 * [`bandeja/plataforma.py`](bandeja/plataforma.py): Abstracción del sistema operativo (Linux / Windows) para detección de unidades, cálculo de espacio libre y normalización de rutas.
 * [`bandeja/servidor.py`](bandeja/servidor.py): Servidor HTTP integrado (API REST, Server-Sent Events para reactividad en vivo, generación de miniaturas y streaming multimedia).
 * [`bandeja/vigilante.py`](bandeja/vigilante.py): Hilo demonio de monitoreo continuo sobre la carpeta de descargas con filtrado de archivos temporales.
-* `bandeja/web/`: Frontend visual sin dependencias externas (HTML, CSS y JS modular) servido directamente por el backend.
+* [`bandeja/edicion.py`](bandeja/edicion.py): Sesiones de edición, traslado de crudos a `videos ya editados`, copia de crudos retenidos por CapCut y copia verificada de exports a `videos completos/videos sin publicar`.
+* [`bandeja/capcut.py`](bandeja/capcut.py): Vigilante de la carpeta de exportación de CapCut (`VigilanteCapCut`), sondeos de estabilidad, verificación `permitir_lectura=True` y recuperación dentro de la ventana de sesión.
+* [`bandeja/publicacion.py`](bandeja/publicacion.py) y [`bandeja/localsend.py`](bandeja/localsend.py): Cola de `videos sin publicar`, emisor Wi-Fi hacia **Lucie Recibir** (TCP `53318`) o **LocalSend** y traslado confirmado a `videosPublicados/<personaje>/`.
+* [`bandeja/organizacion_mensual.py`](bandeja/organizacion_mensual.py) y [`bandeja/organizacion_publicacion.py`](bandeja/organizacion_publicacion.py): Agrupación mensual `<mes - año>` con registro de prefijos y organización histórica con simulación y reversión.
+* [`bandeja/eliminacion.py`](bandeja/eliminacion.py) y [`bandeja/carpetas_vacias.py`](bandeja/carpetas_vacias.py): Eliminación manual explícita con token de un solo uso y retiro acotado de directorios padres vacíos tras envíos o traslados.
+* [`bandeja/icono_windows.py`](bandeja/icono_windows.py) y [`bandeja/icono_linux.py`](bandeja/icono_linux.py): Icono de bandeja del sistema (Windows `Shell_NotifyIconW` y Linux GTK3/X11) para inicio de sesión en segundo plano.
+* `bandeja/web/`: Frontend visual sin dependencias externas (`panel.html`, `panel.css`, `panel.js` y `wifi.js`) servido directamente por el backend.
 
 ### Herramientas Operativas y de Seguridad
 
@@ -298,6 +317,12 @@ Si una sesión antigua tiene el título pegado, se recuperan sus espacios solo
 cuando el capítulo o un clip conserva el mismo título legible; sin esa evidencia
 no se inventa una separación de palabras. No se renombran salidas existentes,
 no se altera el export original de CapCut ni se cambian las rutas de Deshacer.
+Cuando un capítulo tiene un único clip cuyo archivo fue compactado con número al final
+(ej. `lunallegoelviernes1.mp4` dentro de `luna llego el viernes - viernes - semana 1 - noviembre - 2026`),
+se recupera automáticamente el título legible con espacios del capítulo (`luna llego el viernes.mp4`).
+En Windows, la verificación de exports de CapCut usa `permitir_lectura=True` (`FILE_SHARE_READ` +
+`LockFile` de byte 0) para detectar y copiar el export de inmediato aunque el reproductor
+de vista previa de CapCut lo mantenga abierto en solo lectura, rechazando cualquier escritor activo.
 
 ### Audio MP3
 

@@ -527,6 +527,8 @@ class TestEdicionCapCut(unittest.TestCase):
         self.assertEqual(nombre_video_sesion(sesion), "caballeroloestamosllamando")
         sesion["nombre"] = "Mi título elegido"
         self.assertEqual(nombre_video_sesion(sesion), "Mi título elegido")
+        self.assertEqual(calcular_nombre_defecto(["lunallegoelviernes1.mp4"], "luna llego el viernes - viernes - semana 1 - noviembre - 2026"), "luna llego el viernes.mp4")
+        self.assertEqual(nombre_video_sesion({"nombre": "lunallegoelviernes1", "capitulo": "luna llego el viernes - viernes - semana 1 - noviembre - 2026"}), "luna llego el viernes")
 
     def test_sugerencias_y_copia_conservan_titulo_sin_repetir_fecha(self):
         titulo = "Caballero lo estamos llamando"

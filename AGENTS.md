@@ -72,6 +72,27 @@ de exports; los bloqueos de Windows se respetan y quedan visibles en el panel.
 Si un único clip numérico pertenece a un capítulo con título conocido, sugerir
 ese título para la nueva sesión; conservar el nombre del clip original.
 
+Exclusividad de exports de CapCut y capítulos de un único clip (2026-11-06):
+IMPORTANTE para cualquier agente antes de tocar `bandeja/plataforma.py`,
+`bandeja/capcut.py` o `bandeja/edicion.py`: en Windows, cuando CapCut termina
+de exportar un `.mp4`/`.mov`, cierra su manejador de escritura pero mantiene
+abierto un manejador de solo lectura (`GENERIC_READ`, `FILE_SHARE_READ`) en su
+reproductor interno de vista previa hasta que el usuario exporta otro video.
+Por eso `verificar_archivo_exclusivo(ruta, permitir_lectura=False)` DEBE conservar
+`permitir_lectura=False` (`dwShareMode=0`) por defecto para traslados/renombrados
+físicos (`os.rename` de crudos en edición y `organizacion_mensual.py`), pero
+DEBE llamarse con `permitir_lectura=True` (`dwShareMode=1` `FILE_SHARE_READ` +
+`LockFile`/`UnlockFile` del byte 0) al detectar, simular y copiar exports de
+CapCut (`bandeja/capcut.py` y `bandeja/edicion.py`). NUNCA volver a usar
+`dwShareMode=0` sobre los exports de CapCut, o los videos exportados no se
+copiarán a `videos completos/videos sin publicar` (ni aparecerán en «Enviar al
+celular») al confirmar «Terminé de editar». Además, cuando un capítulo tiene un
+único clip cuyo nombre compactado termina en número de secuencia (ej.
+`lunallegoelviernes1.mp4` dentro de `luna llego el viernes - viernes - semana 1 - noviembre - 2026`),
+`calcular_nombre_defecto` y `nombre_video_sesion` recuperan el título legible
+con espacios del capítulo (`luna llego el viernes.mp4`). Conservar ambos
+comportamientos y sus pruebas en `test_terminar_export.py` y `test_edicion.py`.
+
 Retiro de crudos retenidos (2026-10-19): Terminé de editar registra el retiro
 pendiente cuando Windows obliga a copiar un clip en uso. Tras liberarse, verificar
 origen/copia por SHA-256, resguardar el original redundante en `_enviados/edicion`

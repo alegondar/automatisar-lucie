@@ -187,7 +187,7 @@ class VigilanteCapCut:
                         continue
 
                     # 6. Apertura exclusiva (verificar que CapCut no esté escribiendo)
-                    if not verificar_archivo_exclusivo(ruta_arch):
+                    if not verificar_archivo_exclusivo(ruta_arch, permitir_lectura=True):
                         logger.debug(f"[CapCut] Archivo '{arch}' estabilizado pero ocupado/bloqueado.")
                         continue
 

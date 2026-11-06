@@ -88,7 +88,7 @@ def nombre_video_sesion(sesion: Dict[str, Any]) -> str:
     candidatos = [sesion.get("capitulo") or ""]
     candidatos.extend(os.path.basename(c) for c in sesion.get("clips", []))
     titulos = {nombre_video_legible(candidato) for candidato in candidatos if candidato}
-    equivalentes = {titulo for titulo in titulos if " " in titulo and re.sub(r"[\W_]+", "", titulo).casefold() == clave}
+    equivalentes = {titulo for titulo in titulos if " " in titulo and re.sub(r"[\W_]+", "", titulo).casefold() in (clave, re.sub(r"\d+$", "", clave))}
     return equivalentes.pop() if len(equivalentes) == 1 else base
 
 
@@ -271,7 +271,7 @@ def calcular_nombre_defecto(clips: List[str], capitulo: str) -> str:
     origen = os.path.basename(clips[0]) if len(clips) == 1 else (capitulo or "capitulo")
     if capitulo and es_titulo_numerico(nombre_video_legible(origen)):
         origen = capitulo
-    return f"{nombre_video_legible(origen)}.mp4"
+    return f"{nombre_video_sesion({'nombre': origen, 'capitulo': capitulo, 'clips': clips})}.mp4"
 
 
 def registrar_evento_manifiesto_edicion(
@@ -886,7 +886,7 @@ def copiar_export_a_videos_completos(
     """
     if not os.path.isfile(ruta_origen):
         raise FileNotFoundError(f"El archivo exportado no existe: '{ruta_origen}'")
-    if not verificar_archivo_exclusivo(ruta_origen):
+    if not verificar_archivo_exclusivo(ruta_origen, permitir_lectura=True):
         raise OSError("El export sigue en uso. Espera a que CapCut termine de escribirlo.")
 
     pendrive_raiz = os.path.join(pendrive_montaje, carpeta_raiz)
@@ -1373,7 +1373,7 @@ def simular_resguardo_export(exp, pendrive_montaje, carpeta_raiz, titulo=None, p
         raise ValueError("No se admiten enlaces en el export.")
     if exp["tamano"] <= 0:
         raise ValueError("El export está vacío; todavía no se resguarda.")
-    if not verificar_archivo_exclusivo(exp["ruta_origen"]):
+    if not verificar_archivo_exclusivo(exp["ruta_origen"], permitir_lectura=True):
         raise OSError("El export sigue en escritura o está ocupado. Se reintentará.")
     raiz = os.path.join(pendrive_montaje, carpeta_raiz)
     nombre = os.path.basename(exp["ruta_origen"])
@@ -1430,7 +1430,7 @@ def _resguardar_export_sin_sesion(exp, pendrive_montaje, db, carpeta_raiz, ruta_
             or not _sin_enlaces(destino) or not esta_confinado_en_raiz(destino, os.path.join(raiz, "videos completos", "videos sin publicar"))
             or not _sin_enlaces(os.path.join(raiz, ".lucie", NOMBRE_MANIFIESTO_PENDRIVE))
             or (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns) != tuple(plan["firma"])
-            or not verificar_archivo_exclusivo(exp["ruta_origen"]) or calcular_sha256(exp["ruta_origen"]) != sha):
+            or not verificar_archivo_exclusivo(exp["ruta_origen"], permitir_lectura=True) or calcular_sha256(exp["ruta_origen"]) != sha):
         raise ValueError("El export o sus rutas cambiaron desde la revisión. Revisá nuevamente.")
     if os.path.exists(destino):
         if not os.path.isfile(destino) or calcular_sha256(destino) != sha:
