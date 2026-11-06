@@ -344,6 +344,16 @@ def activar_guardia():
 
         bandeja.movimientos.GestorMovimientosBandeja.__init__ = _hermetic_mov_init
 
+        _orig_leer_omisiones = bandeja.pendrive.leer_omisiones_envio
+
+        def _leer_omisiones_hermetico(ruta_bitacora, pendrive_id):
+            if ruta_bitacora == "bitacora_bandeja.jsonl":
+                ruta_bitacora = os.path.join(_TMP_HOME_DIR, "bitacora_bandeja.jsonl")
+            return _orig_leer_omisiones(ruta_bitacora, pendrive_id)
+
+        bandeja.pendrive.leer_omisiones_envio = _leer_omisiones_hermetico
+        bandeja.servidor.leer_omisiones_envio = _leer_omisiones_hermetico
+
         _orig_mini_init = bandeja.servidor.GeneradorMiniaturas.__init__
 
         def _hermetic_mini_init(self, db, ruta_cache_miniaturas=".cache/miniaturas_bandeja", *args, **kwargs):

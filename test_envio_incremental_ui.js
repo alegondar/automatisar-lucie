@@ -117,6 +117,17 @@ async function probar() {
   await ctx.abrirModalPlanEnvio(['lucie/proyecto', 'luna/otro proyecto']);
   assert.equal(boton.disabled, false, 'Revisar nuevamente habilita solo un plan sin abiertos');
 
+  plan = {...plan, puede_enviar: false, puede_confirmar_omisiones: true, total_archivos_a_enviar: 0,
+    archivos_omitidos: [{id_archivo: 'id-foto', nombre: 'foto.jpg', estado: 'omitido_usuario', aviso: 'No se agrega'}]};
+  await ctx.abrirModalPlanEnvio('lucie/proyecto');
+  assert.equal(boton.disabled, false, 'Permitir confirmar decisiones aunque no queden copias');
+  assert.equal(boton.innerText, 'Confirmar No agregar');
+  plan = {...plan, puede_confirmar_omisiones: false,
+    archivos_omitidos: [{id_archivo: 'id-foto', nombre: 'foto.jpg', estado: 'omitido_confirmado', aviso: 'No agregar confirmado'}]};
+  await ctx.abrirModalPlanEnvio('lucie/proyecto');
+  assert.equal(boton.disabled, true);
+  assert.ok(contenido.botones.some(b => b.dataset.envioAccion === 'renombrar'), 'La omisión confirmada se puede reconsiderar');
+
   // Una simulación tardía nunca reemplaza la elección más reciente.
   const pendientes = [];
   ctx.apiFetch = () => new Promise(resolve => pendientes.push(resolve));
@@ -138,6 +149,7 @@ async function probarSeleccionVacias() {
     return nodos.get(id);
   };
   let carpetas = [];
+  let historial = [];
   let conectado = true;
   const planes = [], errores = [], consultas = [];
   const contexto = vm.createContext({
@@ -152,11 +164,12 @@ async function probarSeleccionVacias() {
       },
     },
     escapeHTML: s => String(s ?? ''),
+    formatearBytes: n => String(n),
     apiFetch: async ruta => {
       consultas.push(ruta);
       if (ruta === '/api/pendrive/carpetas') return {carpetas};
       if (ruta === '/api/pendrive/estado') return {conectado};
-      if (ruta === '/api/historial') return {historial: []};
+      if (ruta === '/api/historial') return {historial};
       throw Error('Consulta inesperada: ' + ruta);
     },
     mostrarError: mensaje => errores.push(mensaje),
@@ -199,7 +212,27 @@ async function probarSeleccionVacias() {
   assert.equal(nodo('btn-enviar-seleccionadas-pendrive').disabled, true);
   contexto.enviarCarpetasSeleccionadasPendrive();
   assert.equal(planes.length, 1);
+  // Un proyecto sin pendientes desaparece de la tabla; se revisa en historial.
+  carpetas = [{...conArchivos, pendientes_conteo: 0, omitidos_conteo: 1, enviados_conteo: 0}];
+  historial = [{evento: 'envio_pendrive', estado: 'No agregar confirmado', id_operacion: 'decision',
+    total_archivos: 0, archivos_no_agregar: [{personaje: 'lucie', capitulo: 'otro'}]}];
+  await contexto.cargarVistaPendrive();
+  contexto.seleccionarTodasCarpetasPendrive();
+  assert.equal(contexto.window.carpetasPendriveSeleccionadas.size, 0);
+  assert.equal(nodo('btn-enviar-seleccionadas-pendrive').disabled, true);
+  assert.match(nodo('contenedor-capitulos-pendrive').innerHTML, /No hay proyectos pendientes/);
+  assert.doesNotMatch(nodo('contenedor-capitulos-pendrive').innerHTML, /lucie\/otro|data-carpeta-key|Enviar esta carpeta/);
+  assert.match(nodo('contenedor-historial-pendrive').innerHTML, /Revisar No agregar/);
+  assert.match(nodo('contenedor-historial-pendrive').innerHTML, /abrirModalPlanEnvio\(\["lucie\/otro"\]\)/);
+  assert.doesNotMatch(nodo('contenedor-capitulos-pendrive').innerHTML, /background:#10b981/);
+  // Si aparece una nueva versión o se deshace, vuelve a mostrarse y seleccionarse.
+  carpetas = [{...conArchivos, pendientes_conteo: 1}];
+  await contexto.cargarVistaPendrive();
+  contexto.seleccionarTodasCarpetasPendrive();
+  assert.match(nodo('contenedor-capitulos-pendrive').innerHTML, /Enviar esta carpeta/);
+  assert.equal(contexto.window.carpetasPendriveSeleccionadas.size, 1);
   conectado = false;
+  carpetas = [vacia];
   await contexto.cargarVistaPendrive();
   assert.match(nodo('contenedor-capitulos-pendrive').innerHTML, /Carpeta vacía/);
   assert.equal(nodo('btn-enviar-seleccionadas-pendrive').disabled, true);

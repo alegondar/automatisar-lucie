@@ -890,6 +890,124 @@ class TestEjecucionEnvioPendrive(unittest.TestCase):
         for relativa, contenido in anteriores.items():
             self.assertEqual((raiz / relativa).read_bytes(), contenido)
 
+    def test_no_agregar_confirmado_no_vuelve_a_pendientes_y_deshacer_lo_restaura(self):
+        from bandeja.pendrive import leer_omisiones_envio, escanear_sala_espera_carpetas
+        ejecutar_envio_pendrive(None, self.config, self.db, self.movimientos)
+        Path(self.videos_dir).mkdir(parents=True)
+        Path(self.fotos_dir).mkdir()
+        Path(self.vid_path).write_bytes(b'otra version del video')
+        Path(self.fot_path).write_bytes(b'otra version de la foto')
+        nuevo = Path(self.fotos_dir) / 'nueva.jpg'
+        nuevo.write_bytes(b'foto nueva')
+        def revisar(**kwargs):
+            return simular_envio_capitulos(['lucie/capitulo1'], self.config, self.db,
+                                           ruta_bitacora=self.bitacora_path, **kwargs)
+        inicial = revisar()
+        decisiones = {a['id_archivo']: 'omitir' for a in inicial['archivos_conflictos']}
+        plan = revisar(resoluciones_colisiones=decisiones)
+        pen_id = plan['pendrive_id']
+        self.assertEqual(leer_omisiones_envio(self.bitacora_path, pen_id), set(), 'Simular no confirma decisiones')
+        resultado = ejecutar_envio_pendrive(plan, self.config, self.db, self.movimientos)
+        self.assertEqual(resultado['total_archivos_enviados'], 1)
+        self.assertEqual(resultado['total_no_agregar'], 2)
+        omitidos = leer_omisiones_envio(self.bitacora_path, pen_id)
+        self.assertEqual(len(omitidos), 2)
+        self.assertEqual(leer_omisiones_envio(self.bitacora_path, 'otro-pendrive'), set())
+        carpetas = escanear_sala_espera_carpetas(self.destino_base, db=self.db, omisiones_confirmadas=omitidos)
+        self.assertEqual(carpetas[0]['omitidos_conteo'], 2)
+        self.assertEqual(carpetas[0]['pendientes_conteo'], 0)
+        self.assertEqual(carpetas[0]['enviados_conteo'], 0, 'No agregar no equivale a enviar')
+        repetido = revisar()
+        self.assertFalse(repetido['puede_enviar'])
+        self.assertTrue(all(a['estado'] == 'omitido_confirmado' for a in repetido['archivos_omitidos']))
+        foto_id = next(a['id_archivo'] for a in repetido['archivos_omitidos'] if a['nombre'].endswith('.jpg'))
+        reconsiderado = revisar(resoluciones_colisiones={foto_id: 'renombrar'})
+        self.assertTrue(reconsiderado['puede_enviar'])
+        self.assertEqual(reconsiderado['total_archivos_a_enviar'], 1)
+        # Cambiar contenido invalida solo esa omisión, aunque conserve tamaño/mtime.
+        anterior = os.stat(self.vid_path)
+        Path(self.vid_path).write_bytes(b'X' * anterior.st_size)
+        os.utime(self.vid_path, (anterior.st_atime, anterior.st_mtime))
+        carpetas = escanear_sala_espera_carpetas(self.destino_base, omisiones_confirmadas=omitidos)
+        self.assertEqual(carpetas[0]['pendientes_conteo'], 1)
+        deshacer_envio_pendrive(resultado['id_envio'], config=self.config, db=self.db, ruta_bitacora=self.bitacora_path)
+        self.assertEqual(leer_omisiones_envio(self.bitacora_path, pen_id), set())
+        self.assertTrue(nuevo.is_file())
+        self.assertEqual(Path(self.vid_path).read_bytes(), b'X' * anterior.st_size)
+
+    def test_confirmar_solo_no_agregar_no_toca_pendrive_y_permite_deshacer(self):
+        from bandeja.pendrive import leer_omisiones_envio
+        video, foto = Path(self.vid_path).read_bytes(), Path(self.fot_path).read_bytes()
+        ejecutar_envio_pendrive(None, self.config, self.db, self.movimientos)
+        Path(self.videos_dir).mkdir(parents=True)
+        Path(self.fotos_dir).mkdir()
+        Path(self.vid_path).write_bytes(video)
+        Path(self.fot_path).write_bytes(foto)
+        sim = simular_envio_capitulos(['lucie/capitulo1'], self.config, self.db)
+        decisiones = {a['id_archivo']: 'omitir' for a in sim['archivos_omitidos']}
+        plan = simular_envio_capitulos(['lucie/capitulo1'], self.config, self.db, resoluciones_colisiones=decisiones)
+        self.assertFalse(plan['puede_enviar'])
+        self.assertTrue(plan['puede_confirmar_omisiones'])
+        manifiesto = Path(self.pendrive_dir) / 'LucieSinReglas' / '.lucie' / 'manifiesto.jsonl'
+        previo = manifiesto.read_bytes()
+        resultado = ejecutar_envio_pendrive(plan, self.config, self.db, self.movimientos)
+        self.assertEqual(resultado['total_archivos_enviados'], 0)
+        self.assertEqual(resultado['total_no_agregar'], 2)
+        self.assertEqual(resultado['carpetas_vacias_eliminadas'], [])
+        self.assertEqual(manifiesto.read_bytes(), previo)
+        self.assertEqual(Path(self.vid_path).read_bytes(), video)
+        from bandeja.pendrive import escanear_sala_espera_carpetas
+        manifiesto_set = {(e['sha256'], e['ruta_relativa'].lower())
+                          for e in leer_manifiesto_pendrive(self.pendrive_dir, 'LucieSinReglas')}
+        listado = escanear_sala_espera_carpetas(self.destino_base, db=self.db, envios_manifiesto=manifiesto_set,
+            omisiones_confirmadas=leer_omisiones_envio(self.bitacora_path, plan['pendrive_id']))
+        self.assertEqual(listado[0]['omitidos_conteo'], 2)
+        self.assertEqual(listado[0]['enviados_conteo'], 0, 'No contar dos veces copias idénticas excluidas')
+        self.assertEqual(len(leer_omisiones_envio(self.bitacora_path, plan['pendrive_id'])), 2)
+        estado = obtener_estado_pendrive(self.config, self.db, ruta_bitacora=self.bitacora_path)
+        self.assertEqual(estado['archivos_pendientes_conteo'], 0)
+        self.assertIsNone(estado['banner_reactivo'])
+        historial = self.movimientos.obtener_historial()
+        decision = next(e for e in historial if e['id_operacion'] == resultado['id_envio'])
+        self.assertEqual(decision['evento'], 'envio_pendrive')
+        self.assertEqual(decision['estado'], 'No agregar confirmado')
+        self.assertEqual(decision['total_archivos'], 0)
+        self.assertEqual(len(decision['archivos_no_agregar']), 2)
+        deshacer_envio_pendrive(resultado['id_envio'], config=self.config, db=self.db, ruta_bitacora=self.bitacora_path)
+        self.assertEqual(leer_omisiones_envio(self.bitacora_path, plan['pendrive_id']), set())
+        self.assertEqual(manifiesto.read_bytes(), previo)
+
+    def test_no_agregar_rechaza_version_cambiada_sin_guardar_decisiones(self):
+        from bandeja.pendrive import leer_omisiones_envio
+        ejecutar_envio_pendrive(None, self.config, self.db, self.movimientos)
+        Path(self.videos_dir).mkdir(parents=True)
+        Path(self.fotos_dir).mkdir()
+        Path(self.vid_path).write_bytes(b'video para excluir')
+        Path(self.fot_path).write_bytes(b'foto para excluir')
+        sim = simular_envio_capitulos(['lucie/capitulo1'], self.config, self.db)
+        decisiones = {a['id_archivo']: 'omitir' for a in sim['archivos_conflictos']}
+        plan = simular_envio_capitulos(['lucie/capitulo1'], self.config, self.db, resoluciones_colisiones=decisiones)
+        Path(self.vid_path).write_bytes(b'contenido cambiado despues de revisar')
+        with self.assertRaisesRegex(ValueError, 'cambió'):
+            ejecutar_envio_pendrive(plan, self.config, self.db, self.movimientos)
+        self.assertEqual(leer_omisiones_envio(self.bitacora_path, plan['pendrive_id']), set())
+
+    def test_envio_fallido_no_confirma_no_agregar(self):
+        from bandeja.pendrive import leer_omisiones_envio
+        ejecutar_envio_pendrive(None, self.config, self.db, self.movimientos)
+        Path(self.fotos_dir).mkdir(parents=True)
+        Path(self.fot_path).write_bytes(b'foto diferente que no se agrega')
+        (Path(self.fotos_dir) / 'nueva.jpg').write_bytes(b'foto nueva para transferir')
+        sim = simular_envio_capitulos(['lucie/capitulo1'], self.config, self.db)
+        decisiones = {a['id_archivo']: 'omitir' for a in sim['archivos_conflictos']}
+        plan = simular_envio_capitulos(['lucie/capitulo1'], self.config, self.db, resoluciones_colisiones=decisiones)
+        self.assertTrue(plan['puede_enviar'])
+        with patch('bandeja.pendrive.os.rename', side_effect=OSError('Fallo de traslado')):
+            with self.assertRaises(OSError):
+                ejecutar_envio_pendrive(plan, self.config, self.db, self.movimientos)
+        self.assertEqual(leer_omisiones_envio(self.bitacora_path, plan['pendrive_id']), set())
+        self.assertEqual(Path(self.fot_path).read_bytes(), b'foto diferente que no se agrega')
+
     def test_copia_identica_permite_elegir_renombrar_o_no_agregar(self):
         video = Path(self.vid_path).read_bytes()
         foto = Path(self.fot_path).read_bytes()

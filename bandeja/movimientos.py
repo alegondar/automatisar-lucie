@@ -770,7 +770,7 @@ class GestorMovimientosBandeja:
                     continue
 
                 if e.get("evento") == "envio_pendrive":
-                    estado = "deshecho" if id_op in revertidas else "enviado"
+                    estado = "deshecho" if id_op in revertidas else ("enviado" if e.get("archivos") else "No agregar confirmado")
                     total_arch = e.get("total_archivos", 0)
                     caps_txt = ", ".join(e.get("capitulos", []))
                     movimientos_resultado.append({
@@ -785,6 +785,11 @@ class GestorMovimientosBandeja:
                         "hash": "",
                         "estado": estado,
                         "tipo_evento": "envio_pendrive",
+                        "evento": "envio_pendrive",
+                        "total_archivos": total_arch,
+                        "total_bytes": e.get("bytes_totales", 0),
+                        "capitulo": caps_txt,
+                        "archivos_no_agregar": e.get("archivos_no_agregar", []),
                         "archivos": e.get("archivos", [])
                     })
                     if len(movimientos_resultado) >= limite:

@@ -49,6 +49,7 @@ from bandeja.pendrive import (
     escanear_sala_espera_carpetas,
     detectar_pendrive,
     leer_manifiesto_pendrive,
+    leer_omisiones_envio,
     montar_unidad_pendrive,
     desmontar_unidad_pendrive,
 )
@@ -352,7 +353,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
     def _handle_pendrive_estado(self, solo_cabeceras: bool = False):
         try:
-            res = obtener_estado_pendrive(self.config, self.db, timeout_segundos=3.0)
+            res = obtener_estado_pendrive(self.config, self.db, timeout_segundos=3.0,
+                                         ruta_bitacora=self.movimientos.ruta_bitacora)
             self._enviar_json(res, solo_cabeceras=solo_cabeceras)
         except Exception as e:
             self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al consultar estado de pendrive: {e}", solo_cabeceras=solo_cabeceras)
@@ -360,6 +362,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
     def _handle_pendrive_carpetas(self, solo_cabeceras: bool = False):
         try:
             envios_manifiesto = set()
+            info_pen = None
             try:
                 info_pen = detectar_pendrive(self.config)
                 if info_pen and info_pen.get("conectado"):
@@ -378,7 +381,9 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
                 self.config.ruta_destino_base,
                 db=self.db,
                 envios_manifiesto=envios_manifiesto,
-                vigilante=self.vigilante
+                vigilante=self.vigilante,
+                omisiones_confirmadas=leer_omisiones_envio(
+                    self.movimientos.ruta_bitacora, (info_pen or {}).get("id"))
             )
             self._enviar_json({"carpetas": carpetas, "total_carpetas": len(carpetas)}, solo_cabeceras=solo_cabeceras)
         except Exception as e:
@@ -817,6 +822,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             seleccion = None
         try:
             res = simular_envio_capitulos(seleccion, self.config, self.db, carpetas=carpetas,
+                                          ruta_bitacora=self.movimientos.ruta_bitacora,
                                           resoluciones_colisiones=body.get("resoluciones_colisiones"))
             self._enviar_json(res)
         except Exception as e:

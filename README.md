@@ -69,6 +69,16 @@ plan actualizado. Si quedaron archivos en Descargas que no pertenecen al proyect
 «Terminar sin mover» los conserva allí; «Mover pendientes y terminar» revisa
 un traslado a la sala de espera del equipo, separado del envío al pendrive.
 
+Al confirmar un envío, se recuerda «No agregar» por archivo, contenido SHA-256 y
+pendrive. Esos archivos permanecen en la sala de espera y se muestran separados
+de los enviados, sin contarse como pendientes. Si solo quedan omisiones, elegí
+«Confirmar No agregar» para guardarlas sin transferir archivos. Con cero pendientes
+el proyecto desaparece de la tabla y queda «Revisar No agregar» en el historial
+para reconsiderar cada archivo.
+Deshacer revierte también las decisiones de ese plan; un archivo cuyo contenido
+cambia vuelve a pendiente. Las elecciones de versiones anteriores no se recuperan
+por suposición y necesitan confirmarse una vez.
+
 ---
 
 ## 📦 Estructura del Proyecto

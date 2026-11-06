@@ -1,5 +1,61 @@
 # Estado actual del sistema — 2026-11-06
 
+## No agregar confirmado en envíos al pendrive (2026-11-06)
+
+Se corrigió la pérdida de las elecciones No agregar después de transferir los
+archivos nuevos. El evento envio_pendrive de la bitácora local guarda ahora las
+omisiones explícitas solo después del envío exitoso, con ruta original, SHA-256
+y pendrive ID. Listar/simular no registra decisiones. Un plan sin copias puede
+confirmar exclusivamente No agregar si no hay conflictos, bloqueos ni capítulos
+abiertos. Revalida versión/confinamiento e identidad antes de guardar, sin tocar
+el material ni el manifiesto del pendrive. En planes mixtos se mantienen copia,
+integridad y respaldos vigentes; un fallo no confirma omisiones.
+
+El listado separa enviados, No agregar y pendientes; verifica el contenido actual
+antes de reconocer una decisión. Cambiar contenido o pendrive deja de aplicarla.
+La selección individual/global se limita a carpetas con pendientes; con cero
+pendientes el proyecto desaparece de la tabla. Revisar No agregar queda en el
+historial, donde puede elegirse Renombrar y agregar y revisar el nuevo destino. El aviso
+superior también excluye omisiones confirmadas. No agregar no se marca enviado,
+no copia, no renombra y no elimina archivos de la sala de espera.
+
+El historial expone los campos del envío que faltaban en la API normalizada,
+incluidas las omisiones y el total cero. Deshacer un plan mixto restaura archivos
+y anula sus omisiones; Deshacer No agregar solo registra la reversión local y
+vuelve a dejar pendientes, sin requerir traslado de archivos. Las elecciones
+anteriores a este ajuste no se adivinan ni se confirman retroactivamente.
+
+La guardia hermética también redirige el nuevo lector de la bitácora por defecto
+al temporal de pruebas, conservando interceptores y aserciones. Regresiones
+cubren envío mixto, solo decisiones, cambio de contenido con tamaño/mtime iguales,
+pendrive distinto, reconsideración, fallo, Deshacer, contadores/aviso/historial.
+Chromium con perfil temporal y API sintética recorre cuatro No agregar y su
+confirmación, verifica cero pendientes, envío y selección deshabilitados y
+revisión disponible en escritorio/móvil; capturas y scripts fuera de Git.
+
+Validación Kali/Linux, Python 3.14: **525 pruebas OK, 12 omisiones**, **66.103 s**.
+Tras afinar la exclusividad de conteos (una copia idéntica excluida no se cuenta
+otra vez como enviada), **61 específicas de pendrive OK**, **6.820 s** y Chromium
+temporal repetido OK. Cinco regresiones UI, sintaxis JS, AST **0/36**, auditoría
+repo/historial **0/260** y diff correctos. Guardia y aserciones conservadas.
+Pendrive real solo contado durante pruebas: **1082 / 1082**, estable. Pruebas de
+material únicamente en temporales; sin iniciar vigilantes reales como fixtures.
+Suite externa `/tmp/lucie-omisiones-suite-final.log`; comprobación específica en
+`/tmp/lucie-omisiones-conteo-final.log`. Windows nativo no ejecutado.
+Bandeja real detenida normalmente con SIGINT antes de probar y reabierta para
+uso normal al finalizar. Recargar Ctrl+F5. El usuario autorizó commit y push
+del lote completo, incluido ocultar proyectos sin pendientes, en feat/lucie-recibir.
+
+Ajuste posterior solicitado por el usuario: ocultar la fila completa de proyectos
+sin pendientes, conservando los archivos y la decisión. Revisar No agregar pasa
+al historial y queda disponible junto a Deshacer. Una nueva versión pendiente
+hace reaparecer el proyecto. Cinco regresiones UI, sintaxis JS, diff y auditoría
+repo/historial correctos; Chromium sintético escritorio/móvil repetido confirma
+que desaparecen la fila, la casilla y el botón, y que la revisión sigue en historial.
+Este ajuste solo modifica renderizado JS; no se repitió la suite Python completa
+ni se reinició la bandeja. No se operó sobre material ni se cambió la bitácora real.
+
+
 ## Exports numéricos con espacios y sufijos de copia (2026-11-06)
 
 Diagnóstico de solo lectura solicitado por una captura de Sin publicar/sin asignar:

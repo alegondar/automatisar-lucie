@@ -361,10 +361,44 @@ def _es_extension_multimedia(ext: str) -> bool:
     return _es_extension_video(ext) or _es_extension_foto(ext) or ext.lower() == ".mp3"
 
 
+def leer_omisiones_envio(ruta_bitacora, pendrive_id):
+    """Decisiones confirmadas para este pendrive; Deshacer las deja sin efecto."""
+    if not pendrive_id:
+        return set()
+    operaciones, revertidas = [], set()
+    try:
+        with open(ruta_bitacora, encoding="utf-8") as registro:
+            for linea in registro:
+                try:
+                    evento = json.loads(linea)
+                except ValueError:
+                    continue
+                if not isinstance(evento, dict):
+                    continue
+                if evento.get("evento") == "deshacer":
+                    revertidas.add(evento.get("id_operacion_revertida"))
+                elif evento.get("evento") == "envio_pendrive" and evento.get("pendrive_id") == pendrive_id:
+                    operaciones.append(evento)
+    except FileNotFoundError:
+        return set()
+    omisiones = set()
+    for evento in operaciones:
+        if evento.get("id_operacion") in revertidas:
+            continue
+        for archivo in evento.get("archivos_no_agregar", []):
+            omisiones.add((os.path.normcase(os.path.realpath(archivo["ruta_origen"])), archivo["sha256"].lower()))
+        for archivo in evento.get("archivos", []):
+            origen = archivo.get("ruta_origen_espera")
+            if origen:
+                omisiones.discard((os.path.normcase(os.path.realpath(origen)), archivo["sha256"].lower()))
+    return omisiones
+
+
 def escanear_sala_espera_carpetas(ruta_destino_base: str,
                                    db: Optional[GestorBaseDatosBandeja] = None,
                                    envios_manifiesto: Optional[Set[Tuple[str, str]]] = None,
-                                   vigilante: Optional[Any] = None) -> List[Dict[str, Any]]:
+                                   vigilante: Optional[Any] = None,
+                                   omisiones_confirmadas=None) -> List[Dict[str, Any]]:
     """
     Escanea recursivamente la sala de espera ~/Descargas/_lucie/<personaje>/<carpeta>/
     omitiendo carpetas del sistema (_enviados, _revertidos, _descartados, _a_revisar).
@@ -426,6 +460,7 @@ def escanear_sala_espera_carpetas(ruta_destino_base: str,
             bytes_totales = 0
             mtime_max = 0.0
             cant_enviados = 0
+            cant_omitidos = 0
             archivos_lista = []
             tiene_subcarpetas_no_estandar = False
 
@@ -491,7 +526,14 @@ def escanear_sala_espera_carpetas(ruta_destino_base: str,
                         destino_relativo = normalizar_ruta_relativa_posix(os.path.join(categoria, pers, cap, f)) if categoria else ""
                         mensual = normalizar_ruta_relativa_posix(os.path.join(categoria, pers, mes_del_nombre(cap) or nombre_mes(), cap, f)) if categoria else ""
                         ya_env = any((h_archivo.lower(), r.lower()) in envios_man_set for r in (destino_relativo, mensual))
-                    if ya_env:
+                    no_agregar = False
+                    clave_origen = os.path.normcase(os.path.realpath(p_file))
+                    if any(ruta == clave_origen for ruta, _ in (omisiones_confirmadas or set())):
+                        no_agregar = (clave_origen, calcular_sha256(p_file).lower()) in omisiones_confirmadas
+                    if no_agregar:
+                        cant_omitidos += 1
+                        ya_env = False
+                    elif ya_env:
                         cant_enviados += 1
 
                     archivos_lista.append({
@@ -504,7 +546,8 @@ def escanear_sala_espera_carpetas(ruta_destino_base: str,
                         "fecha_modificacion": datetime.datetime.fromtimestamp(mt).strftime("%Y-%m-%d %H:%M:%S") if mt > 0 else "N/D",
                         "tipo": tipo_arch,
                         "id_media": id_m,
-                        "ya_enviado": ya_env
+                        "ya_enviado": ya_env,
+                        "no_agregar": no_agregar
                     })
 
             # Clasificación de tipo
@@ -546,7 +589,8 @@ def escanear_sala_espera_carpetas(ruta_destino_base: str,
                 "fecha_ultimo_archivo": fecha_fmt,
                 "mtime_max": mtime_max,
                 "enviados_conteo": cant_enviados,
-                "pendientes_conteo": len(archivos_lista) - cant_enviados,
+                "omitidos_conteo": cant_omitidos,
+                "pendientes_conteo": sum(not a["ya_enviado"] and not a["no_agregar"] for a in archivos_lista),
                 "archivos": archivos_lista
             })
 
@@ -629,7 +673,8 @@ def listar_archivos_part_huerfanos(punto_montaje: str, carpeta_raiz: str = "Luci
 
 
 def _leer_estado_pendrive_raw(config: Optional[ConfiguracionBandeja] = None,
-                              db: Optional[GestorBaseDatosBandeja] = None) -> Dict[str, Any]:
+                              db: Optional[GestorBaseDatosBandeja] = None,
+                              ruta_bitacora="bitacora_bandeja.jsonl") -> Dict[str, Any]:
     """Rutina interna de lectura del estado físico del pendrive."""
     cfg = config or ConfiguracionBandeja()
 
@@ -753,6 +798,13 @@ def _leer_estado_pendrive_raw(config: Optional[ConfiguracionBandeja] = None,
     # Conteo y desglose de archivos pendientes en sala de espera
     base_destino = getattr(cfg, "ruta_destino_base", RUTA_DESTINO_DEFECTO)
     caps = escanear_capitulos_para_envio(base_destino)
+    omisiones = leer_omisiones_envio(ruta_bitacora, info.get("id"))
+    rutas_omitidas = {ruta for ruta, _ in omisiones}
+
+    def no_agregar(ruta):
+        clave = os.path.normcase(os.path.realpath(ruta))
+        return clave in rutas_omitidas and (clave, calcular_sha256(ruta).lower()) in omisiones
+
     tot_arch = 0
     sub_f = getattr(cfg, "subcarpeta_fotos", "fotos")
     sub_v = getattr(cfg, "subcarpeta_videos", "videos")
@@ -768,7 +820,7 @@ def _leer_estado_pendrive_raw(config: Optional[ConfiguracionBandeja] = None,
         if os.path.isdir(d_v):
             for x in os.listdir(d_v):
                 p = os.path.join(d_v, x)
-                if os.path.isfile(p) and not x.startswith("."):
+                if os.path.isfile(p) and not x.startswith(".") and not no_agregar(p):
                     cant_vids += 1
                     try:
                         bytes_cap += os.path.getsize(p)
@@ -779,7 +831,7 @@ def _leer_estado_pendrive_raw(config: Optional[ConfiguracionBandeja] = None,
         if os.path.isdir(d_f):
             for x in os.listdir(d_f):
                 p = os.path.join(d_f, x)
-                if os.path.isfile(p) and not x.startswith("."):
+                if os.path.isfile(p) and not x.startswith(".") and not no_agregar(p):
                     cant_fotos += 1
                     try:
                         bytes_cap += os.path.getsize(p)
@@ -788,7 +840,7 @@ def _leer_estado_pendrive_raw(config: Optional[ConfiguracionBandeja] = None,
 
         for x in os.listdir(ruta_c):
             p = os.path.join(ruta_c, x)
-            if os.path.isfile(p) and not x.startswith("."):
+            if os.path.isfile(p) and not x.startswith(".") and not no_agregar(p):
                 _, ext = os.path.splitext(x)
                 if _es_extension_video(ext):
                     cant_vids += 1
@@ -870,14 +922,15 @@ def _leer_estado_pendrive_raw(config: Optional[ConfiguracionBandeja] = None,
 
 def obtener_estado_pendrive(config: Optional[ConfiguracionBandeja] = None,
                             db: Optional[GestorBaseDatosBandeja] = None,
-                            timeout_segundos: float = 3.0) -> Dict[str, Any]:
+                            timeout_segundos: float = 3.0,
+                            ruta_bitacora="bitacora_bandeja.jsonl") -> Dict[str, Any]:
     """
     Obtiene el estado completo del pendrive ejecutando la lectura fuera del hilo principal
     con límite estricto de timeout_segundos (por defecto 3 s).
     Si el pendrive se cuelga o no responde, retorna sin bloquear indicando sin_respuesta=True.
     """
     try:
-        res = ejecutar_lectura_pendrive_con_timeout(_leer_estado_pendrive_raw, config, db, timeout_segundos=timeout_segundos)
+        res = ejecutar_lectura_pendrive_con_timeout(_leer_estado_pendrive_raw, config, db, ruta_bitacora, timeout_segundos=timeout_segundos)
     except Exception:
         res = {"sin_respuesta": True}
     if not isinstance(res, dict) or res.get("sin_respuesta"):
@@ -1229,6 +1282,7 @@ def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
         }
 
     pendrive_montaje = info_pendrive["ruta_montaje"]
+    omisiones_confirmadas = leer_omisiones_envio(kwargs.get("ruta_bitacora", "bitacora_bandeja.jsonl"), info_pendrive["id"])
     sistema_archivos = info_pendrive["sistema_archivos"]
     espacio_libre = info_pendrive["espacio_libre_bytes"]
     margen_libre = getattr(cfg, "margen_libre_bytes", 1024 * 1024 * 1024)
@@ -1356,7 +1410,13 @@ def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
             ya_planificado = ruta_rel_pendrive.lower() in destinos_reservados
             hay_existente = mismo_registro or archivo_colisionante is not None or ya_planificado
             accion = resoluciones.get(id_archivo)
-            if hay_existente and accion == "omitir":
+            omitido_confirmado = (os.path.normcase(ruta_orig), sha_orig.lower()) in omisiones_confirmadas
+            if omitido_confirmado and accion is None:
+                item_info["estado"] = "omitido_confirmado"
+                item_info["aviso"] = "No agregar confirmado. Se conserva en la sala de espera; podés revisar esta decisión."
+                archivos_omitidos.append(item_info)
+                continue
+            if (hay_existente or omitido_confirmado) and accion == "omitir":
                 item_info["estado"] = "omitido_usuario"
                 item_info["aviso"] = "No se agrega por elección del usuario; el existente se conserva."
                 archivos_omitidos.append(item_info)
@@ -1420,13 +1480,20 @@ def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
         len(archivos_bloqueados) == 0 and
         not capitulos_abiertos
     )
+    puede_confirmar_omisiones = (not archivos_a_copiar and not capitulos_abiertos
+                               and not archivos_conflictos and not archivos_bloqueados
+                               and any(a.get("estado") == "omitido_usuario" for a in archivos_omitidos))
 
     motivo_bloqueo = None
     if capitulos_abiertos:
         motivo_bloqueo = "Hay proyectos abiertos en la selección. Terminalos antes de enviar y volvé a revisar el plan."
+    elif archivos_conflictos:
+        motivo_bloqueo = "Hay conflictos con nombres existentes. Elegí Renombrar y agregar o No agregar para cada uno."
     elif len(archivos_a_copiar) == 0:
         if any(a.get("estado") == "omitido_usuario" for a in archivos_omitidos):
-            motivo_bloqueo = "No hay archivos nuevos seleccionados para enviar. Los existentes se conservan."
+            motivo_bloqueo = "Confirmá No agregar para recordar la decisión. Los archivos se conservan en la sala de espera."
+        elif any(a.get("estado") == "omitido_confirmado" for a in archivos_omitidos):
+            motivo_bloqueo = "No quedan archivos pendientes. Podés revisar los que elegiste no agregar."
         elif len(archivos_omitidos) > 0:
             motivo_bloqueo = "Todos los archivos del capítulo ya fueron enviados al pendrive."
         else:
@@ -1434,13 +1501,12 @@ def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
     elif not espacio_suficiente:
         deficit = (bytes_a_copiar + margen_libre) - espacio_libre
         motivo_bloqueo = f"Espacio insuficiente en pendrive: libre {formatear_bytes(espacio_libre)}, se requieren {formatear_bytes(bytes_a_copiar)} + {formatear_bytes(margen_libre)} de margen (déficit: {formatear_bytes(deficit)})."
-    elif len(archivos_conflictos) > 0:
-        motivo_bloqueo = f"Se detectaron {len(archivos_conflictos)} conflicto(s) de destino con distinto hash. Resuelva los conflictos antes de enviar."
     elif len(archivos_bloqueados) > 0:
         motivo_bloqueo = f"Se detectaron {len(archivos_bloqueados)} archivo(s) que superan el límite de 4 GiB en partición FAT32."
 
     return {
         "puede_enviar": puede_enviar,
+        "puede_confirmar_omisiones": puede_confirmar_omisiones,
         "capitulos_abiertos": capitulos_abiertos,
         "motivo_bloqueo": motivo_bloqueo,
         "pendrive": {
@@ -1585,14 +1651,19 @@ def _ejecutar_envio_pendrive_interno(simulacion_o_capitulos: Any,
     if isinstance(simulacion_o_capitulos, dict) and "archivos_a_copiar" in simulacion_o_capitulos and "puede_enviar" in simulacion_o_capitulos:
         simulacion = simulacion_o_capitulos
     else:
-        simulacion = simular_envio_capitulos(simulacion_o_capitulos, cfg, db)
+        simulacion = simular_envio_capitulos(simulacion_o_capitulos, cfg, db,
+            ruta_bitacora=getattr(movimientos, "ruta_bitacora", "bitacora_bandeja.jsonl"))
 
-    if not simulacion.get("puede_enviar"):
+    omisiones = [a for a in simulacion.get("archivos_omitidos", []) if a.get("estado") == "omitido_usuario"]
+    solo_omisiones = (simulacion.get("puede_confirmar_omisiones") and omisiones
+                     and not simulacion.get("archivos_a_copiar")
+                     and not simulacion.get("archivos_conflictos") and not simulacion.get("archivos_bloqueados"))
+    if not simulacion.get("puede_enviar") and not solo_omisiones:
         motivo = simulacion.get("motivo_bloqueo") or "El plan de envío no está habilitado para confirmación."
         raise ValueError(motivo)
 
     archivos_a_copiar = simulacion.get("archivos_a_copiar", [])
-    if not archivos_a_copiar:
+    if not archivos_a_copiar and not solo_omisiones:
         raise ValueError("No hay archivos para transferir en el plan de envío.")
 
     # Revalidar el estado vigente: un plan anterior no autoriza enviar un
@@ -1600,7 +1671,7 @@ def _ejecutar_envio_pendrive_interno(simulacion_o_capitulos: Any,
     base_origen = os.path.realpath(cfg.ruta_destino_base)
     seleccionadas = {
         tuple(os.path.relpath(os.path.realpath(a["ruta_origen"]), base_origen).split(os.sep)[:2])
-        for a in archivos_a_copiar
+        for a in archivos_a_copiar + omisiones
     }
     if db and any((c["personaje"], c["nombre"]) in seleccionadas
                   for c in db.listar_capitulos_abiertos()):
@@ -1617,6 +1688,16 @@ def _ejecutar_envio_pendrive_interno(simulacion_o_capitulos: Any,
 
     if not os.path.isdir(pendrive_raiz):
         raise ValueError(f"La estructura base '{carpeta_raiz}' no existe en el pendrive. Debe vincular la unidad primero.")
+
+    # Confirmar una omisión no toca el archivo; exige la misma versión revisada.
+    marcador = leer_marcador_pendrive(pendrive_montaje)
+    if omisiones and (not marcador or marcador.get("id") != pendrive_info.get("id")):
+        raise ValueError("El pendrive cambió desde la revisión de No agregar.")
+    for archivo in omisiones:
+        origen = archivo["ruta_origen"]
+        if (os.path.islink(origen) or not esta_confinado_en_raiz(origen, base_origen)
+                or not os.path.isfile(origen) or calcular_sha256(origen).lower() != archivo["sha256"].lower()):
+            raise ValueError("Un archivo de No agregar cambió desde la revisión. Revisá nuevamente.")
 
     id_envio = f"env_{uuid.uuid4().hex[:12]}"
     fecha_iso = datetime.datetime.now().isoformat()
@@ -1738,29 +1819,30 @@ def _ejecutar_envio_pendrive_interno(simulacion_o_capitulos: Any,
             "ruta_enviados": dest_enviados
         })
 
-    # 3. Asentamiento append-only en manifiesto.jsonl del pendrive
-    dir_lucie = os.path.join(pendrive_raiz, ".lucie")
-    os.makedirs(dir_lucie, exist_ok=True)
-    ruta_manifiesto = os.path.join(dir_lucie, NOMBRE_MANIFIESTO_PENDRIVE)
-    with open(ruta_manifiesto, "a", encoding="utf-8", newline="\n") as f_man:
-        for r in archivos_transferidos:
-            ent = {
-                "id_envio": r["id_envio"],
-                "fecha": r["fecha"],
-                "equipo": r["equipo"],
-                "pendrive_id": r["pendrive_id"],
-                "personaje": r["personaje"],
-                "capitulo": r["capitulo"],
-                "tipo": r["tipo"],
-                "nombre": r.get("nombre_destino", r["nombre"]),
-                "ruta_relativa": r["ruta_relativa"],
-                "sha256": r["sha256"],
-                "bytes": r["bytes"],
-                "estado": "enviado"
-            }
-            f_man.write(json.dumps(ent, ensure_ascii=False) + "\n")
-        f_man.flush()
-        os.fsync(f_man.fileno())
+    if archivos_transferidos:
+        # 3. Asentamiento append-only en manifiesto.jsonl del pendrive
+        dir_lucie = os.path.join(pendrive_raiz, ".lucie")
+        os.makedirs(dir_lucie, exist_ok=True)
+        ruta_manifiesto = os.path.join(dir_lucie, NOMBRE_MANIFIESTO_PENDRIVE)
+        with open(ruta_manifiesto, "a", encoding="utf-8", newline="\n") as f_man:
+            for r in archivos_transferidos:
+                ent = {
+                    "id_envio": r["id_envio"],
+                    "fecha": r["fecha"],
+                    "equipo": r["equipo"],
+                    "pendrive_id": r["pendrive_id"],
+                    "personaje": r["personaje"],
+                    "capitulo": r["capitulo"],
+                    "tipo": r["tipo"],
+                    "nombre": r.get("nombre_destino", r["nombre"]),
+                    "ruta_relativa": r["ruta_relativa"],
+                    "sha256": r["sha256"],
+                    "bytes": r["bytes"],
+                    "estado": "enviado"
+                }
+                f_man.write(json.dumps(ent, ensure_ascii=False) + "\n")
+            f_man.flush()
+            os.fsync(f_man.fileno())
 
     # 4. Asentamiento en bitácora local
     ruta_bitacora = getattr(movimientos, "ruta_bitacora", "bitacora_bandeja.jsonl") if movimientos else "bitacora_bandeja.jsonl"
@@ -1774,12 +1856,14 @@ def _ejecutar_envio_pendrive_interno(simulacion_o_capitulos: Any,
         "pendrive_montaje": pendrive_montaje,
         "total_archivos": len(archivos_transferidos),
         "bytes_totales": sum(r["bytes"] for r in archivos_transferidos),
-        "capitulos": sorted(list({r["capitulo"] for r in archivos_transferidos})),
-        "archivos": archivos_transferidos
+        "capitulos": sorted({r["capitulo"] for r in archivos_transferidos + omisiones}),
+        "archivos": archivos_transferidos,
+        "archivos_no_agregar": omisiones
     }
     with open(ruta_bitacora, "a", encoding="utf-8", newline="\n") as f_bit:
         f_bit.write(json.dumps(evento_bitacora, ensure_ascii=False) + "\n")
         f_bit.flush()
+        os.fsync(f_bit.fileno())
 
     # Solo después de las copias verificadas y de ambos registros exitosos.
     carpetas_vacias_eliminadas = _limpiar_carpetas_vacias_enviadas(base_origen, archivos_transferidos, ruta_bitacora)
@@ -1792,6 +1876,7 @@ def _ejecutar_envio_pendrive_interno(simulacion_o_capitulos: Any,
         "pendrive_id": pendrive_id,
         "total_transferidos": len(archivos_transferidos),
         "total_archivos_enviados": len(archivos_transferidos),
+        "total_no_agregar": len(omisiones),
         "bytes_totales": sum(r["bytes"] for r in archivos_transferidos),
         "capitulos": sorted(list({r["capitulo"] for r in archivos_transferidos})),
         "archivos": [
@@ -1859,6 +1944,17 @@ def _deshacer_envio_pendrive_interno(id_operacion: str,
                     except Exception:
                         pass
 
+    # Una confirmación sin copias revierte solo decisiones locales.
+    if not op_encontrada.get("archivos") and op_encontrada.get("archivos_no_agregar"):
+        with open(bit_path, "a", encoding="utf-8", newline="\n") as registro:
+            registro.write(json.dumps({"evento": "deshacer", "id_operacion_revertida": id_operacion,
+                "tipo_operacion": "envio_pendrive", "fecha": datetime.datetime.now().isoformat(),
+                "total_revertidos": 0}, ensure_ascii=False) + "\n")
+            registro.flush()
+            os.fsync(registro.fileno())
+        return {"exito": True, "id_operacion": id_operacion, "total_revertidos": 0,
+                "mensaje": "Decisiones No agregar revertidas; los archivos vuelven a pendientes."}
+
     # Localizar pendrive montado
     pendrive_id = op_encontrada.get("pendrive_id", "")
     info_pendrive = detectar_pendrive(cfg)
@@ -1876,7 +1972,7 @@ def _deshacer_envio_pendrive_interno(id_operacion: str,
     carpeta_raiz = getattr(cfg, "carpeta_raiz_pendrive", CARPETA_RAIZ_PENDRIVE_DEFECTO)
     pendrive_raiz = os.path.realpath(os.path.join(punto_montaje, carpeta_raiz))
     archivos = op_encontrada.get("archivos", [])
-    if not archivos:
+    if not archivos and not op_encontrada.get("archivos_no_agregar"):
         raise ErrorDeshacer("La operación de envío no contiene archivos registrados.")
 
     # Fase 1: Verificaciones preventivas estrictas

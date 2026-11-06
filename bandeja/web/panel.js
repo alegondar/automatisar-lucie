@@ -2606,7 +2606,7 @@
             <div style="background:rgba(14, 165, 233, 0.15); border:1px solid #0ea5e9; color:#bae6fd; padding:10px 14px; border-radius:6px; margin-bottom:12px; font-size:0.9rem;">
               <strong> Archivos que no se agregarán:</strong>
               <ul style="margin:6px 0 0 18px;">
-                ${sim.archivos_omitidos.map(o => `<li><code>${escapeHTML(o.nombre)}</code>: ${escapeHTML(o.aviso || o.motivo || o.estado || "Ya enviado")}${["ya_enviado", "omitido_usuario"].includes(o.estado) ? opcionesArchivoExistente(o) : ""}</li>`).join('')}
+                ${sim.archivos_omitidos.map(o => `<li><code>${escapeHTML(o.nombre)}</code>: ${escapeHTML(o.aviso || o.motivo || o.estado || "Ya enviado")}${["ya_enviado", "omitido_usuario", "omitido_confirmado"].includes(o.estado) ? opcionesArchivoExistente(o) : ""}</li>`).join('')}
               </ul>
             </div>
           `;
@@ -2667,7 +2667,8 @@
           boton.addEventListener('click', () => terminarCapituloAntesDeEnviar(Number(boton.dataset.terminarAntesEnvio)));
         });
 
-        if (sim.puede_enviar && sim.total_archivos_a_enviar > 0 && !(sim.capitulos_abiertos || []).length) {
+        btnConfirm.innerText = sim.puede_confirmar_omisiones ? 'Confirmar No agregar' : 'Confirmar y enviar';
+        if ((sim.puede_enviar || sim.puede_confirmar_omisiones) && !(sim.capitulos_abiertos || []).length) {
           btnConfirm.disabled = false;
           btnConfirm.style.cursor = 'pointer';
           btnConfirm.style.opacity = '1';
@@ -2698,7 +2699,7 @@
     }
 
     async function confirmarEnvioPendrive() {
-      if (!planEnvioActivo || !planEnvioActivo.puede_enviar || (planEnvioActivo.capitulos_abiertos || []).length) return;
+      if (!planEnvioActivo || !(planEnvioActivo.puede_enviar || planEnvioActivo.puede_confirmar_omisiones) || (planEnvioActivo.capitulos_abiertos || []).length) return;
       const btn = document.getElementById('btn-confirmar-envio-pendrive');
       if (btn) {
         btn.disabled = true;
@@ -2710,7 +2711,7 @@
           body: JSON.stringify({ simulacion: planEnvioActivo })
         });
         cerrarModalPlanEnvio();
-        mostrarToastLlegada(`Envío exitoso: ${res.total_archivos_enviados} archivo(s) transferidos al pendrive`);
+        mostrarToastLlegada(`${res.total_archivos_enviados} archivo(s) enviados al pendrive${res.total_no_agregar ? `; ${res.total_no_agregar} con No agregar confirmado` : ''}.`);
         await cargarDatos();
         if (pestanaActual === 'pendrive') {
           await cargarVistaPendrive();
@@ -2732,10 +2733,14 @@
     window.carpetasPendriveInicializadas = window.carpetasPendriveInicializadas || false;
     window.carpetasPendriveDesplegadas = window.carpetasPendriveDesplegadas || new Set();
 
+    function carpetaTienePendientes(c) {
+      return c.total_archivos > 0 && c.pendientes_conteo !== 0;
+    }
+
     function seleccionarTodasCarpetasPendrive() {
       if (!window.carpetasPendriveSeleccionadas) window.carpetasPendriveSeleccionadas = new Set();
       carpetasPendriveData.forEach(c => {
-        if (c.total_archivos > 0) window.carpetasPendriveSeleccionadas.add(`${c.personaje}/${c.carpeta}`);
+        if (carpetaTienePendientes(c)) window.carpetasPendriveSeleccionadas.add(`${c.personaje}/${c.carpeta}`);
       });
       actualizarEstadoCheckboxesPendrive();
     }
@@ -2749,7 +2754,7 @@
 
     function toggleSeleccionCarpetaPendrive(carpetaKey, marcado) {
       if (!window.carpetasPendriveSeleccionadas) window.carpetasPendriveSeleccionadas = new Set();
-      if (marcado && carpetasPendriveData.some(c => `${c.personaje}/${c.carpeta}` === carpetaKey && c.total_archivos > 0)) {
+      if (marcado && carpetasPendriveData.some(c => `${c.personaje}/${c.carpeta}` === carpetaKey && carpetaTienePendientes(c))) {
         window.carpetasPendriveSeleccionadas.add(carpetaKey);
       } else {
         window.carpetasPendriveSeleccionadas.delete(carpetaKey);
@@ -2791,7 +2796,7 @@
     }
 
     function actualizarEstadoCheckboxesPendrive() {
-      const disponibles = new Set(carpetasPendriveData.filter(c => c.total_archivos > 0).map(c => `${c.personaje}/${c.carpeta}`));
+      const disponibles = new Set(carpetasPendriveData.filter(carpetaTienePendientes).map(c => `${c.personaje}/${c.carpeta}`));
       for (const key of window.carpetasPendriveSeleccionadas) {
         if (!disponibles.has(key)) window.carpetasPendriveSeleccionadas.delete(key);
       }
@@ -2877,13 +2882,13 @@
         if (!window.carpetasPendriveInicializadas) {
           window.carpetasPendriveSeleccionadas = new Set();
           carpetasPendriveData.forEach(c => {
-            if (!c.es_heredada && (c.pendientes_conteo > 0 || c.total_archivos > 0)) {
+            if (!c.es_heredada && carpetaTienePendientes(c)) {
               window.carpetasPendriveSeleccionadas.add(`${c.personaje}/${c.carpeta}`);
             }
           });
           window.carpetasPendriveInicializadas = true;
         } else {
-          const keysActuales = new Set(carpetasPendriveData.filter(c => c.total_archivos > 0).map(c => `${c.personaje}/${c.carpeta}`));
+          const keysActuales = new Set(carpetasPendriveData.filter(carpetaTienePendientes).map(c => `${c.personaje}/${c.carpeta}`));
           for (const k of Array.from(window.carpetasPendriveSeleccionadas)) {
             if (!keysActuales.has(k)) {
               window.carpetasPendriveSeleccionadas.delete(k);
@@ -3108,8 +3113,9 @@
         }
 
         // 2. Tabla de Carpetas de Sala de Espera
-        if (!carpetasPendriveData.length) {
-          contCaps.innerHTML = '<p style="color:var(--text-muted); padding:16px;">No hay carpetas con archivos en la sala de espera (~/Descargas/_lucie/).</p>';
+        const carpetasVisibles = carpetasPendriveData.filter(c => c.total_archivos === 0 || c.pendientes_conteo !== 0);
+        if (!carpetasVisibles.length) {
+          contCaps.innerHTML = '<p style="color:var(--text-muted); padding:16px;">No hay proyectos pendientes de enviar. Las decisiones No agregar se pueden revisar en el historial de abajo.</p>';
         } else {
           contCaps.innerHTML = `
             <table class="tabla-historial">
@@ -3127,7 +3133,7 @@
                 </tr>
               </thead>
               <tbody>
-                ${carpetasPendriveData.map(c => {
+                ${carpetasVisibles.map(c => {
                   const cKey = `${c.personaje}/${c.carpeta}`;
                   const safeKey = `${c.personaje}__${c.carpeta}`.replace(/[^a-zA-Z0-9_-]/g, '_');
                   const estaMarcada = window.carpetasPendriveSeleccionadas.has(cKey);
@@ -3150,7 +3156,7 @@
                   if (c.total_archivos === 0) {
                     transferInfo = '<p style="color:var(--text-muted); font-size:0.85rem;">Carpeta vacía. No hay archivos para enviar.</p>';
                   } else if (estadoPen.conectado) {
-                    transferInfo = `<div><strong style="color:var(--teal)">${c.enviados_conteo}</strong> enviados</div><div style="color:var(--text-muted); font-size:0.8rem;">${c.pendientes_conteo} pendientes</div>`;
+                    transferInfo = `<div><strong style="color:var(--teal)">${c.enviados_conteo}</strong> enviados</div><div style="color:var(--text-muted); font-size:0.8rem;">${c.pendientes_conteo} pendientes</div>${c.omitidos_conteo ? `<div>${c.omitidos_conteo} con No agregar</div>` : ''}`;
                   } else {
                     transferInfo = `<span style="color:var(--text-muted); font-size:0.85rem;">${c.total_archivos} pendientes</span>`;
                   }
@@ -3166,12 +3172,12 @@
                   `;
 
                   const filaEnvioInhabilitada = c.total_archivos === 0 || !puedeEnviarPendrive || (estadoPen.conectado && c.pendientes_conteo === 0);
-                  const motivoFila = c.total_archivos === 0 ? 'Carpeta vacía. No hay archivos para enviar.' : !puedeEnviarPendrive ? motivoDeshabilitado : 'Todos los archivos ya fueron transferidos';
+                  const motivoFila = c.total_archivos === 0 ? 'Carpeta vacía. No hay archivos para enviar.' : !puedeEnviarPendrive ? motivoDeshabilitado : 'Sin pendientes: enviados o con No agregar confirmado.';
 
                   return `
                     <tr>
                       <td style="text-align:center;">
-                        <input type="checkbox" class="chk-carpeta-pendrive" data-carpeta-key="${escapeHTML(cKey)}" aria-label="Seleccionar ${escapeHTML(cKey)}" ${c.total_archivos === 0 ? 'disabled title="Carpeta vacía. No hay archivos para enviar."' : ''} onchange="toggleSeleccionCarpetaPendrive('${escapeHTML(cKey)}', this.checked)" ${estaMarcada ? 'checked' : ''}>
+                        <input type="checkbox" class="chk-carpeta-pendrive" data-carpeta-key="${escapeHTML(cKey)}" aria-label="Seleccionar ${escapeHTML(cKey)}" ${!carpetaTienePendientes(c) ? 'disabled title="Sin archivos pendientes para enviar."' : ''} onchange="toggleSeleccionCarpetaPendrive('${escapeHTML(cKey)}', this.checked)" ${estaMarcada ? 'checked' : ''}>
                       </td>
                       <td><code>${escapeHTML(c.personaje)}</code></td>
                       <td>
@@ -3187,8 +3193,9 @@
                             ${estaDesplegada ? 'Ocultar archivos' : `Ver archivos (${c.total_archivos})`}
                           </button>
                           <button class="btn-sm btn-enviar-fila-pendrive" onclick="abrirModalPlanEnvio(['${escapeHTML(cKey)}'])" ${filaEnvioInhabilitada ? `disabled title="${escapeHTML(motivoFila)}" style="background:#555; opacity:0.5; cursor:not-allowed; padding:4px 8px; font-size:0.8rem; width:100%;"` : 'style="background:#10b981; color:#000; font-weight:600; padding:4px 8px; font-size:0.8rem; border:none; border-radius:4px; cursor:pointer; width:100%;" title="Enviar esta carpeta al pendrive"'}>
-                            Enviar esta carpeta
+                            ${c.pendientes_conteo === 0 && c.total_archivos > 0 ? 'Sin pendientes' : 'Enviar esta carpeta'}
                           </button>
+                          ${c.omitidos_conteo ? `<button class="btn-sm" onclick="abrirModalPlanEnvio(['${escapeHTML(cKey)}'])">Revisar No agregar</button>` : ''}
                         </div>
                       </td>
                     </tr>
@@ -3235,7 +3242,7 @@
                                     <td><code>${escapeHTML(a.ruta_relativa)}</code></td>
                                     <td><span class="tag-tipo ${a.tipo === 'video' ? 'tag-video' : (a.tipo === 'foto' ? 'tag-imagen' : 'tag-no-media')}">${escapeHTML(a.tipo)}</span></td>
                                     <td>${escapeHTML(a.tamanio_fmt)}</td>
-                                    <td>${a.ya_enviado ? '<span class="badge-enviado">Ya en pendrive</span>' : '<span class="badge-pendiente">Pendiente</span>'}</td>
+                                    <td>${a.no_agregar ? '<span>No agregar confirmado</span>' : a.ya_enviado ? '<span class="badge-enviado">Ya en pendrive</span>' : '<span class="badge-pendiente">Pendiente</span>'}</td>
                                     <td style="text-align:center;">
                                       ${esMedia ? `
                                         <button class="btn-sm" onclick="abrirVisorMedia('pendrive:${escapeHTML(cKey)}', '${escapeHTML(a.id_media)}')" style="background:transparent; border:1px solid var(--border); color:var(--text); padding:2px 8px; font-size:0.8rem; border-radius:4px; cursor:pointer;" title="Abrir visor">
@@ -3314,13 +3321,14 @@
                   <tr>
                     <td><small>${escapeHTML(e.fecha)}</small></td>
                     <td><strong>${escapeHTML(e.personaje || '')}/${escapeHTML(e.capitulo || '')}</strong></td>
-                    <td>${e.total_archivos || (e.archivos ? e.archivos.length : 1)} archivo(s)</td>
+                    <td>${e.total_archivos ?? (e.archivos ? e.archivos.length : 0)} enviado(s)${e.archivos_no_agregar?.length ? ` · ${e.archivos_no_agregar.length} con No agregar` : ''}</td>
                     <td>${formatearBytes(e.total_bytes || 0)}</td>
                     <td><span class="${e.estado === 'deshecho' ? 'badge-deshecho' : 'badge-movido'}">${escapeHTML(e.estado)}</span></td>
                     <td style="text-align:center;">
+                      ${e.estado !== 'deshecho' && e.archivos_no_agregar?.length ? `<button class="btn-sm" onclick="abrirModalPlanEnvio(${escapeHTML(JSON.stringify(Array.from(new Set(e.archivos_no_agregar.map(a => `${a.personaje}/${a.capitulo}`)))))})">Revisar No agregar</button>` : ''}
                       ${e.estado !== 'deshecho' ? `
-                        <button class="btn-sm" onclick="deshacerEnvio('${escapeHTML(e.id_operacion)}')" style="background:var(--card-alt); border:1px solid var(--border); color:var(--text); padding:4px 10px; border-radius:4px; cursor:pointer;">
-                          Deshacer envío
+                        <button class="btn-sm" onclick="deshacerEnvio('${escapeHTML(e.id_operacion)}', ${e.total_archivos === 0})" style="background:var(--card-alt); border:1px solid var(--border); color:var(--text); padding:4px 10px; border-radius:4px; cursor:pointer;">
+                          ${e.total_archivos === 0 ? 'Deshacer No agregar' : 'Deshacer envío'}
                         </button>
                       ` : '<span style="color:var(--text-muted)">Revertido</span>'}
                     </td>
@@ -3370,8 +3378,11 @@
       }
     }
 
-    async function deshacerEnvio(idOperacion) {
-      if (!confirm("¿Confirmás deshacer este envío al pendrive? La copia en el pendrive se moverá a _revertidos/ y los archivos originales regresarán a la sala de espera si sus ubicaciones siguen libres.")) {
+    async function deshacerEnvio(idOperacion, soloDecisiones = false) {
+      const mensaje = soloDecisiones
+        ? '¿Querés deshacer No agregar? Los archivos volverán a pendientes; se conservan en su ubicación y no se trasladan.'
+        : '¿Confirmás deshacer este envío al pendrive? La copia en el pendrive se moverá a _revertidos/ y los archivos originales regresarán a la sala de espera si sus ubicaciones siguen libres.';
+      if (!confirm(mensaje)) {
         return;
       }
       try {
@@ -3379,7 +3390,7 @@
           method: 'POST',
           body: JSON.stringify({ id_operacion: idOperacion })
         });
-        mostrarToastLlegada("Envío revertido con éxito.");
+        mostrarToastLlegada(soloDecisiones ? 'No agregar revertido. Los archivos vuelven a pendientes.' : 'Envío revertido con éxito.');
         await cargarVistaPendrive();
         await cargarDatos();
       } catch (e) {
