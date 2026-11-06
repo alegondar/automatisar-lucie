@@ -385,7 +385,7 @@ class TestEdicionCapCut(unittest.TestCase):
     def test_clip_numerico_sugiere_titulo_del_capitulo_sin_renombrar_original(self):
         capitulo = "Lucie pedo - viernes - semana 5 - octubre - 2026"
         origen = self._crear_clip_crudo("lucie", capitulo, "1005.mp4")
-        for nombre in ("1005.mp4", "1010(5).mp4"):
+        for nombre in ("1005.mp4", "1010(5).mp4", "1105 (1).mp4", "1105 (1)(1).mp4", "1105 (1) (2).mov"):
             self.assertEqual(calcular_nombre_defecto([nombre], capitulo), "Lucie pedo.mp4")
         sesion = crear_sesion(self.db, [f"lucie/{capitulo}/1005.mp4"], "lucie", capitulo)
         self.assertEqual(sesion["nombre_final_defecto"], "Lucie pedo.mp4")

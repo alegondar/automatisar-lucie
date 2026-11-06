@@ -1,5 +1,44 @@
 # Estado actual del sistema — 2026-11-06
 
+## Exports numéricos con espacios y sufijos de copia (2026-11-06)
+
+Diagnóstico de solo lectura solicitado por una captura de Sin publicar/sin asignar:
+`1105 (1).mp4` y `1105 (1)(1).mp4` fueron resguardados como exports sin sesión el
+2026-11-05. No corresponden a un registro de envío de crudos de Luna. El único
+capítulo Luna en esta base, Luna subte, figura enviado correctamente el 2026-11-01
+a videos sin editar/luna/noviembre - 2026/capítulo; su clip está actualmente en
+videos ya editados/luna, tras finalizar edición, y el completo en Publicados/luna.
+Fotos conservadas en imagenes/luna. La base local no contiene los exports de
+Windows; el diagnóstico se completó leyendo los eventos del manifiesto, separado
+de las pruebas. Falta identificar el proyecto nuevo mencionado por el usuario.
+No se atribuyeron los dos exports a Luna ni se movió material histórico.
+
+La expresión de nombres numéricos solo contemplaba un sufijo sin espacios y
+permitía que las variantes de la captura se copiaran a Sin asignar. La detección
+se centraliza en edición y admite espacios y sufijos (n) repetidos. Sin sesión
+inequívoca siguen pendientes hasta indicar título/personaje explícitos y revisar
+el plan; esos mismos números no se aceptan como título manual. La sugerencia de
+sesión con un solo clip numérico usa el título conocido del capítulo también
+para estas variantes, conservando el original. Sin migración ni renombrado de
+copias históricas. Se mantiene el resguardo con token, integridad y Deshacer.
+
+Validación Kali/Linux, Python 3.14: **521 pruebas OK, 12 omisiones**, **65.525 s**.
+Guardia y aserciones conservadas, exclusivamente temporales. Variantes exactas
+con espacios, paréntesis repetidos y MOV: el sondeo conserva pendientes sin copia,
+rechaza números como título y permite revisar título explícito para Luna. Árbol
+previo y SHA-256 del video ajeno conservados. La regresión de sugerencia de sesión
+incluye las mismas variantes. El pase específico inicial detectó una expectativa
+nueva incorrecta de cola vacía (el fixture ya tiene material); se corrigió para
+comparar árbol previo/posterior y hash, conservando las aserciones originales.
+AST **0/36**, auditoría repo/historial **0/260** y diff correctos. Manifiesto real
+solo contado durante pruebas: **1079 / 1079**, estable. Logs externos:
+`/tmp/lucie-numericos-suite.log`, `/tmp/lucie-numericos-regresion.log`.
+Windows nativo no ejecutado. Bandeja detenida normalmente antes de pruebas y
+reabierta después para uso normal. El usuario autorizó commit/push de este lote.
+Sigue pendiente el nombre del proyecto nuevo y la identificación de los dos
+archivos para preparar cualquier organización manual; no se movieron.
+
+
 ## Búsqueda del celular con reintentos dentro de un clic (2026-11-05)
 
 El usuario informó que Buscar celular necesitaba varios clics con Lucie Recibir

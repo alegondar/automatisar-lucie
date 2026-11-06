@@ -74,6 +74,11 @@ def nombre_video_legible(nombre: str) -> str:
     return base
 
 
+def es_titulo_numerico(titulo: str) -> bool:
+    """Reconoce números de CapCut, también copias como '1105 (1)(1)'."""
+    return re.fullmatch(r"\d+(?:\s*\(\s*\d+\s*\))*", titulo.strip()) is not None
+
+
 def nombre_video_sesion(sesion: Dict[str, Any]) -> str:
     """Recupera espacios antiguos solo si el capítulo/clip conserva el mismo título."""
     base = nombre_video_legible(sesion.get("nombre") or sesion.get("nombre_final_defecto"))
@@ -264,7 +269,7 @@ def _copiar_crudo_bloqueado(origen, destino, sha_esperado, pendrive_raiz):
 def calcular_nombre_defecto(clips: List[str], capitulo: str) -> str:
     """Un clip usa su título; varios usan el capítulo, sin repetir su fecha."""
     origen = os.path.basename(clips[0]) if len(clips) == 1 else (capitulo or "capitulo")
-    if capitulo and re.fullmatch(r"\d+(?:\(\d+\))?", nombre_video_legible(origen)):
+    if capitulo and es_titulo_numerico(nombre_video_legible(origen)):
         origen = capitulo
     return f"{nombre_video_legible(origen)}.mp4"
 
@@ -1373,14 +1378,14 @@ def simular_resguardo_export(exp, pendrive_montaje, carpeta_raiz, titulo=None, p
     raiz = os.path.join(pendrive_montaje, carpeta_raiz)
     nombre = os.path.basename(exp["ruta_origen"])
     titulo_original = os.path.splitext(nombre)[0]
-    numerico = re.fullmatch(r"\d+(?:\(\d+\))?", titulo_original.strip()) is not None
+    numerico = es_titulo_numerico(titulo_original)
     if titulo is not None or personaje is not None:
         if not isinstance(titulo, str) or not titulo.strip() or len(titulo) > 160:
             raise ValueError("Escribí el título del video o elegí su sesión de edición.")
         if personaje not in ("lucie", "roli", "mailen", "luna"):
             raise ValueError("Elegí Lucie, Roli, Mailen o Luna para guardar el video.")
         titulo = nombre_video_legible(titulo)
-        if re.fullmatch(r"\d+(?:\(\d+\))?", titulo):
+        if es_titulo_numerico(titulo):
             raise ValueError("Usá el título del video, no el número de CapCut.")
         fecha = datetime.datetime.now()
         carpeta = carpeta_capitulo(raiz, os.path.join("videos completos", "videos sin publicar"),

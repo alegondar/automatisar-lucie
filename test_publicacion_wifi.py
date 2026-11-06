@@ -623,15 +623,15 @@ class TestPublicacionWifi(unittest.TestCase):
         self.assertEqual(dispositivo["alias"], "Celular temporal")
         self.assertEqual(dispositivo["protocol"], "http")
 
-    def _export_numerico_sin_sesion(self):
+    def _export_numerico_sin_sesion(self, nombre="1005.mp4"):
         capcut = os.path.join(self.montaje, "CapCut")
         os.makedirs(capcut, exist_ok=True)
         self.config.carpeta_exportacion_capcut = capcut
-        origen = os.path.join(capcut, "1005.mp4")
+        origen = os.path.join(capcut, nombre)
         with open(origen, "xb") as archivo:
             archivo.write(b"export numerico sin asociacion")
         st = os.stat(origen)
-        exp_id = self.db.registrar_export_pendiente(origen, "1005.mp4", st.st_size, st.st_mtime)
+        exp_id = self.db.registrar_export_pendiente(origen, nombre, st.st_size, st.st_mtime)
         return exp_id, origen
 
     def test_resguardo_numerico_con_titulo_revisa_confirma_y_deshace(self):
@@ -694,16 +694,35 @@ class TestPublicacionWifi(unittest.TestCase):
 
     def test_vigilante_no_copia_export_numerico_sin_titulo(self):
         from bandeja_descargas import crear_vigilante_capcut
-        exp_id, origen = self._export_numerico_sin_sesion()
+        previos = [(ruta, sorted(dirs), sorted(archivos)) for ruta, dirs, archivos in os.walk(self.pendientes)]
+        sha_previo = calcular_sha256(self.video)
+        variantes = ("1005.mp4", "1010(5).mp4", "1105 (1).mp4", "1105 (1)(1).mp4", "1105 (1) (2).mov")
+        exports = [self._export_numerico_sin_sesion(nombre) for nombre in variantes]
         vigilante = crear_vigilante_capcut(self.config, self.db, os.path.join(self.montaje, "bitacora.jsonl"))
         vigilante.tomar_fotografia_inicial()
         with patch("bandeja_descargas.detectar_pendrive", return_value=self.pen):
             vigilante.escanear()
-        exp = next(e for e in self.db.obtener_exports_pendientes() if e["id"] == exp_id)
-        self.assertEqual(exp["estado"], "sin_asignar")
-        self.assertIn("título", exp["error"])
-        self.assertIsNone(exp["ruta_destino"])
-        self.assertTrue(os.path.isfile(origen))
+        for exp_id, origen in exports:
+            with self.subTest(nombre=os.path.basename(origen)):
+                exp = next(e for e in self.db.obtener_exports_pendientes() if e["id"] == exp_id)
+                self.assertEqual(exp["estado"], "sin_asignar")
+                self.assertIn("título", exp["error"])
+                self.assertIsNone(exp["ruta_destino"])
+                self.assertTrue(os.path.isfile(origen))
+                with self.assertRaisesRegex(ValueError, "numérico"):
+                    simular_resguardo_export(exp, self.montaje, "LucieSinReglas")
+                with self.assertRaisesRegex(ValueError, "título del video"):
+                    self.gestor.simular_resguardo(exp_id, os.path.basename(origen), "luna")
+        posteriores = [(ruta, sorted(dirs), sorted(archivos)) for ruta, dirs, archivos in os.walk(self.pendientes)]
+        self.assertEqual(posteriores, previos, 'No crear copias ni carpetas sin título')
+        self.assertEqual(calcular_sha256(self.video), sha_previo, 'Conservar el video ajeno de la cola')
+
+        # El nombre de CapCut no impide el resguardo revisado con título y Luna.
+        exp_id, origen = exports[-1]
+        plan = self.gestor.simular_resguardo(exp_id, "Luna en el subte", "luna")
+        self.assertIn(os.path.join("videos sin publicar", "luna"), plan["destino"])
+        self.assertEqual(os.path.basename(plan["destino"]), "Luna en el subte.mov")
+        self.assertFalse(os.path.exists(plan["destino"]), 'Simular no copia')
 
     def test_resguardo_revalida_enlaces_del_manifiesto_antes_de_copiar(self):
         from bandeja.carpetas_vacias import _sin_enlaces
