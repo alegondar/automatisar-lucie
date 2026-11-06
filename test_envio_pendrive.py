@@ -675,6 +675,44 @@ class TestEjecucionEnvioPendrive(unittest.TestCase):
         # Limpieza manual sin usar métodos prohibidos en código productivo
         pass
 
+    def test_proyecto_abierto_exige_cierre_y_nueva_revision(self):
+        cap = self.db.empezar_capitulo('lucie', 'capitulo1')
+        ajeno = self.db.empezar_capitulo('roli', 'capitulo1')
+        plan = simular_envio_capitulos(['lucie/capitulo1'], self.config, self.db)
+        self.assertFalse(plan['puede_enviar'])
+        self.assertEqual(plan['capitulos_abiertos'], [
+            {'id': cap['id'], 'personaje': 'lucie', 'nombre': 'capitulo1'}])
+        self.assertIn('proyectos abiertos', plan['motivo_bloqueo'])
+        with self.assertRaisesRegex(ValueError, 'proyectos abiertos'):
+            ejecutar_envio_pendrive(plan, self.config, self.db, self.movimientos)
+        self.assertTrue(os.path.isfile(self.vid_path))
+        self.assertTrue(os.path.isfile(self.fot_path))
+        self.db.terminar_capitulo(cap['id'])
+        nuevo = simular_envio_capitulos(['lucie/capitulo1'], self.config, self.db)
+        self.assertTrue(nuevo['puede_enviar'])
+        self.assertEqual(nuevo['capitulos_abiertos'], [])
+        self.assertEqual(self.db.obtener_capitulo_por_id(ajeno['id'])['estado'], 'activo')
+        resultado = ejecutar_envio_pendrive(nuevo, self.config, self.db, self.movimientos)
+        self.assertEqual(resultado['total_archivos_enviados'], 2)
+
+    def test_plan_previo_no_envia_si_reabren_el_proyecto(self):
+        cap = self.db.empezar_capitulo('lucie', 'capitulo1')
+        self.db.terminar_capitulo(cap['id'])
+        plan = simular_envio_capitulos(['lucie/capitulo1'], self.config, self.db)
+        self.assertTrue(plan['puede_enviar'])
+        self.db.reabrir_capitulo(cap['id'])
+        # Ni cambiar la selección ni sus etiquetas elude el origen real.
+        plan['carpetas_seleccionadas'] = ['roli/otro']
+        for archivo in plan['archivos_a_copiar']:
+            archivo['personaje'] = 'roli'
+            archivo['capitulo'] = 'otro'
+        with self.assertRaisesRegex(ValueError, 'proyectos abiertos'):
+            ejecutar_envio_pendrive(plan, self.config, self.db, self.movimientos)
+        self.assertEqual(calcular_sha256(self.vid_path), self.vid_hash)
+        self.assertEqual(calcular_sha256(self.fot_path), self.fot_hash)
+        self.assertFalse(os.path.exists(os.path.join(self.destino_base, '_enviados')))
+        self.assertEqual(leer_manifiesto_pendrive(self.pendrive_dir, self.config.carpeta_raiz_pendrive), [])
+
     def test_envio_lote_exitoso_copia_part_fsync_renombrado_y_verificacion(self):
         """Verifica que el lote se copie a pendrive, el original pase a _enviados y lo preexistente quede intacto."""
         res = ejecutar_envio_pendrive(

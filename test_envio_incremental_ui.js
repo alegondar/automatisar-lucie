@@ -8,7 +8,14 @@ assert.ok(inicio >= 0 && fin > inicio);
 const elementos = new Map();
 function elemento(id) {
   if (!elementos.has(id)) elementos.set(id, {style: {}, disabled: false, innerHTML: '', botones: [],
-    querySelectorAll() {
+    querySelectorAll(selector) {
+      if (selector === '[data-terminar-antes-envio]') {
+        this.cierres = [...this.innerHTML.matchAll(/data-terminar-antes-envio="([^"]+)"/g)].map(m => ({
+          dataset: {terminarAntesEnvio: m[1]}, eventos: {},
+          addEventListener(tipo, fn) {this.eventos[tipo] = fn;},
+        }));
+        return this.cierres;
+      }
       this.botones = [...this.innerHTML.matchAll(/data-envio-archivo="([^"]+)" data-envio-accion="([^"]+)"/g)].map(m => ({
         dataset: {envioArchivo: m[1], envioAccion: m[2]}, eventos: {},
         addEventListener(tipo, fn) {this.eventos[tipo] = fn;},
@@ -19,11 +26,13 @@ function elemento(id) {
 }
 let plan;
 const llamadas = [];
+const cierres = [];
 const ctx = vm.createContext({
   document: {getElementById: elemento},
   escapeHTML: s => String(s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
   mostrarError: s => {throw Error(s);},
   programarSiguienteSondeo() {},
+  abrirModalTerminarCapitulo: async id => cierres.push(id),
   apiFetch: async (ruta, datos) => {llamadas.push({ruta, datos}); return plan;},
 });
 vm.runInContext(fuente.slice(inicio, fin), ctx);
@@ -86,6 +95,27 @@ async function probar() {
   assert.equal(JSON.parse(llamadas.at(-1).datos.body).resoluciones_colisiones['id-foto'], 'omitir');
   assert.equal(boton.disabled, true);
   assert.ok(llamadas.every(c => c.ruta.endsWith('envio-simular')), 'Elegir no debe enviar archivos');
+
+  // Proyectos abiertos: aviso visible, cierre explícito y plan invalidado.
+  plan = {...plan, puede_enviar: true, total_archivos_a_enviar: 1,
+    capitulos_abiertos: [{id: 51, personaje: 'lucie', nombre: '<proyecto>'},
+      {id: 52, personaje: 'luna', nombre: 'otro proyecto'}]};
+  await ctx.abrirModalPlanEnvio(['lucie/proyecto', 'luna/otro proyecto']);
+  assert.match(contenido.innerHTML, /Tenés proyectos abiertos/);
+  assert.match(contenido.innerHTML, /&lt;proyecto&gt;/);
+  assert.equal(boton.disabled, true, 'Bloquear aunque llegue un puede_enviar obsoleto');
+  await ctx.confirmarEnvioPendrive();
+  await ctx.terminarCapituloAntesDeEnviar(999);
+  assert.deepEqual(cierres, [], 'No cerrar un proyecto fuera del plan');
+  assert.equal(contenido.cierres.length, 2);
+  await contenido.cierres[1].eventos.click();
+  assert.deepEqual(cierres, [52], 'Cerrar solo el elegido, aunque no sea el foco');
+  assert.equal(elemento('modal-plan-envio').style.display, 'none');
+  await ctx.confirmarEnvioPendrive();
+  assert.ok(llamadas.every(c => c.ruta.endsWith('envio-simular')), 'Cerrar o cancelar no envía archivos');
+  plan = {...plan, capitulos_abiertos: []};
+  await ctx.abrirModalPlanEnvio(['lucie/proyecto', 'luna/otro proyecto']);
+  assert.equal(boton.disabled, false, 'Revisar nuevamente habilita solo un plan sin abiertos');
 
   // Una simulación tardía nunca reemplaza la elección más reciente.
   const pendientes = [];

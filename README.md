@@ -62,6 +62,13 @@ Dado el valor irreemplazable de las creaciones y grabaciones, toda la plataforma
 3. **Simular y Mover a Sala de Espera:** El lote se inspecciona en la interfaz web; al aprobarlo, los archivos se reubican atómicamente en la sala de espera estructurada (`~/Descargas/_lucie/`).
 4. **Envío Seguro al Pendrive:** Al conectar la unidad externa vinculada, el usuario selecciona los lotes listos, revisa la simulación de espacio y transfiere el material a la bóveda del pendrive (`LucieSinReglas/`).
 
+Antes de enviar, el proyecto debe estar terminado. Si alguna carpeta seleccionada
+pertenece a un proyecto abierto, la revisión bloquea el envío y ofrece
+«Terminar proyecto para continuar». Cerralo y volvé a Enviar para revisar el
+plan actualizado. Si quedaron archivos en Descargas que no pertenecen al proyecto,
+«Terminar sin mover» los conserva allí; «Mover pendientes y terminar» revisa
+un traslado a la sala de espera del equipo, separado del envío al pendrive.
+
 ---
 
 ## 📦 Estructura del Proyecto

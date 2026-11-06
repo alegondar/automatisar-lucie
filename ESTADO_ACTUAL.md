@@ -1,4 +1,4 @@
-# Estado actual del sistema — 2026-11-05
+# Estado actual del sistema — 2026-11-06
 
 ## Búsqueda del celular con reintentos dentro de un clic (2026-11-05)
 
@@ -48,6 +48,51 @@ Recargar el dashboard con **Ctrl+F5**. El usuario autorizó expresamente el
 commit y push de este lote el 2026-11-05 en `feat/lucie-recibir`, desde
 `6aab692`. Revisión previa: sin novedades remotas ni commits locales anteriores
 pendientes; auditorías AST 0/36 y repo/historial 0/260 correctas.
+
+
+## Cierre de proyectos antes de enviar al pendrive (2026-11-06)
+
+Diagnóstico de solo lectura en SQLite: el proyecto de la captura sigue abierto,
+con cinco archivos registrados como enviados y otros dos clasificados en Descargas.
+La simulación mostrada prepara esos pendientes hacia la sala de espera; no es
+un segundo envío al pendrive. No se verificaron duplicados por hash ni se movió,
+reasignó o cerró material real. Se conserva la elección Terminar sin mover.
+
+La simulación de envío devuelve los proyectos seleccionados que siguen abiertos,
+bloquea confirmar y ofrece Terminar proyecto para continuar por ID. Se reutiliza
+el cierre vigente; con pendientes se exige decidir si conservarlos en Descargas
+o simular/confirmar su traslado a la sala de espera. El resumen distingue esos
+pendientes del material organizado/enviado. Después se vuelve a Enviar para
+revisar el plan actualizado. Los proyectos ajenos a la selección no bloquean.
+La ejecución revalida capítulos abiertos según la ruta real de cada origen,
+rechazando planes anteriores a una reapertura o con etiquetas alteradas.
+Sin migraciones ni reorganización de históricos; hash, colisiones y Deshacer
+conservados. Si falla la consulta de capítulos, la simulación no habilita envío.
+
+Validación Kali/Linux, Python 3.14: **516 pruebas OK, 12 omisiones**, **65.893 s**.
+Omisiones por capacidades nativas Windows ausentes. Guardia y aserciones
+conservadas; suite solo en temporales. Cinco regresiones UI, sintaxis JS,
+AST **0/36**, auditoría repo/historial **0/260** y diff correctos.
+El primer pase específico detectó un mock DOM que no distinguía los selectores
+de botones; se corrigió conservando las aserciones y la suite completa pasó.
+Manifiesto real exclusivamente contado: **1079 / 1079**, estable.
+Bandeja real detenida normalmente con SIGINT antes de las pruebas; no usada
+como fixture. Log externo `/tmp/lucie-cierre-suite.log`. Windows nativo no ejecutado.
+Chromium con perfil temporal y API sintética confirmó aviso, botón de cierre,
+resumen y cierre sin mover a 1440/390 px; capturas fuera de Git. El Playwright
+del sistema carece de driver; se usó Selenium/Chromedriver ya instalado.
+Al finalizar se reabrió Lucie para uso normal sin navegador; raíz y panel.js
+respondieron HTTP 200 y el JS servido contiene el aviso nuevo. Recargar Ctrl+F5.
+El usuario autorizó integrar GitHub y publicar este lote. Se incorporó
+`6228c4b` por fast-forward, con la mejora de búsqueda del celular, conservando
+la corrección local y las notas previas. Resguardo externo y stash conservados;
+solo los archivos de esta tarea y esta sección se incluyen en el commit.
+Revalidación de la integración en Linux: **521 pruebas OK, 12 omisiones**,
+**65.812 s**, cinco regresiones UI, sintaxis JS, AST **0/36**, auditoría
+repo/historial **0/260** y diff correctos. Manifiesto **1079 / 1079**, estable.
+Suite en `/tmp/lucie-integracion-cierre-suite.log`; sin ejecución Windows
+nativa ni nueva recepción física en teléfono. No se modificó master ni se
+sincronizaron bases, configuraciones locales o material.
 
 
 ## Títulos con mayúsculas, acentos y números (2026-10-31)

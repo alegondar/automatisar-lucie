@@ -1194,7 +1194,7 @@ def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
     - Colisiones case-insensitive y conflictos de hash (distinto hash bloquea la copia).
     - Deduplicación por destino y SHA-256; reutilizar contenido en otro destino es válido.
     - Exclusión y aviso de archivos sueltos no multimedia en la raíz del capítulo.
-    - Advertencia si algún capítulo sigue abierto en la sala de espera.
+    - Bloqueo si algún capítulo seleccionado sigue abierto en la sala de espera.
     """
     cfg = config or ConfiguracionBandeja()
     carpeta_raiz = cfg.carpeta_raiz_pendrive
@@ -1260,14 +1260,13 @@ def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
         carpetas_seleccionadas = todas_carpetas
 
     # 3. Consultar capítulos abiertos si db está disponible
-    capitulos_abiertos_nombres = set()
-    if db:
-        try:
-            abiertos = db.listar_capitulos_abiertos()
-            for ab in abiertos:
-                capitulos_abiertos_nombres.add((ab.get("personaje", ""), ab.get("nombre", "")))
-        except Exception:
-            pass
+    seleccionadas = {(c["personaje"], c["carpeta"]) for c in carpetas_seleccionadas}
+    capitulos_abiertos = [
+        {"id": ab["id"], "personaje": ab["personaje"], "nombre": ab["nombre"]}
+        for ab in (db.listar_capitulos_abiertos() if db else [])
+        if (ab.get("personaje"), ab.get("nombre")) in seleccionadas
+    ]
+    capitulos_abiertos_nombres = {(ab["personaje"], ab["nombre"]) for ab in capitulos_abiertos}
 
     archivos_a_copiar = []
     archivos_omitidos = []
@@ -1418,11 +1417,14 @@ def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
         len(archivos_a_copiar) > 0 and
         espacio_suficiente and
         len(archivos_conflictos) == 0 and
-        len(archivos_bloqueados) == 0
+        len(archivos_bloqueados) == 0 and
+        not capitulos_abiertos
     )
 
     motivo_bloqueo = None
-    if len(archivos_a_copiar) == 0:
+    if capitulos_abiertos:
+        motivo_bloqueo = "Hay proyectos abiertos en la selección. Terminalos antes de enviar y volvé a revisar el plan."
+    elif len(archivos_a_copiar) == 0:
         if any(a.get("estado") == "omitido_usuario" for a in archivos_omitidos):
             motivo_bloqueo = "No hay archivos nuevos seleccionados para enviar. Los existentes se conservan."
         elif len(archivos_omitidos) > 0:
@@ -1439,6 +1441,7 @@ def simular_envio_capitulos(capitulos_filtro: Optional[List[str]] = None,
 
     return {
         "puede_enviar": puede_enviar,
+        "capitulos_abiertos": capitulos_abiertos,
         "motivo_bloqueo": motivo_bloqueo,
         "pendrive": {
             "id": info_pendrive["id"],
@@ -1591,6 +1594,17 @@ def _ejecutar_envio_pendrive_interno(simulacion_o_capitulos: Any,
     archivos_a_copiar = simulacion.get("archivos_a_copiar", [])
     if not archivos_a_copiar:
         raise ValueError("No hay archivos para transferir en el plan de envío.")
+
+    # Revalidar el estado vigente: un plan anterior no autoriza enviar un
+    # proyecto reabierto, ni puede sustituirse su selección para eludir el cierre.
+    base_origen = os.path.realpath(cfg.ruta_destino_base)
+    seleccionadas = {
+        tuple(os.path.relpath(os.path.realpath(a["ruta_origen"]), base_origen).split(os.sep)[:2])
+        for a in archivos_a_copiar
+    }
+    if db and any((c["personaje"], c["nombre"]) in seleccionadas
+                  for c in db.listar_capitulos_abiertos()):
+        raise ValueError("Hay proyectos abiertos en la selección. Terminalos antes de enviar y volvé a revisar el plan.")
 
     pendrive_info = simulacion.get("pendrive", {})
     pendrive_montaje = pendrive_info.get("ruta_montaje")

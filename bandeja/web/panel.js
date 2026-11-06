@@ -901,10 +901,13 @@
             <p style="margin-bottom:8px;">Capítulo a terminar: <strong>${escapeHTML(cap.personaje)} / ${escapeHTML(cap.nombre)}</strong></p>
             <div style="background:var(--card-alt); padding:12px; border-radius:6px; margin:12px 0;">
               <div style="margin-bottom:6px;"><strong>${bal.pendientes}</strong> archivo(s) pendiente(s) en Descargas</div>
-              <div> <strong>${bal.movidos}</strong> archivo(s) ya movido(s) al destino</div>
+              <div><strong>${bal.movidos}</strong> archivo(s) ya organizado(s), incluidos los enviados al pendrive</div>
             </div>
             <p style="color:var(--text-muted); font-size:0.85rem;">
-              Al terminar, el capítulo queda cerrado: no se le asignará ningún archivo nuevo y lo que llegue después seguirá el circuito sin capítulo en foco.
+              Estos pendientes siguen en Descargas; no son los archivos ya enviados al pendrive.
+              Si no pertenecen a este proyecto, elegí «Terminar sin mover»: quedan en Descargas.
+              «Mover pendientes y terminar» primero muestra una simulación hacia la sala de espera de este equipo; no los envía al pendrive.
+              Al terminar, el capítulo queda cerrado y deja de recibir archivos nuevos.
             </p>
           `;
         }
@@ -2576,10 +2579,13 @@
         if (sim.motivo_bloqueo || sim.error) {
           alertasHtml += `<p role="status" style="color:var(--danger)">${escapeHTML(sim.motivo_bloqueo || sim.error)}</p>`;
         }
-        if (sim.capitulo_abierto) {
+        if ((sim.capitulos_abiertos || []).length) {
           alertasHtml += `
-            <div style="background:rgba(245, 158, 11, 0.15); border:1px solid #f59e0b; color:#fef3c7; padding:10px 14px; border-radius:6px; margin-bottom:12px; font-weight:500;">
-               <strong>Atención:</strong> Uno o más capítulos seleccionados siguen abiertos en el panel; podrían recibirse más archivos luego.
+            <div role="alert" style="background:rgba(245, 158, 11, 0.15); border:1px solid #f59e0b; color:#fef3c7; padding:10px 14px; border-radius:6px; margin-bottom:12px; font-weight:500;">
+              <strong>Tenés proyectos abiertos. ¿Querés terminarlos antes de enviar?</strong>
+              <p>Para avanzar, terminá cada proyecto seleccionado. Después volvé a Enviar para revisar el plan actualizado. No se envía ningún archivo al terminar.</p>
+              ${(sim.capitulos_abiertos || []).map(c => `<p>${escapeHTML(c.personaje)} / ${escapeHTML(c.nombre)}
+                <button type="button" class="btn-sm" data-terminar-antes-envio="${escapeHTML(c.id)}">Terminar proyecto para continuar</button></p>`).join('')}
             </div>
           `;
         }
@@ -2657,8 +2663,11 @@
         cont.querySelectorAll('[data-envio-archivo]').forEach(boton => {
           boton.addEventListener('click', () => resolverColisionPendrive(boton.dataset.envioArchivo, boton.dataset.envioAccion));
         });
+        cont.querySelectorAll('[data-terminar-antes-envio]').forEach(boton => {
+          boton.addEventListener('click', () => terminarCapituloAntesDeEnviar(Number(boton.dataset.terminarAntesEnvio)));
+        });
 
-        if (sim.puede_enviar && sim.total_archivos_a_enviar > 0) {
+        if (sim.puede_enviar && sim.total_archivos_a_enviar > 0 && !(sim.capitulos_abiertos || []).length) {
           btnConfirm.disabled = false;
           btnConfirm.style.cursor = 'pointer';
           btnConfirm.style.opacity = '1';
@@ -2682,8 +2691,14 @@
       programarSiguienteSondeo(500);
     }
 
+    async function terminarCapituloAntesDeEnviar(id) {
+      if (!(planEnvioActivo?.capitulos_abiertos || []).some(c => c.id === id)) return;
+      cerrarModalPlanEnvio();
+      await abrirModalTerminarCapitulo(id);
+    }
+
     async function confirmarEnvioPendrive() {
-      if (!planEnvioActivo || !planEnvioActivo.puede_enviar) return;
+      if (!planEnvioActivo || !planEnvioActivo.puede_enviar || (planEnvioActivo.capitulos_abiertos || []).length) return;
       const btn = document.getElementById('btn-confirmar-envio-pendrive');
       if (btn) {
         btn.disabled = true;

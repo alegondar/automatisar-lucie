@@ -85,6 +85,14 @@ async function probar() {
   assert.equal(p.elementos['modal-terminar-capitulo'].style.display, 'flex');
   assert.equal(p.estado().cantidad_abiertos, 1);
 
+  // Olvidar cerrar después de enviar: nuevos pendientes nunca se mueven al
+  // elegir terminar sin mover; el resumen distingue los dos pasos.
+  assert.match(p.elementos['modal-terminar-resumen'].innerHTML, /siguen en Descargas/);
+  assert.match(p.elementos['modal-terminar-resumen'].innerHTML, /no son los archivos ya enviados/);
+  await p.contexto.ejecutarTerminarCapitulo(false);
+  assert.equal(p.estado().cantidad_abiertos, 0);
+  assert(!p.llamadas.some(c => ['/api/simular-mover', '/api/mover-lote', '/api/pendrive/envio'].includes(c.url)));
+
   // Una selección vacía o una simulación fallida no pierde el ID ni cierra el modal.
   p = panel({pendientes: 1, lotes: [lote('a')]});
   await p.contexto.abrirModalTerminarCapitulo();
