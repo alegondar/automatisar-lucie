@@ -6328,6 +6328,42 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
             self.assertTrue(os.path.isfile(self.clip_path))
             self.assertFalse(os.path.isfile(dest_esperado))
 
+    def test_cierre_envio_revertido_api_exige_confirmacion_y_no_revisa_ni_mueve_exports(self):
+        from bandeja.edicion import crear_sesion, copiar_export_a_videos_completos, registrar_evento_manifiesto_edicion
+        sesion = crear_sesion(self.db, ["lucie/capitulo_01/toma_01.mp4"], "lucie", "capitulo_01")
+        export = os.path.join(self.tmp_dir, "final.mp4")
+        with open(export, "xb") as archivo:
+            archivo.write(b"export conservado")
+        final = copiar_export_a_videos_completos(export, sesion, self.pendrive_dir, self.db,
+                                               "LucieSinReglas", self.bitacora)["destino"]
+        relativa = "videos sin editar/lucie/capitulo_01/toma_01.mp4"
+        resguardo = os.path.join(self.raiz_pen, "_revertidos", "env_otro_host", *relativa.split("/"))
+        os.makedirs(os.path.dirname(resguardo))
+        os.rename(self.clip_path, resguardo)
+        registrar_evento_manifiesto_edicion(self.raiz_pen, {"estado": "envio_revertido", "id_envio": "env_otro_host",
+                                                           "ruta_relativa": relativa, "sha256": calcular_sha256(resguardo)})
+        pen = {"conectado": True, "punto_montaje": self.pendrive_dir}
+        with patch("bandeja.servidor.detectar_pendrive", return_value=pen), \
+                patch.object(self.servidor.RequestHandlerClass, "_revisar_export_sesion", side_effect=AssertionError("No reenviar exports")):
+            for confirmacion in (None, False, "true"):
+                status, datos = self._post("/api/edicion/terminar", {"sesion_id": sesion["id"], "confirmar_cierre_revertido": confirmacion})
+                self.assertEqual(status, 200)
+                self.assertFalse(datos["exito"])
+            status, _ = self._post("/api/edicion/terminar", {"sesion_id": sesion["id"], "confirmar_cierre_revertido": True}, csrf="incorrecto")
+            self.assertEqual(status, 403)
+            status, datos = self._post("/api/edicion/terminar", {"sesion_id": sesion["id"], "confirmar_cierre_revertido": True})
+            self.assertEqual(status, 200)
+            self.assertTrue(datos["exito"], datos)
+            self.assertTrue(datos["sin_traslado"])
+            self.assertNotIn("export_final", datos)
+            _, secciones, _ = self._get("/api/edicion/secciones")
+            self.assertEqual(secciones["en_edicion"], [])
+            _, deshacer = self._post("/api/edicion/deshacer-terminar", {"sesion_id": sesion["id"]})
+            self.assertTrue(deshacer["sin_traslado"])
+        self.assertEqual(calcular_sha256(final), calcular_sha256(export))
+        self.assertTrue(os.path.isfile(resguardo))
+        self.assertFalse(os.path.exists(self.clip_path))
+
     def test_terminar_edicion_copia_export_registrado_y_muestra_destino(self):
         from bandeja.edicion import crear_sesion
         capcut = os.path.join(self.tmp_dir, "CapCut")

@@ -20,6 +20,7 @@ async function probar() {
   let pendientes = [];
   const confirmaciones = [];
   const ctx = vm.createContext({
+    revisionesCrudosEdicion: new Map(),
     document: {getElementById: () => cont, createElement: elemento},
     confirm: mensaje => {confirmaciones.push(mensaje); return true;}, alert: mensaje => { throw Error(mensaje); },
     escapeHTML: s => String(s).replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
@@ -54,6 +55,44 @@ async function probar() {
   assert.ok(avisos.at(-1).includes('siguen en Sin editar'));
   assert.ok(avisos.at(-1).includes('automáticamente'));
   assert.ok(!avisos.at(-1).includes('Traslado completado'));
+  const sesionRevertida = {id: 62, nombre: '<Vecina>', clips: ['roli/vecina/uno.mp4'], video_completo_ruta: 'Publicados/Vecina.mp4',
+    revision_crudos: {estado: 'envio_revertido', mensaje: 'Envío revertido <img>',
+      archivos: [{clip: 'roli/vecina/uno.mp4', resguardo: '_revertidos/env/uno.mp4'}]}};
+  const destinoSesion = {value: '', options: [], innerHTML: ''};
+  ctx.document.getElementById = id => id === 'sesion-destino-sumar' ? destinoSesion : cont;
+  vm.runInContext(extraer('renderizarSesionesEnEdicion', 'sumarVideosSesionElegida'), ctx);
+  ctx.renderizarSesionesEnEdicion([sesionRevertida]);
+  assert(cont.innerHTML.includes('ENVÍO REVERTIDO · CIERRE PENDIENTE'));
+  assert(cont.innerHTML.includes('Cerrar sesión sin mover archivos'));
+  assert(cont.innerHTML.includes('&lt;img&gt;'));
+  ctx.confirm = () => false;
+  const antesCancelar = llamadas.length;
+  await ctx.terminarEdicionSesion(62);
+  assert.equal(llamadas.length, antesCancelar, 'Cancelar el cierre no debe ejecutar solicitudes.');
+  ctx.confirm = mensaje => {confirmaciones.push(mensaje); return true;};
+  const fetchOriginal = ctx.fetchConCsrf;
+  ctx.fetchConCsrf = async (ruta, datos) => {
+    llamadas.push({ruta, datos});
+    return {json: async () => ({exito: true, movidos: [], sin_traslado: true, mensaje: 'Sesión cerrada sin mover archivos.'})};
+  };
+  await ctx.terminarEdicionSesion(62);
+  assert(confirmaciones.at(-1).includes('_revertidos/env/uno.mp4'));
+  assert.deepEqual(JSON.parse(llamadas.at(-1).datos.body), {sesion_id: 62, confirmar_cierre_revertido: true});
+  assert(avisos.at(-1).includes('sin mover archivos'));
+  assert(!avisos.at(-1).includes('organizados en'));
+  vm.runInContext(extraer('deshacerTerminarEdicion', 'cancelarSesionEdicion'), ctx);
+  await ctx.deshacerTerminarEdicion(62);
+  assert(avisos.at(-1).includes('archivos conservan su ubicación'));
+  ctx.renderizarSesionesEnEdicion([{...sesionRevertida, revision_crudos: {estado: 'revisar', mensaje: 'Faltan clips', archivos: [{origen: '<ruta>', estado: 'faltante'}]}}]);
+  assert(cont.innerHTML.includes('REVISAR ARCHIVOS'));
+  assert(cont.innerHTML.includes('disabled'));
+  assert(cont.innerHTML.includes('&lt;ruta&gt;'));
+  ctx.renderizarSesionesEnEdicion([{...sesionRevertida, revision_crudos: {estado: 'cierre_pendiente', mensaje: 'Ya organizados'}}]);
+  assert(cont.innerHTML.includes('Registrar cierre'));
+  ctx.renderizarSesionesEnEdicion([]);
+  assert.equal(ctx.revisionesCrudosEdicion.size, 0);
+  ctx.fetchConCsrf = fetchOriginal;
+  ctx.document.getElementById = () => cont;
   const historico = {id: 7, nombre: '<Cafe>', archivos: [{origen: 'sin editar/clip.mp4', destino: 'ya editados/clip.mp4', resguardo: '_enviados/edicion/clip.mp4', automatico: false}]};
   const antes = llamadas.length;
   ctx.renderizarTrasladosPendientes([historico]);

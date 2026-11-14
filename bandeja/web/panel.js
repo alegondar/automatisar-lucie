@@ -3646,6 +3646,7 @@
     let clipsParaEditar = [];
     let clipsSeleccionadosParaEditar = new Set();
     let sesionModalClips = [];
+    const revisionesCrudosEdicion = new Map();
 
     function mostrarAvisoEdicion(mensajeHtml, accionesHtml = '') {
       const aviso = document.getElementById('aviso-edicion');
@@ -3984,6 +3985,8 @@
     }
 
     function renderizarSesionesEnEdicion(sesiones) {
+      revisionesCrudosEdicion.clear();
+      (sesiones || []).forEach(s => revisionesCrudosEdicion.set(s.id, s.revision_crudos || {}));
       const destino = document.getElementById('sesion-destino-sumar');
       if (destino) {
         const anterior = destino.value;
@@ -4003,20 +4006,27 @@
       let html = '<div style="display:flex; flex-direction:column; gap:12px; margin-top:8px;">';
       sesiones.forEach(s => {
         const clips = s.clips || [];
+        const revision = s.revision_crudos || {};
+        const revertido = revision.estado === 'envio_revertido';
+        const revisar = ['revisar', 'no_disponible'].includes(revision.estado);
+        const cierrePendiente = revision.estado === 'cierre_pendiente';
+        const etiqueta = revertido ? 'ENVÍO REVERTIDO · CIERRE PENDIENTE' : revisar ? 'REVISAR ARCHIVOS' : cierrePendiente ? 'CIERRE PENDIENTE DE REGISTRAR' : s.video_completo_ruta ? 'EXPORT ENVIADO · CRUDOS PENDIENTES' : 'EN EDICIÓN';
         html += `
           <div style="background:var(--card-alt); border:1px solid var(--border); border-radius:6px; padding:14px;">
             <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
               <div>
-                <span class="badge" style="background:#0284c7; color:#fff; font-weight:600; margin-right:8px;">${s.video_completo_ruta ? 'EXPORT ENVIADO · CRUDOS PENDIENTES' : 'EN EDICIÓN'}</span>
+                <span class="badge" style="background:#0284c7; color:#fff; font-weight:600; margin-right:8px;">${etiqueta}</span>
                 <strong style="font-size:1.05rem;">${escapeHTML(s.nombre)}</strong>
                 <span style="color:var(--text-muted); font-size:0.85rem; margin-left:8px;">(${escapeHTML(s.personaje)} / ${escapeHTML(s.capitulo)})</span>
               </div>
               <div style="display:flex; gap:8px;">
                 ${!s.video_completo_ruta ? `<button class="btn-sm btn-secundario" onclick="sumarVideosSesion(${s.id})">Sumar video</button>` : ''}
-                <button class="btn-sm" onclick="terminarEdicionSesion(${s.id})" style="background:#10b981; color:#000; font-weight:600; padding:6px 14px;">Terminé de editar</button>
+                <button class="btn-sm" onclick="terminarEdicionSesion(${s.id})" ${revisar || (revertido && !s.video_completo_ruta) ? 'disabled' : ''} style="background:#10b981; color:#000; font-weight:600; padding:6px 14px;">${revertido ? 'Cerrar sesión sin mover archivos' : cierrePendiente ? 'Registrar cierre' : 'Terminé de editar'}</button>
                 ${!s.video_completo_ruta ? `<button class="btn-sm btn-secundario" onclick="cancelarSesionEdicion(${s.id})" style="color:var(--danger);">Cancelar</button>` : ''}
               </div>
             </div>
+            ${revision.mensaje ? `<p style="margin:10px 0 0; color:var(--text-muted);">${escapeHTML(revision.mensaje)}${revertido && !s.video_completo_ruta ? ' Sin video final registrado: cancelá la sesión o revisá el envío original.' : ''}</p>` : ''}
+            ${revisar ? `<ul>${(revision.archivos || []).filter(a => !['disponible', 'organizado'].includes(a.estado)).map(a => `<li>${escapeHTML(a.origen)}${a.resguardo ? ` · Resguardo: ${escapeHTML(a.resguardo)}` : ''}</li>`).join('')}</ul>` : ''}
             <div style="margin-top:10px; font-size:0.85rem; color:var(--text-muted);">
               <strong>Clips agrupados (${clips.length}):</strong>
               <div style="margin-top:4px; display:flex; flex-wrap:wrap; gap:6px;">
@@ -4060,12 +4070,17 @@
     }
 
     async function terminarEdicionSesion(sesionId, confirmacionPrevia = false) {
-      if (!confirmacionPrevia && !confirm("¿Confirmás que terminaste de editar? Los clips quedarán organizados en 'videos ya editados'. Si CapCut los mantiene abiertos, se copiarán de forma segura y el retiro de los originales se completará en segundo plano (no es necesario cerrar CapCut). Se revisará el video final exportado para copiarlo automáticamente a 'videos completos/videos sin publicar'. Los exports originales de CapCut se conservan.")) return;
+      const revision = revisionesCrudosEdicion.get(sesionId) || {};
+      const cierreRevertido = revision.estado === 'envio_revertido';
+      if (cierreRevertido) {
+        const rutas = (revision.archivos || []).map(a => `${a.clip}\nResguardo: ${a.resguardo}`).join('\n\n');
+        if (!confirm(`¿Cerrar esta sesión sin mover archivos?\nSe deshizo el envío de sus clips al pendrive. Se verificará la integridad de cada resguardo y se registrará únicamente el cierre. El video final y estos originales conservarán su ubicación.\n\n${rutas}\n\nPodés deshacer el cierre.`)) return;
+      } else if (!confirmacionPrevia && !confirm("¿Confirmás que terminaste de editar? Los clips quedarán organizados en 'videos ya editados'. Si CapCut los mantiene abiertos, se copiarán de forma segura y el retiro de los originales se completará en segundo plano (no es necesario cerrar CapCut). Se revisará el video final exportado para copiarlo automáticamente a 'videos completos/videos sin publicar'. Los exports originales de CapCut se conservan.")) return;
 
       try {
         const res = await fetchConCsrf('/api/edicion/terminar', {
           method: 'POST',
-          body: JSON.stringify({ sesion_id: sesionId })
+          body: JSON.stringify({ sesion_id: sesionId, ...(cierreRevertido ? {confirmar_cierre_revertido: true} : {}) })
         });
         const data = await res.json();
         if (data.exito) {
@@ -4073,7 +4088,7 @@
           const pendientes = (data.retiro_originales?.pendientes || []).length;
           const motivos = [...new Set((data.retiro_originales?.pendientes || []).map(p => p.error).filter(Boolean))].join(' ');
           mostrarAvisoEdicion(
-            `${movidosCount} clip(s) organizados en 'videos ya editados'. ${pendientes ? `${pendientes} original(es) siguen en Sin editar en uso por CapCut; se retirarán automáticamente en segundo plano (no es necesario cerrar CapCut).` : 'Traslado completado.'} ${escapeHTML(data.export_final?.mensaje || '')} ${data.export_final?.destino ? escapeHTML(data.export_final.destino) : ''}`,
+            data.sin_traslado ? escapeHTML(data.mensaje) : `${movidosCount} clip(s) organizados en 'videos ya editados'. ${pendientes ? `${pendientes} original(es) siguen en Sin editar en uso por CapCut; se retirarán automáticamente en segundo plano (no es necesario cerrar CapCut).` : 'Traslado completado.'} ${escapeHTML(data.export_final?.mensaje || '')} ${data.export_final?.destino ? escapeHTML(data.export_final.destino) : ''}`,
             `<button class="btn-sm" onclick="deshacerTerminarEdicion(${sesionId})" style="background:#f59e0b; color:#000; font-weight:600;">Deshacer</button>`
           );
           await cargarVistaEdicion();
@@ -4098,7 +4113,7 @@
         });
         const data = await res.json();
         if (data.exito) {
-          mostrarAvisoEdicion("⏪ Deshacer completado: clips devueltos a 'videos sin editar'.");
+          mostrarAvisoEdicion(data.sin_traslado ? 'Cierre deshecho. Los archivos conservan su ubicación.' : "⏪ Deshacer completado: clips devueltos a 'videos sin editar'.");
           await cargarVistaEdicion();
         } else {
           alert("Error al deshacer: " + (data.error || "Ruta de retorno ocupada"));

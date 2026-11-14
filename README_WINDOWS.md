@@ -166,6 +166,16 @@ El proyecto debe exportarse desde CapCut; terminar la sesión del panel no gener
 el video. Si hay varios candidatos, elegir en Videos completados. El modo manual
 sigue esperando el envío explícito.
 
+Si se deshizo el envío de los clips al pendrive desde este u otro equipo, la
+sesión muestra **Envío revertido · Cierre pendiente**. Con el video final ya
+registrado, **Cerrar sesión sin mover archivos** permite revisar las rutas y
+confirmar el cierre después de verificar su integridad. No restaura ni traslada los clips
+de `_revertidos`, ni vuelve a copiar el video final. **Deshacer** revierte solo
+ese cierre. Los faltantes sin una reversión comprobable se muestran como
+**Revisar archivos** y requieren revisar las rutas; no se dan por terminados.
+Si los clips ya se organizaron y se interrumpió el guardado del cierre, aparece
+**Registrar cierre**, que retoma sus rutas registradas sin duplicar los traslados.
+
 Para enviarlos por Wi-Fi, abrir **Sin publicar · Enviar al celular**, seleccionar
 los archivos y elegir **Lucie Recibir** o **LocalSend** en el paso del celular.
 Abrir esa misma app en el teléfono, buscarlo, revisar y confirmar. Lucie es la

@@ -304,6 +304,8 @@ def registrar_bitacora_edicion(
     os.makedirs(os.path.dirname(os.path.abspath(ruta_bitacora)), exist_ok=True)
     with open(ruta_bitacora, "a", encoding="utf-8", newline="\n") as f:
         f.write(json.dumps(evento, ensure_ascii=False) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
 
 
 # =========================================================================
@@ -313,6 +315,81 @@ def registrar_bitacora_edicion(
 def obtener_sesiones_con_crudos_pendientes(db):
     return [s for s in db.obtener_sesiones_edicion()
             if s["estado"] == "en_edicion" or (s["estado"] == "completado" and not s.get("fecha_cierre"))]
+
+
+def _revision_crudos_sesion(raiz, sesion, verificar_hash=False):
+    """Inspección sin escrituras; un faltante nunca prueba que terminó la edición."""
+    ruta_manifiesto = os.path.join(raiz, ".lucie", NOMBRE_MANIFIESTO_PENDRIVE)
+    ultimos = {}
+    cierre = None
+    if not os.path.isdir(raiz) or not _sin_enlaces(ruta_manifiesto):
+        return {"estado": "no_disponible", "mensaje": "No se puede verificar el pendrive o su manifiesto.", "archivos": []}
+    try:
+        with open(ruta_manifiesto, encoding="utf-8") as archivo:
+            for linea in archivo:
+                try:
+                    evento = json.loads(linea)
+                except ValueError:
+                    continue
+                if not isinstance(evento, dict):
+                    continue
+                if evento.get("estado") in ("enviado", "envio_revertido"):
+                    relativa = evento.get("ruta_relativa")
+                    if isinstance(relativa, str):
+                        ultimos[relativa] = evento
+                if evento.get("sesion_id") == sesion["identificador"]:
+                    if evento.get("tipo_evento") == "cierre_edicion_envio_revertido":
+                        cierre = evento
+                    elif evento.get("tipo_evento") == "deshacer_cierre_edicion_envio_revertido":
+                        cierre = None
+    except OSError:
+        return {"estado": "no_disponible", "mensaje": "No se pudo leer el manifiesto. Reconectá el pendrive y actualizá las sesiones.", "archivos": []}
+
+    destinos = _destinos_editados_sesion(raiz, sesion["identificador"])
+    archivos = []
+    for clip in sesion.get("clips", []):
+        base, origen = _origen_clip(raiz, clip)
+        item = {"clip": clip, "origen": origen, "estado": "faltante"}
+        destino = destinos.get(clip)
+        if not esta_confinado_en_raiz(origen, base) or not _sin_enlaces(origen):
+            item["estado"] = "ruta_no_segura"
+        elif os.path.isfile(origen):
+            item["estado"] = "disponible"
+        elif destino and os.path.isfile(destino):
+            item["estado"] = "organizado"
+        else:
+            relativa = os.path.relpath(origen, raiz).replace(os.sep, "/")
+            evento = ultimos.get(relativa, {})
+            envio = evento.get("id_envio", "")
+            sha = evento.get("sha256", "")
+            if (evento.get("estado") == "envio_revertido"
+                    and isinstance(envio, str) and re.fullmatch(r"[\w-]{1,120}", envio)
+                    and isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{64}", sha)):
+                resguardo = os.path.join(raiz, "_revertidos", envio, relativa.replace("/", os.sep))
+                if (esta_confinado_en_raiz(resguardo, os.path.join(raiz, "_revertidos"))
+                        and _sin_enlaces(resguardo) and os.path.isfile(resguardo)):
+                    item.update(estado="envio_revertido", resguardo=resguardo, sha256=sha)
+                    if verificar_hash:
+                        try:
+                            if calcular_sha256(resguardo) != sha:
+                                item["estado"] = "resguardo_alterado"
+                        except OSError:
+                            item["estado"] = "resguardo_no_disponible"
+        archivos.append(item)
+
+    estados = {a["estado"] for a in archivos}
+    if estados == {"envio_revertido"}:
+        estado = "envio_revertido"
+        mensaje = "Se deshizo el envío de estos clips al pendrive. Sus copias están en _revertidos; no hay crudos para trasladar a Ya editados."
+    elif estados == {"organizado"}:
+        estado = "cierre_pendiente"
+        mensaje = "Los clips ya están organizados. Falta registrar el cierre; podés reintentar Terminé de editar."
+    elif estados <= {"disponible", "organizado"} and estados:
+        estado, mensaje = "disponibles", ""
+    else:
+        estado = "revisar"
+        mensaje = "Hay clips ausentes o un envío parcialmente revertido. Revisá las rutas; no se cerrará la sesión ni se moverán archivos mientras haya faltantes."
+    return {"estado": estado, "mensaje": mensaje, "archivos": archivos, "cierre_revertido": cierre}
 
 
 def obtener_secciones_edicion(
@@ -342,6 +419,8 @@ def obtener_secciones_edicion(
             capitulos_por_ruta[os.path.normcase(os.path.abspath(ruta))] = sesion["capitulo"]
 
     sesiones_activas = obtener_sesiones_con_crudos_pendientes(db)
+    for sesion in sesiones_activas:
+        sesion["revision_crudos"] = _revision_crudos_sesion(pendrive_raiz, sesion)
     clips_finalizados = set()
     for s in db.obtener_sesiones_edicion():
         if s["estado"] in ("editado", "completado") and s.get("fecha_cierre"):
@@ -603,6 +682,7 @@ def finalizar_edicion_crudos(
     pendrive_montaje: str,
     carpeta_raiz: str = "LucieSinReglas",
     ruta_bitacora: str = "bitacora_bandeja.jsonl",
+    confirmar_cierre_revertido: bool = False,
 ) -> Dict[str, Any]:
     """
     Mueve los clips crudos de la sesión de 'videos sin editar' a 'videos ya editados'
@@ -616,6 +696,35 @@ def finalizar_edicion_crudos(
     pendrive_raiz = os.path.join(pendrive_montaje, carpeta_raiz)
     dir_sin_editar = os.path.join(pendrive_raiz, "videos sin editar")
     dir_ya_editados = os.path.join(pendrive_raiz, "videos ya editados")
+
+    revision = _revision_crudos_sesion(pendrive_raiz, sesion, verificar_hash=confirmar_cierre_revertido)
+    if confirmar_cierre_revertido:
+        final = sesion.get("video_completo_ruta") or ""
+        if (revision["estado"] != "envio_revertido" or not final
+                or not esta_confinado_en_raiz(final, os.path.join(pendrive_raiz, "videos completos"))
+                or not _sin_enlaces(final) or not os.path.isfile(final)
+                or sesion["estado"] not in ("en_edicion", "completado")):
+            return {"exito": False, "movidos": [], "conflictos": [{"clip": "sesión", "error":
+                    "Cambió la situación de los archivos o no se pudo verificar su integridad. Actualizá las sesiones y revisá el estado; no se movió ningún archivo."}],
+                    "omisiones": [], "fase": "validacion_previa"}
+        if sesion.get("fecha_cierre"):
+            return {"exito": True, "movidos": [], "sin_traslado": True, "mensaje": "La sesión ya estaba cerrada."}
+        fecha = datetime.datetime.now().isoformat()
+        evento = {"id_operacion": str(uuid.uuid4()), "fecha": fecha,
+                  "tipo_operacion": "cerrar_edicion_envio_revertido", "sesion_id": sesion_id,
+                  "sesion_identificador": sesion["identificador"], "archivos": revision["archivos"],
+                  "revision_export_anterior": sesion.get("revision_export_solicitada", 0), "sin_traslado": True}
+        registrar_bitacora_edicion(ruta_bitacora, evento)
+        registrar_evento_manifiesto_edicion(pendrive_raiz, {**evento, "tipo_evento": "cierre_edicion_envio_revertido",
+                                                          "sesion_id": sesion["identificador"]})
+        db.actualizar_sesion_edicion(sesion_id, estado="completado", fecha_cierre=fecha)
+        return {"exito": True, "sesion_id": sesion_id, "id_operacion": evento["id_operacion"],
+                "movidos": [], "sin_traslado": True, "mensaje":
+                "Sesión cerrada sin mover archivos. Los clips permanecen en _revertidos y el video final conserva su ubicación."}
+    if revision["estado"] == "envio_revertido":
+        return {"exito": False, "sesion_id": sesion_id, "id_operacion": None, "movidos": [],
+                "conflictos": [{"clip": a["clip"], "error": "Envío revertido. Actualizá las sesiones y usá Cerrar sesión sin mover archivos."}
+                               for a in revision["archivos"]], "omisiones": [], "fase": "validacion_previa"}
 
     clips = sesion.get("clips", [])
     destinos_registrados, preservados = _destinos_editados_sesion(pendrive_raiz, sesion["identificador"], incluir_preservados=True)
@@ -787,6 +896,19 @@ def deshacer_finalizar_edicion(
     pendrive_raiz = os.path.join(pendrive_montaje, carpeta_raiz)
     dir_sin_editar = os.path.join(pendrive_raiz, "videos sin editar")
     dir_ya_editados = os.path.join(pendrive_raiz, "videos ya editados")
+
+    revision = _revision_crudos_sesion(pendrive_raiz, sesion)
+    cierre = revision.get("cierre_revertido")
+    if cierre and cierre.get("fecha") == sesion.get("fecha_cierre"):
+        evento = {"id_operacion": str(uuid.uuid4()), "fecha": datetime.datetime.now().isoformat(),
+                  "tipo_operacion": "deshacer_cierre_edicion_envio_revertido", "sesion_id": sesion_id,
+                  "sin_traslado": True, "id_operacion_revertida": cierre["id_operacion"]}
+        registrar_bitacora_edicion(ruta_bitacora, evento)
+        registrar_evento_manifiesto_edicion(pendrive_raiz, {**evento, "tipo_evento": "deshacer_cierre_edicion_envio_revertido",
+                                                          "sesion_id": sesion["identificador"]})
+        db.actualizar_sesion_edicion(sesion_id, fecha_cierre=None,
+                                    revision_export_solicitada=cierre.get("revision_export_anterior", 0))
+        return {"exito": True, "sesion_id": sesion_id, "revertidos": [], "conflictos": [], "sin_traslado": True}
 
     clips = sesion.get("clips", [])
     destinos_registrados, originales_preservados = _destinos_editados_sesion(pendrive_raiz, sesion["identificador"], incluir_preservados=True)

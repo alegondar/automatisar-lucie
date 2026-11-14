@@ -39,6 +39,7 @@ from bandeja.edicion import (
     vincular_nuevo_export,
     procesar_exports_pendientes_copia,
     obtener_videos_completados,
+    registrar_evento_manifiesto_edicion,
 )
 
 
@@ -472,6 +473,118 @@ class TestEdicionCapCut(unittest.TestCase):
         self.assertEqual(obtener_secciones_edicion(self.pendrive_montaje, self.db)["en_edicion"], [])
         self.assertTrue(deshacer_finalizar_edicion(*args)["exito"])
         self.assertEqual(obtener_secciones_edicion(self.pendrive_montaje, self.db)["en_edicion"][0]["id"], sesion["id"])
+
+    def _sesion_con_envio_revertido(self):
+        clips = [f"roli/vecina/clip{n}.mp4" for n in (1, 2)]
+        origenes = [self._crear_clip_crudo("roli", "vecina", f"clip{n}.mp4", f"original {n}".encode()) for n in (1, 2)]
+        sesion = crear_sesion(self.db, clips, "roli", "vecina", "Magui vecina")
+        export = os.path.join(self.tmp_dir, f"final_{sesion['id']}.mp4")
+        with open(export, "xb") as archivo:
+            archivo.write(b"video completo")
+        final = copiar_export_a_videos_completos(export, sesion, self.pendrive_montaje, self.db,
+                                               self.carpeta_raiz, self.bitacora_path)["destino"]
+        resguardos = []
+        for origen in origenes:
+            relativa = os.path.relpath(origen, self.pendrive_raiz).replace(os.sep, "/")
+            evento = {"id_envio": "env_otro_equipo", "ruta_relativa": relativa, "sha256": calcular_sha256(origen)}
+            registrar_evento_manifiesto_edicion(self.pendrive_raiz, {**evento, "estado": "enviado"})
+            resguardo = os.path.join(self.pendrive_raiz, "_revertidos", "env_otro_equipo", *relativa.split("/"))
+            os.makedirs(os.path.dirname(resguardo), exist_ok=True)
+            os.rename(origen, resguardo)
+            registrar_evento_manifiesto_edicion(self.pendrive_raiz, {**evento, "estado": "envio_revertido"})
+            resguardos.append(resguardo)
+        return sesion, origenes, resguardos, final
+
+    def test_envio_revertido_se_lista_sin_escribir_y_exige_cierre_explicito_reversible(self):
+        sesion, origenes, resguardos, final = self._sesion_con_envio_revertido()
+        archivos = resguardos + [final]
+        hashes = [calcular_sha256(p) for p in archivos]
+        manifiesto = os.path.join(self.pendrive_raiz, ".lucie", "manifiesto.jsonl")
+        with open(manifiesto, "rb") as archivo:
+            antes = archivo.read()
+        revision = obtener_secciones_edicion(self.pendrive_montaje, self.db)["en_edicion"][0]["revision_crudos"]
+        self.assertEqual(revision["estado"], "envio_revertido")
+        self.assertEqual([a["resguardo"] for a in revision["archivos"]], resguardos)
+        args = (self.db, sesion["id"], self.pendrive_montaje, self.carpeta_raiz, self.bitacora_path)
+        resultado = finalizar_edicion_crudos(*args)
+        self.assertFalse(resultado["exito"], "El botón anterior no debe cerrar sin una revisión específica.")
+        self.assertEqual(resultado["movidos"], [])
+        self.assertIsNone(self.db.obtener_sesion_por_id(sesion["id"])["fecha_cierre"])
+        with open(manifiesto, "rb") as archivo:
+            self.assertEqual(archivo.read(), antes)
+        with patch("bandeja.edicion.os.rename", side_effect=AssertionError("No debe mover archivos")):
+            resultado = finalizar_edicion_crudos(*args, confirmar_cierre_revertido=True)
+            self.assertTrue(resultado["exito"], resultado)
+            self.assertTrue(resultado["sin_traslado"])
+            self.assertEqual(obtener_secciones_edicion(self.pendrive_montaje, self.db)["en_edicion"], [])
+            self.assertTrue(finalizar_edicion_crudos(*args, confirmar_cierre_revertido=True)["exito"])
+            # El cierre persiste después de abrir otra conexión, sin sincronizar bases.
+            db_reabierta = GestorBaseDatosBandeja(self.db_path)
+            self.assertIsNotNone(db_reabierta.obtener_sesion_por_id(sesion["id"])["fecha_cierre"])
+            self.assertTrue(deshacer_finalizar_edicion(*args)["sin_traslado"])
+        self.assertEqual([calcular_sha256(p) for p in archivos], hashes)
+        self.assertTrue(all(not os.path.exists(p) for p in origenes))
+        self.assertEqual(self.db.obtener_sesion_por_id(sesion["id"])["video_completo_ruta"], final)
+        self.assertEqual(self.db.obtener_sesion_por_id(sesion["id"])["revision_export_solicitada"], 0)
+        self.assertEqual(len(obtener_secciones_edicion(self.pendrive_montaje, self.db)["en_edicion"]), 1)
+
+    def test_cierre_sin_traslado_revalida_corrupcion_desconexion_reenvio_y_lote_parcial(self):
+        for caso in ("hash", "desconexion", "reenvio", "parcial", "sin_final", "sin_reversion", "ruta_insegura"):
+            with self.subTest(caso=caso):
+                sesion, origenes, resguardos, final = self._sesion_con_envio_revertido()
+                # Aislar cada caso sin borrar ni sobrescribir sus archivos.
+                args = (self.db, sesion["id"], self.pendrive_montaje, self.carpeta_raiz, self.bitacora_path)
+                if caso == "hash":
+                    os.rename(resguardos[0], resguardos[0] + ".original")
+                    with open(resguardos[0], "xb") as archivo:
+                        archivo.write(b"alterado")
+                elif caso == "desconexion":
+                    os.rename(self.pendrive_montaje, self.pendrive_montaje + "_desconectado")
+                elif caso == "parcial":
+                    os.rename(resguardos[0], origenes[0])
+                elif caso == "sin_final":
+                    os.rename(final, final + ".conservado")
+                elif caso == "ruta_insegura":
+                    with patch("bandeja.edicion._sin_enlaces", return_value=False):
+                        self.assertFalse(finalizar_edicion_crudos(*args, confirmar_cierre_revertido=True)["exito"])
+                    continue
+                elif caso in ("reenvio", "sin_reversion"):
+                    manifiesto = os.path.join(self.pendrive_raiz, ".lucie", "manifiesto.jsonl")
+                    if caso == "sin_reversion":
+                        os.rename(manifiesto, manifiesto + ".anterior")
+                    else:
+                        registrar_evento_manifiesto_edicion(self.pendrive_raiz, {
+                            "estado": "enviado", "id_envio": "env_nuevo", "sha256": calcular_sha256(resguardos[0]),
+                            "ruta_relativa": os.path.relpath(origenes[0], self.pendrive_raiz).replace(os.sep, "/")})
+                with patch("bandeja.edicion.os.rename", side_effect=AssertionError("No debe mover archivos")):
+                    resultado = finalizar_edicion_crudos(*args, confirmar_cierre_revertido=True)
+                self.assertFalse(resultado["exito"], resultado)
+                self.assertEqual(resultado["movidos"], [])
+                self.assertIsNone(self.db.obtener_sesion_por_id(sesion["id"])["fecha_cierre"])
+                if caso == "desconexion":
+                    self.assertFalse(os.path.exists(self.pendrive_montaje), "No recrear una unidad desconectada.")
+                    os.rename(self.pendrive_montaje + "_desconectado", self.pendrive_montaje)
+                # Cada subcaso conserva su árbol y emplea rutas nuevas en el siguiente.
+                os.rename(self.pendrive_raiz, self.pendrive_raiz + "_" + caso)
+                os.makedirs(self.pendrive_raiz)
+
+    def test_cierre_interrumpido_despues_del_traslado_se_recupera_sin_mover_otra_vez(self):
+        self._crear_clip_crudo("lucie", "cafe", "clip.mp4")
+        sesion = crear_sesion(self.db, ["lucie/cafe/clip.mp4"], "lucie", "cafe", "Café")
+        args = (self.db, sesion["id"], self.pendrive_montaje, self.carpeta_raiz, self.bitacora_path)
+        with patch.object(self.db, "actualizar_sesion_edicion", side_effect=OSError("interrupción antes de guardar cierre")):
+            with self.assertRaisesRegex(OSError, "interrupción"):
+                finalizar_edicion_crudos(*args)
+        datos = obtener_secciones_edicion(self.pendrive_montaje, self.db)
+        self.assertEqual(datos["en_edicion"][0]["revision_crudos"]["estado"], "cierre_pendiente")
+        self.reloj.datetime.now.return_value = datetime.datetime(2027, 1, 1)
+        with patch("bandeja.edicion.os.rename", side_effect=AssertionError("Usar el destino registrado")):
+            resultado = finalizar_edicion_crudos(*args)
+        self.assertTrue(resultado["exito"], resultado)
+        self.assertEqual(resultado["movidos"], [])
+        self.assertEqual(obtener_secciones_edicion(self.pendrive_montaje, self.db)["en_edicion"], [])
+        self.assertTrue(deshacer_finalizar_edicion(*args)["exito"])
+        self.assertTrue(os.path.isfile(os.path.join(self.pendrive_raiz, "videos sin editar", "lucie", "cafe", "clip.mp4")))
 
     def test_nombre_ya_editado_separado_del_export_completo(self):
         for dia, semana in ((1, 1), (7, 1), (8, 2), (14, 2), (15, 3), (28, 4), (31, 5)):

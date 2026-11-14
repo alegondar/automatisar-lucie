@@ -1472,8 +1472,9 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         ruta_bit = getattr(self.movimientos, "ruta_bitacora", "bitacora_bandeja.jsonl") if self.movimientos else "bitacora_bandeja.jsonl"
 
         try:
-            res = finalizar_edicion_crudos(self.db, int(sesion_id), punto_pen, carpeta_raiz, ruta_bit)
-            if res["exito"]:
+            res = finalizar_edicion_crudos(self.db, int(sesion_id), punto_pen, carpeta_raiz, ruta_bit,
+                                          confirmar_cierre_revertido=body.get("confirmar_cierre_revertido") is True)
+            if res["exito"] and not res.get("sin_traslado"):
                 res["export_final"] = self._revisar_export_sesion(int(sesion_id), punto_pen, carpeta_raiz, ruta_bit)
             self._enviar_json(res)
         except Exception as e:

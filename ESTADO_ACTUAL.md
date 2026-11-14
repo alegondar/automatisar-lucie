@@ -1,4 +1,58 @@
-# Estado actual del sistema — 2026-11-06
+# Estado actual del sistema — 2026-11-14
+
+## Sesiones con envío revertido y cierre interrumpido (2026-11-14)
+
+Diagnóstico de solo lectura de «magui vesina»: el video final figura publicado
+y conserva su SHA-256; los dos clips originales están íntegros en `_revertidos`
+tras un `envio_revertido` registrado desde el otro equipo. La sesión local no
+tiene fecha de cierre ni un cierre exitoso previo en su bitácora. El botón normal
+buscaba los clips en Sin editar, fallaba por origen ausente y volvía a mostrarlos
+como pendientes. No hay evidencia para atribuirlo a una extracción del pendrive
+sin expulsión ni para afirmar que un cierre guardado se perdió.
+
+La inspección de Edición distingue envío revertido, archivos ausentes y clips
+organizados con cierre pendiente de registrar. Listar no escribe ni calcula
+hashes completos. Para una sesión con video final registrado y todos sus clips
+en un envío revertido comprobable, ofrece Cerrar sesión sin mover archivos:
+muestra las rutas de resguardo, requiere confirmación específica y revalida
+SHA-256, confinamiento, ausencia de enlaces y disponibilidad del video final.
+El endpoint solo acepta el booleano `confirmar_cierre_revertido: true`; si cambian
+los archivos, hay un lote mixto, falta el manifiesto o hay un reenvío posterior,
+rechaza sin mover material ni cerrar la sesión. No revisa ni reenvía exports.
+El cierre y su Deshacer se registran append-only; ambos conservan las rutas del
+video final y de los clips. No se sincronizan bases ni se reorganizan históricos.
+La bitácora de edición también fuerza flush/fsync antes de actualizar la sesión.
+
+Si se interrumpe la actualización de la sesión después de registrar el traslado,
+Registrar cierre retoma los destinos del manifiesto, también al cambiar de mes
+o año, sin repetir movimientos. Los faltantes sin reversión comprobable siguen
+visibles como Revisar archivos, con sus rutas y el cierre bloqueado en el panel.
+Se conserva la exclusividad diferenciada de exports de CapCut y crudos.
+
+Validación Windows/Python 3.13: **530 pruebas, OK con 24 omisiones**, **103.969 s**.
+Las omisiones son capacidades Linux y privilegios de enlaces simbólicos ausentes;
+no se alteraron guardia, aserciones ni condiciones de omisión. Las **121 pruebas
+específicas** pasaron con una omisión. Regresiones nuevas cubren listado sin
+escrituras, confirmación/CSRF, cierre persistente e idempotente, Deshacer sin
+traslados, checksum cambiado, desconexión, reversión incompleta, reenvío, falta
+de manifiesto/video final y recuperación tras un fallo antes de guardar el cierre.
+El primer pase detectó colisiones entre los nombres de exports del nuevo fixture;
+se corrigió usando un nombre por sesión, sin debilitar aserciones.
+Cinco suites UI, sintaxis JS, AST **0/36**, auditoría repo/historial **0/261** y
+diff correctos. Pruebas exclusivamente temporales, con Lucie cerrada normalmente
+por su icono y sin vigilantes reales como fixtures. Manifiesto real solamente
+contado durante las suites: **1447 / 1447**, estable. Logs externos:
+`%TEMP%/lucie-cierre-revertido-especificas.log` y
+`%TEMP%/lucie-cierre-revertido-suite.log`. Linux nativo no ejecutado.
+
+La sesión real queda pendiente de la revisión/confirmación del usuario desde
+el botón nuevo; no se modifica la base real para ocultarla ni se trasladan sus
+resguardos como parte de la reparación. Reiniciar Lucie y recargar con Ctrl+F5.
+Se intentó la reapertura habitual con `pythonw.exe` y el lanzador sin navegador,
+pero la herramienta rechazó el comando con `blocked by policy`. No se intentaron
+vías alternativas. Comprobación posterior: panel sin respuesta (conexión rechazada)
+y sin proceso del servicio; Lucie queda detenida hasta abrirla con el acceso
+habitual. El inicio de sesión y la configuración local se conservaron.
 
 ## No agregar confirmado en envíos al pendrive (2026-11-06)
 
