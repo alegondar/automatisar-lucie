@@ -32,7 +32,7 @@ from bandeja.db import GestorBaseDatosBandeja
 from bandeja.carpetas_vacias import retirar_carpetas_vacias_traslado, _sin_enlaces
 from bandeja.pendrive import NOMBRE_MANIFIESTO_PENDRIVE, operacion_pendrive_exclusiva
 from bandeja.plataforma import esta_confinado_en_raiz, verificar_archivo_exclusivo, mover_sin_sobrescribir
-from bandeja.organizacion_mensual import nombre_mes, carpeta_capitulo, partes_capitulo, resolver_ruta
+from bandeja.organizacion_mensual import nombre_mes, carpeta_capitulo, partes_capitulo, resolver_ruta, eventos_manifiesto
 
 logger = logging.getLogger("bandeja_edicion")
 _lock_manifiesto_edicion = threading.Lock()
@@ -109,63 +109,49 @@ def nombre_carpeta_ya_editado(nombre: str, fecha: Optional[datetime.datetime] = 
     return f"videoyaeditado_{base}_semana_{(fecha.day - 1) // 7 + 1}_{meses[fecha.month - 1]}_{fecha.year}"
 
 
-def _destinos_editados_sesion(pendrive_raiz: str, identificador: str, incluir_preservados=False):
+def _destinos_editados_sesion(pendrive_raiz, identificador, incluir_preservados=False,
+                             eventos=None, traslados_mensuales=None):
     """Recupera rutas efectivas del manifiesto para reintentos y deshacer sin fecha actual."""
-    ruta = os.path.join(pendrive_raiz, ".lucie", NOMBRE_MANIFIESTO_PENDRIVE)
     destinos = {}
     preservados = set()
-    if not os.path.isfile(ruta):
-        return (destinos, preservados) if incluir_preservados else destinos
-    with open(ruta, "r", encoding="utf-8") as archivo:
-        for linea in archivo:
-            try:
-                evento = json.loads(linea)
-            except json.JSONDecodeError:
-                continue
-            if evento.get("sesion_id") != identificador:
-                continue
-            clip = evento.get("clip")
-            if evento.get("tipo_evento") == "editado" and evento.get("ruta_destino"):
-                destinos[clip] = resolver_ruta(pendrive_raiz, os.path.join(pendrive_raiz, evento["ruta_destino"].replace("/", os.sep)))
-                if evento.get("original_preservado"):
-                    preservados.add(clip)
-                else:
-                    preservados.discard(clip)
-            elif evento.get("tipo_evento") == "deshacer_editado":
-                destinos.pop(clip, None)
+    for evento in eventos_manifiesto(pendrive_raiz) if eventos is None else eventos:
+        if evento.get("sesion_id") != identificador:
+            continue
+        clip = evento.get("clip")
+        if evento.get("tipo_evento") == "editado" and evento.get("ruta_destino"):
+            ruta = os.path.join(pendrive_raiz, evento["ruta_destino"].replace("/", os.sep))
+            destinos[clip] = resolver_ruta(pendrive_raiz, ruta, traslados_mensuales)
+            if evento.get("original_preservado"):
+                preservados.add(clip)
+            else:
                 preservados.discard(clip)
-            elif evento.get("tipo_evento") == "original_editado_resguardado":
-                preservados.discard(clip)
+        elif evento.get("tipo_evento") == "deshacer_editado":
+            destinos.pop(clip, None)
+            preservados.discard(clip)
+        elif evento.get("tipo_evento") == "original_editado_resguardado":
+            preservados.discard(clip)
     return (destinos, preservados) if incluir_preservados else destinos
 
 
-def _originales_pendientes(pendrive_raiz, sesion):
+def _originales_pendientes(pendrive_raiz, sesion, eventos=None, traslados_mensuales=None):
     """Plan de originales retenidos; listar nunca ejecuta traslados."""
-    ruta = os.path.join(pendrive_raiz, ".lucie", NOMBRE_MANIFIESTO_PENDRIVE)
     pendientes = {}
-    if not os.path.isfile(ruta):
-        return []
-    with open(ruta, encoding="utf-8") as archivo:
-        for linea in archivo:
-            try:
-                evento = json.loads(linea)
-            except ValueError:
-                continue
-            if not isinstance(evento, dict) or evento.get("sesion_id") != sesion["identificador"]:
-                continue
-            clip, tipo = evento.get("clip"), evento.get("tipo_evento")
-            if clip not in sesion.get("clips", []):
-                continue
-            if tipo == "editado" and evento.get("original_preservado"):
-                pendientes[clip] = evento
-            elif tipo == "solicitar_retiro_original" and clip in pendientes:
-                pendientes[clip] = {**pendientes[clip], "retiro_origen_solicitado": True}
-            elif tipo in ("editado", "original_editado_resguardado", "deshacer_editado"):
-                pendientes.pop(clip, None)
+    for evento in eventos_manifiesto(pendrive_raiz) if eventos is None else eventos:
+        if evento.get("sesion_id") != sesion["identificador"]:
+            continue
+        clip, tipo = evento.get("clip"), evento.get("tipo_evento")
+        if clip not in sesion.get("clips", []):
+            continue
+        if tipo == "editado" and evento.get("original_preservado"):
+            pendientes[clip] = evento
+        elif tipo == "solicitar_retiro_original" and clip in pendientes:
+            pendientes[clip] = {**pendientes[clip], "retiro_origen_solicitado": True}
+        elif tipo in ("editado", "original_editado_resguardado", "deshacer_editado"):
+            pendientes.pop(clip, None)
     planes = []
     for clip, evento in pendientes.items():
-        base, origen = _origen_clip(pendrive_raiz, clip)
-        destino = resolver_ruta(pendrive_raiz, os.path.join(pendrive_raiz, evento.get("ruta_destino", "")))
+        base, origen = _origen_clip(pendrive_raiz, clip, traslados_mensuales)
+        destino = resolver_ruta(pendrive_raiz, os.path.join(pendrive_raiz, evento.get("ruta_destino", "")), traslados_mensuales)
         referencia = str(evento.get("id_evento") or (evento.get("fecha", ""), clip, evento.get("sha256")))
         version = hashlib.sha256(referencia.encode("utf-8")).hexdigest()[:16]
         respaldo = os.path.join(pendrive_raiz, "_enviados", "edicion", sesion["identificador"],
@@ -312,12 +298,13 @@ def registrar_bitacora_edicion(
 # Inspección de Secciones desde el Pendrive
 # =========================================================================
 
-def obtener_sesiones_con_crudos_pendientes(db):
-    return [s for s in db.obtener_sesiones_edicion()
+def obtener_sesiones_con_crudos_pendientes(db, sesiones=None):
+    return [s for s in (db.obtener_sesiones_edicion() if sesiones is None else sesiones)
             if s["estado"] == "en_edicion" or (s["estado"] == "completado" and not s.get("fecha_cierre"))]
 
 
-def _revision_crudos_sesion(raiz, sesion, verificar_hash=False):
+def _revision_crudos_sesion(raiz, sesion, verificar_hash=False, eventos=None,
+                            destinos=None, traslados_mensuales=None):
     """Inspección sin escrituras; un faltante nunca prueba que terminó la edición."""
     ruta_manifiesto = os.path.join(raiz, ".lucie", NOMBRE_MANIFIESTO_PENDRIVE)
     ultimos = {}
@@ -325,30 +312,26 @@ def _revision_crudos_sesion(raiz, sesion, verificar_hash=False):
     if not os.path.isdir(raiz) or not _sin_enlaces(ruta_manifiesto):
         return {"estado": "no_disponible", "mensaje": "No se puede verificar el pendrive o su manifiesto.", "archivos": []}
     try:
-        with open(ruta_manifiesto, encoding="utf-8") as archivo:
-            for linea in archivo:
-                try:
-                    evento = json.loads(linea)
-                except ValueError:
-                    continue
-                if not isinstance(evento, dict):
-                    continue
-                if evento.get("estado") in ("enviado", "envio_revertido"):
-                    relativa = evento.get("ruta_relativa")
-                    if isinstance(relativa, str):
-                        ultimos[relativa] = evento
-                if evento.get("sesion_id") == sesion["identificador"]:
-                    if evento.get("tipo_evento") == "cierre_edicion_envio_revertido":
-                        cierre = evento
-                    elif evento.get("tipo_evento") == "deshacer_cierre_edicion_envio_revertido":
-                        cierre = None
+        if not os.path.isfile(ruta_manifiesto):
+            raise FileNotFoundError(ruta_manifiesto)
+        for evento in eventos_manifiesto(raiz) if eventos is None else eventos:
+            if evento.get("estado") in ("enviado", "envio_revertido"):
+                relativa = evento.get("ruta_relativa")
+                if isinstance(relativa, str):
+                    ultimos[relativa] = evento
+            if evento.get("sesion_id") == sesion["identificador"]:
+                if evento.get("tipo_evento") == "cierre_edicion_envio_revertido":
+                    cierre = evento
+                elif evento.get("tipo_evento") == "deshacer_cierre_edicion_envio_revertido":
+                    cierre = None
     except OSError:
         return {"estado": "no_disponible", "mensaje": "No se pudo leer el manifiesto. Reconectá el pendrive y actualizá las sesiones.", "archivos": []}
 
-    destinos = _destinos_editados_sesion(raiz, sesion["identificador"])
+    if destinos is None:
+        destinos = _destinos_editados_sesion(raiz, sesion["identificador"])
     archivos = []
     for clip in sesion.get("clips", []):
-        base, origen = _origen_clip(raiz, clip)
+        base, origen = _origen_clip(raiz, clip, traslados_mensuales)
         item = {"clip": clip, "origen": origen, "estado": "faltante"}
         destino = destinos.get(clip)
         if not esta_confinado_en_raiz(origen, base) or not _sin_enlaces(origen):
@@ -410,25 +393,35 @@ def obtener_secciones_edicion(
     dir_sin_editar = os.path.join(pendrive_raiz, "videos sin editar")
     dir_ya_editados = os.path.join(pendrive_raiz, "videos ya editados")
     dir_completos = os.path.join(pendrive_raiz, "videos completos")
+    sesiones = db.obtener_sesiones_edicion()
+    eventos = list(eventos_manifiesto(pendrive_raiz))
+    traslados_mensuales = [e for e in eventos if e.get("tipo_evento") == "organizacion_mensual_completada"]
+    destinos_por_sesion = {
+        s["id"]: _destinos_editados_sesion(pendrive_raiz, s["identificador"], eventos=eventos,
+                                          traslados_mensuales=traslados_mensuales)
+        for s in sesiones
+    }
     capitulos_por_ruta = {}
-    for sesion in db.obtener_sesiones_edicion():
-        rutas = list(_destinos_editados_sesion(pendrive_raiz, sesion["identificador"]).values())
+    clips_finalizados = set()
+    for sesion in sesiones:
+        destinos = destinos_por_sesion[sesion["id"]]
+        rutas = list(destinos.values())
         if sesion.get("video_completo_ruta"):
             rutas.append(sesion["video_completo_ruta"])
         for ruta in rutas:
             capitulos_por_ruta[os.path.normcase(os.path.abspath(ruta))] = sesion["capitulo"]
+        if sesion["estado"] in ("editado", "completado") and sesion.get("fecha_cierre"):
+            clips_finalizados.update(_clip_efectivo(pendrive_raiz, clip, traslados_mensuales)
+                                     for clip, ruta in destinos.items() if os.path.isfile(ruta))
 
-    sesiones_activas = obtener_sesiones_con_crudos_pendientes(db)
-    for sesion in sesiones_activas:
-        sesion["revision_crudos"] = _revision_crudos_sesion(pendrive_raiz, sesion)
-    clips_finalizados = set()
-    for s in db.obtener_sesiones_edicion():
-        if s["estado"] in ("editado", "completado") and s.get("fecha_cierre"):
-            clips_finalizados.update(_clip_efectivo(pendrive_raiz, c) for c, ruta in _destinos_editados_sesion(pendrive_raiz, s["identificador"]).items() if os.path.isfile(ruta))
+    sesiones_activas = obtener_sesiones_con_crudos_pendientes(db, sesiones)
     clips_en_sesion: Set[str] = set()
-    for s in sesiones_activas:
-        for c in s.get("clips", []):
-            clips_en_sesion.add(_clip_efectivo(pendrive_raiz, c))
+    for sesion in sesiones_activas:
+        sesion["revision_crudos"] = _revision_crudos_sesion(
+            pendrive_raiz, sesion, eventos=eventos, destinos=destinos_por_sesion[sesion["id"]],
+            traslados_mensuales=traslados_mensuales)
+        clips_en_sesion.update(_clip_efectivo(pendrive_raiz, clip, traslados_mensuales)
+                               for clip in sesion.get("clips", []))
 
     para_editar: List[Dict[str, Any]] = []
     conteos_capitulo: Dict[str, Dict[str, int]] = {}
@@ -527,12 +520,12 @@ def obtener_secciones_edicion(
         "exports_sin_asignar": exports_sin_asignar,
         "videos_completados": obtener_videos_completados(db),
         "sesiones_para_export": obtener_sesiones_para_export(db),
-        "sesiones_esperando_export": [s for s in db.obtener_sesiones_edicion()
+        "sesiones_esperando_export": [s for s in sesiones
                                      if s["estado"] == "editado" and not s.get("video_completo_ruta")],
         "traslados_pendientes": [{"id": s["id"], "nombre": s["nombre"], "archivos": planes}
-                                 for s in db.obtener_sesiones_edicion()
+                                 for s in sesiones
                                  if s.get("fecha_cierre") and s["estado"] in ("editado", "completado")
-                                 if (planes := _originales_pendientes(pendrive_raiz, s))],
+                                 if (planes := _originales_pendientes(pendrive_raiz, s, eventos, traslados_mensuales))],
     }
 
 
@@ -579,17 +572,17 @@ def crear_sesion(
     }
 
 
-def _origen_clip(pendrive_raiz, clip):
+def _origen_clip(pendrive_raiz, clip, traslados_mensuales=None):
     """Los videos conservan IDs históricos; audios usan prefijo audios/."""
     audio = clip.startswith("audios/")
     base = os.path.join(pendrive_raiz, "audios" if audio else "videos sin editar")
     relativa = clip[len("audios/"):] if audio else clip
     ruta = os.path.join(base, relativa.replace("/", os.sep))
-    return base, resolver_ruta(pendrive_raiz, ruta) if esta_confinado_en_raiz(ruta, pendrive_raiz) else ruta
+    return base, resolver_ruta(pendrive_raiz, ruta, traslados_mensuales) if esta_confinado_en_raiz(ruta, pendrive_raiz) else ruta
 
 
-def _clip_efectivo(raiz, clip):
-    base, ruta = _origen_clip(raiz, clip)
+def _clip_efectivo(raiz, clip, traslados_mensuales=None):
+    base, ruta = _origen_clip(raiz, clip, traslados_mensuales)
     return ("audios/" if clip.startswith("audios/") else "") + os.path.relpath(ruta, base).replace(os.sep, "/")
 
 

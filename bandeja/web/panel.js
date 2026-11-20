@@ -589,7 +589,8 @@
       try {
         const res = await apiFetch('/api/estado-version');
         if (pestanaActual === 'completados' || (pestanaActual === 'edicion' &&
-            document.getElementById('contenedor-traslados-pendientes')?.children.length)) await cargarVistaEdicion();
+            (document.getElementById('contenedor-traslados-pendientes')?.children.length ||
+             document.getElementById('contenedor-esperando-export')?.children.length))) await cargarVistaEdicion();
 
         if (res.banner_pendrive) {
           if (typeof res.banner_pendrive === 'string') {
@@ -3644,6 +3645,7 @@
     // =========================================================================
 
     let clipsParaEditar = [];
+    let solicitudVistaEdicion = 0;
     let clipsSeleccionadosParaEditar = new Set();
     let sesionModalClips = [];
     const revisionesCrudosEdicion = new Map();
@@ -3664,6 +3666,7 @@
     }
 
     async function cargarVistaEdicion() {
+      const solicitud = ++solicitudVistaEdicion;
       const contParaEditar = document.getElementById('contenedor-para-editar');
       const contEnEdicion = document.getElementById('contenedor-en-edicion');
       const contEditados = document.getElementById('contenedor-editados-completos');
@@ -3672,6 +3675,8 @@
       try {
         const res = await fetch('/api/edicion/secciones');
         const data = await res.json();
+        if (solicitud !== solicitudVistaEdicion) return;
+        if (!res.ok) throw new Error(data.error || 'No se pudo actualizar Edición.');
 
         if (!data.conectado) {
           if (contParaEditar) {
@@ -3708,8 +3713,9 @@
         renderizarExportsCapCut(data.videos_completados || [], data.sesiones_para_export || []);
 
       } catch (err) {
+        if (solicitud !== solicitudVistaEdicion) return;
         console.error("Error al cargar vista de edición:", err);
-        if (contParaEditar) contParaEditar.innerHTML = `<div class="error-box">Error al cargar datos de edición: ${escapeHTML(String(err))}</div>`;
+        mostrarAvisoEdicion(`No se pudo actualizar Edición. La lista puede estar desactualizada. ${escapeHTML(err.message)}`);
       }
     }
 

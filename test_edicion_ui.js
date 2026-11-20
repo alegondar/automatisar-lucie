@@ -152,6 +152,22 @@ async function probar() {
   ctx.renderizarTrasladosPendientes([]);
   assert.equal(resumen.style.display, 'none');
 
+  const consultas = [];
+  ctx.solicitudVistaEdicion = 0;
+  ctx.fetch = () => new Promise(resolve => consultas.push(resolve));
+  ctx.renderizarClipsParaEditar = () => {};
+  ctx.renderizarEditadosYCompletos = () => {};
+  ctx.renderizarExportsCapCut = () => {};
+  vm.runInContext(extraer('cargarVistaEdicion', 'renderizarClipsParaEditar'), ctx);
+  const consultaAnterior = ctx.cargarVistaEdicion();
+  const despuesDelCierre = ctx.cargarVistaEdicion();
+  consultas[1]({ok: true, json: async () => ({conectado: true, en_edicion: []})});
+  await despuesDelCierre;
+  consultas[0]({ok: true, json: async () => ({conectado: true, en_edicion: [sesionRevertida]})});
+  await consultaAnterior;
+  assert.equal(ctx.revisionesCrudosEdicion.size, 0, 'La respuesta anterior al cierre no puede restaurar la sesión.');
+  ctx.cargarVistaEdicion = async () => {};
+
   vm.runInContext(extraer('guardarExportSinPublicar', 'asignarExportASesion'), ctx);
   const campoTitulo = {value: '', focus() {this.enfocado = true;}};
   const campoPersonaje = {value: 'lucie'};

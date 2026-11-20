@@ -44,33 +44,40 @@ def carpeta_capitulo(raiz, categoria, personaje, capitulo, fecha=None):
     return os.path.join(raiz, categoria, personaje, mes_del_nombre(capitulo) or nombre_mes(fecha), capitulo)
 
 
-def resolver_relativa(raiz, relativa):
-    """Aplica únicamente traslados de prefijos registrados, también al deshacer."""
-    relativa = relativa.replace("\\", "/")
+def eventos_manifiesto(raiz):
+    """Lee los eventos válidos del manifiesto en su orden de registro."""
     archivo = os.path.join(raiz, ".lucie", "manifiesto.jsonl")
     if not os.path.isfile(archivo):
-        return relativa
+        return
     with open(archivo, encoding="utf-8") as entrada:
         for linea in entrada:
             try:
                 evento = json.loads(linea)
             except ValueError:
                 continue
-            if not isinstance(evento, dict) or evento.get("tipo_evento") != "organizacion_mensual_completada":
-                continue
-            origen, destino = evento.get("origen"), evento.get("destino")
-            if not isinstance(origen, str) or not isinstance(destino, str):
-                continue
-            if relativa == origen or relativa.startswith(origen + "/"):
-                relativa = destino + relativa[len(origen):]
+            if isinstance(evento, dict):
+                yield evento
+
+
+def resolver_relativa(raiz, relativa, eventos=None):
+    """Aplica únicamente traslados de prefijos registrados, también al deshacer."""
+    relativa = relativa.replace("\\", "/")
+    for evento in eventos_manifiesto(raiz) if eventos is None else eventos:
+        if evento.get("tipo_evento") != "organizacion_mensual_completada":
+            continue
+        origen, destino = evento.get("origen"), evento.get("destino")
+        if not isinstance(origen, str) or not isinstance(destino, str):
+            continue
+        if relativa == origen or relativa.startswith(origen + "/"):
+            relativa = destino + relativa[len(origen):]
     return relativa
 
 
-def resolver_ruta(raiz, ruta):
+def resolver_ruta(raiz, ruta, eventos=None):
     from bandeja.plataforma import esta_confinado_en_raiz
     if not esta_confinado_en_raiz(ruta, raiz):
         raise ValueError("Ruta histórica fuera del pendrive.")
-    relativa = resolver_relativa(raiz, os.path.relpath(ruta, raiz))
+    relativa = resolver_relativa(raiz, os.path.relpath(ruta, raiz), eventos)
     resuelta = os.path.join(raiz, *relativa.split("/"))
     if not esta_confinado_en_raiz(resuelta, raiz):
         raise ValueError("El registro mensual apunta fuera del pendrive.")
