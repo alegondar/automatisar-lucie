@@ -54,6 +54,10 @@ async function probar(personajeAlternativo = 'mailen') {
   let archivados = new Set();
   let deshechos = 0;
   let organizados = 0;
+  let confirmarVuelta = false;
+  let revisionVuelta = '';
+  let nuevaPestana = '';
+  let avisoEdicion = '';
   let retenerLista = false;
   const listasPendientes = [];
   let respuestaEstado = null;
@@ -115,12 +119,28 @@ async function probar(personajeAlternativo = 'mailen') {
       assert.strictEqual(cuerpo.confirmacion, true); organizados++;
       return {exito: true};
     }
+    if (url.endsWith('/volver-a-editar-simular')) {
+      assert.deepStrictEqual(cuerpo, {archivo_id: 'archivo-0'});
+      return {token: 'vuelta-temporal', nombre: 'Cafe', movimientos: [{origen: 'Sin publicar/Cafe.mp4',
+        destino: '_revertidos/Cafe.mp4'}], retenidos: ['Sin editar/crudo.mp4']};
+    }
+    if (url.endsWith('/volver-a-editar')) {
+      assert.deepStrictEqual(cuerpo, {token: 'vuelta-temporal', confirmacion: true});
+      archivados.add('archivo-0');
+      return {exito: true};
+    }
     throw Error('API inesperada: ' + url);
   }
   vm.runInNewContext(fs.readFileSync('bandeja/web/wifi.js', 'utf8'), {
     document: documento, window: ventana, apiFetch,
     Option: function(texto, valor) { const opcion = new Elemento('option'); opcion.textContent = texto; opcion.value = valor; return opcion; },
-    confirm: () => true,
+    confirm: mensaje => {
+      if (!mensaje.startsWith('¿Volver a editar')) return true;
+      revisionVuelta = mensaje;
+      return confirmarVuelta;
+    },
+    mostrarPestana: nombre => { nuevaPestana = nombre; },
+    mostrarAvisoEdicion: aviso => { avisoEdicion = aviso; },
     sessionStorage: {getItem: k => almacen.get(k), setItem: (k, v) => almacen.set(k, v), removeItem: k => almacen.delete(k)},
     setTimeout: funcion => { sondeos.push(funcion); return sondeos.length; }
   });
@@ -129,7 +149,8 @@ async function probar(personajeAlternativo = 'mailen') {
       .flatMap(rejilla => rejilla.children));
   }
   const tilde = tarjeta => tarjeta.children[0].children[0];
-  const preview = tarjeta => tarjeta.children[1].children[0];
+  const marcoPreview = tarjeta => tarjeta.children.find(c => c.className === 'wifi-preview');
+  const preview = tarjeta => marcoPreview(tarjeta).children[0];
   await ventana.cargarPublicacionWifi();
   assert.strictEqual(el('wifi-videos').children.length, 4, 'Deben mostrarse grupos separados.');
   assert.strictEqual(tarjetas().length, 5);
@@ -162,7 +183,7 @@ async function probar(personajeAlternativo = 'mailen') {
   assert.strictEqual(preview(tarjetas()[0]).tag, 'img');
   assert.strictEqual(preview(tarjetas()[0]).alt, 'Vista previa de Foto.png');
   await preview(tarjetas()[0]).emitir('error');
-  assert.strictEqual(tarjetas()[0].children[1].children[1].hidden, false);
+  assert.strictEqual(marcoPreview(tarjetas()[0]).children[1].hidden, false);
   el('wifi-filtro').value = 'no coincide';
   await el('wifi-filtro').emitir('input');
   assert.strictEqual(tarjetas().length, 0);
@@ -308,6 +329,30 @@ async function probar(personajeAlternativo = 'mailen') {
   assert.strictEqual(recarga.get('wifi-dispositivo').value, oficial.id);
   assert(recarga.get('wifi-destino').textContent.includes('LocalSend'));
   assert.strictEqual(recarga.get('wifi-app').disabled, true);
+  datos[0].sesion_edicion = 7;
+  archivados.clear();
+  el('wifi-personaje').value = 'roli';
+  el('wifi-filtro').value = 'otro video';
+  await el('wifi-tab-historial').emitir('click');
+  await ventana.cargarPublicacionWifi(7);
+  assert.strictEqual(el('wifi-vista-envio').style.display, 'grid');
+  assert.strictEqual(el('wifi-personaje').value, 'lucie');
+  assert.strictEqual(el('wifi-filtro').value, 'Cafe.mp4');
+  assert.strictEqual(tarjetas().length, 1);
+  assert.strictEqual(tilde(tarjetas()[0]).checked, false);
+  const botonVuelta = () => tarjetas().flatMap(t => t.children).find(c => c.textContent === 'Volver a editar');
+  const tarjetaConSesion = tarjetas().find(t => t.children.includes(botonVuelta()));
+  assert.strictEqual(tarjetaConSesion.children[1], botonVuelta(), 'El botón debe aparecer debajo del nombre y antes de la vista previa.');
+  assert.strictEqual(tarjetaConSesion.children[2], marcoPreview(tarjetaConSesion));
+  await botonVuelta().emitir('click');
+  assert(revisionVuelta.includes('Sin editar/crudo.mp4'));
+  assert(revisionVuelta.includes('_revertidos/Cafe.mp4'));
+  assert(!llamadas.some(l => l.url.endsWith('/volver-a-editar')));
+  confirmarVuelta = true;
+  await botonVuelta().emitir('click');
+  assert.strictEqual(nuevaPestana, 'edicion');
+  assert(avisoEdicion.includes('resguardado'));
+  assert(!botonVuelta());
   console.log('UI OK: grupos, imágenes/video, rutas, filtros, selección visible, invalidación, envío e historial. ' + llamadas.length + ' llamadas simuladas.');
 }
 

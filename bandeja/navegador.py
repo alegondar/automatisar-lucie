@@ -2,12 +2,14 @@
 import http.client
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
 import time
 
 logger = logging.getLogger("bandeja_descargas")
+_SCRIPT_PANEL = re.compile(rb"""<script\b[^>]*\s+src\s*=\s*["']/panel\.js(?:\?[^"'<>]*)?["']""")
 
 
 def localizar_chrome():
@@ -42,7 +44,7 @@ def dashboard_disponible(puerto, timeout=0.5):
         conexion.request("GET", "/panel.html")
         respuesta = conexion.getresponse()
         html = respuesta.read(131072)
-        return respuesta.status == 200 and b"<title>Lucie Sin Reglas" in html and b'src="/panel.js"' in html
+        return respuesta.status == 200 and b"<title>Lucie Sin Reglas" in html and _SCRIPT_PANEL.search(html) is not None
     except (OSError, http.client.HTTPException):
         return False
     finally:

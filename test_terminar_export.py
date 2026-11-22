@@ -10,7 +10,7 @@ from unittest.mock import patch
 from bandeja.config import ConfiguracionBandeja, calcular_sha256
 from bandeja.db import GestorBaseDatosBandeja
 from bandeja.edicion import (crear_sesion, finalizar_edicion_crudos, revisar_export_terminado,
-                            obtener_secciones_edicion, deshacer_copia_completo)
+                            obtener_secciones_edicion, deshacer_copia_completo, revisar_versiones_posteriores)
 from bandeja_descargas import crear_vigilante_capcut
 
 
@@ -84,6 +84,29 @@ class TestTerminarExport(unittest.TestCase):
         self.assertEqual(self.revisar()["destino"], resultado["destino"])
         self.assertEqual(self.db.obtener_exports_pendientes()[0]["estado"], "copiado")
         self.assertEqual(obtener_secciones_edicion(self.montaje, self.db)["sesiones_esperando_export"], [])
+
+    def test_final_guardado_ofrece_export_posterior_preexistente_para_eleccion(self):
+        self.export()
+        self.terminar()
+        copia = self.revisar()
+        self.assertEqual(copia["modo"], "copiado")
+        alternativa = self.export("1014 (2).mp4", self.inicio + datetime.timedelta(minutes=3), registrar=False)
+        self.export("anterior.mp4", self.inicio - datetime.timedelta(minutes=1), registrar=False)
+        vigilante = crear_vigilante_capcut(self.config, self.db, self.bitacora)
+        vigilante.tomar_fotografia_inicial()
+        sesion = self.db.obtener_sesion_por_id(self.sesion["id"])
+        self.assertEqual(revisar_versiones_posteriores(self.db, vigilante, sesion), [os.path.basename(alternativa)])
+        entrada, = self.db.obtener_exports_pendientes(estado="sin_asignar")
+        self.assertEqual(entrada["ruta_origen"], alternativa)
+        self.assertIsNone(entrada["sesion_id"])
+        self.assertEqual(entrada["envio_automatico_bloqueado"], 1)
+        self.assertEqual(self.revisar()["destino"], copia["destino"])
+        self.assertEqual(revisar_versiones_posteriores(self.db, vigilante, sesion), [os.path.basename(alternativa)])
+        self.assertEqual(len(self.db.obtener_exports_pendientes(estado="sin_asignar")), 1)
+        deshacer_copia_completo(copia["destino"], self.montaje, self.db, ruta_bitacora=self.bitacora)
+        secciones = obtener_secciones_edicion(self.montaje, self.db)
+        self.assertEqual([s["id"] for s in secciones["sesiones_para_export"]], [sesion["id"]])
+        self.assertTrue(os.path.isfile(alternativa))
 
     def test_export_preexistente_de_sesion_se_recupera_tras_reinicio(self):
         origen = self.export(registrar=False)

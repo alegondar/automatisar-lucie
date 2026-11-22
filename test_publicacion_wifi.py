@@ -349,6 +349,15 @@ class TestPublicacionWifi(unittest.TestCase):
         self.assertEqual(os.path.basename(copia["destino"]), "Luna café.mp4")
         self.assertIn("videos sin publicar/luna/", copia["destino"].replace(os.sep, "/"))
         sha = calcular_sha256(export)
+        variante_ruta = os.path.join(os.path.dirname(copia["destino"]), ".", os.path.basename(copia["destino"]))
+        if os.name == "nt":
+            variante_ruta = variante_ruta.replace("\\", "/")
+        self.db.actualizar_sesion_edicion(sesion["id"], video_completo_ruta=variante_ruta)
+        st = os.stat(export)
+        export_id = self.db.registrar_export_pendiente(export, "1010(8).mp4", st.st_size, st.st_mtime,
+                                                       sesion["id"], estado="copiado", sha256=sha)
+        anterior = self.db.registrar_export_pendiente(export + ".anterior", "anterior.mp4", st.st_size, st.st_mtime,
+                                                      sesion["id"], envio_automatico_bloqueado=1)
         entrada = next(a for a in self.gestor.listar()["archivos"] if a["nombre"] == "Luna café.mp4")
         self.assertEqual(entrada["personaje"], "luna")
         plan = self.gestor.simular([entrada["id"]], self.dispositivo["id"])
@@ -367,9 +376,14 @@ class TestPublicacionWifi(unittest.TestCase):
         self.assertEqual(resultado["estado"], "completado", resultado)
         self.assertEqual(len(resultado["publicados"]), 1)
         self.assertEqual(calcular_sha256(destino), sha)
+        self.assertEqual(self.db.obtener_sesion_por_id(sesion["id"])["video_completo_ruta"], destino)
+        entradas = {e["id"]: e for e in self.db.obtener_exports_pendientes()}
+        self.assertEqual(entradas[export_id]["ruta_destino"], destino)
+        self.assertIsNone(entradas[anterior]["ruta_destino"])
         with open(export, "rb") as f:
             self.assertEqual(self.receptor.archivos[entrada["id"]], f.read())
         self.gestor.deshacer(resultado["publicados"][0]["id_operacion"])
+        self.assertEqual(self.db.obtener_sesion_por_id(sesion["id"])["video_completo_ruta"], copia["destino"])
         self.assertEqual(calcular_sha256(copia["destino"]), sha)
         self.assertTrue(os.path.isfile(self.video), "No se envió el video ajeno de Lucie")
         deshacer_copia_completo(copia["destino"], self.montaje, self.db, "LucieSinReglas", bitacora)
@@ -377,6 +391,83 @@ class TestPublicacionWifi(unittest.TestCase):
         undo = deshacer_finalizar_edicion(self.db, sesion["id"], self.montaje, "LucieSinReglas", bitacora)
         self.assertTrue(undo["exito"], undo)
         self.assertEqual(calcular_sha256(clip), sha_clip)
+
+    def test_volver_a_editar_restaura_crudos_y_permite_un_export_nuevo(self):
+        from bandeja.edicion import (copiar_export_a_videos_completos, finalizar_edicion_crudos,
+                                    obtener_secciones_edicion, vincular_nuevo_export)
+
+        relativo = "lucie/Capitulo/crudo.mp4"
+        crudo = os.path.join(self.raiz, "videos sin editar", *relativo.split("/"))
+        os.makedirs(os.path.dirname(crudo))
+        with open(crudo, "xb") as archivo:
+            archivo.write(b"crudo preservado")
+        sesion = crear_sesion(self.db, [relativo], "lucie", "Capitulo", "Video final")
+        ruta_bit = os.path.join(self.montaje, "vuelta-edicion.jsonl")
+        self.assertTrue(finalizar_edicion_crudos(self.db, sesion["id"], self.montaje,
+                                                 ruta_bitacora=ruta_bit)["exito"])
+        export = os.path.join(self.montaje, "1010.mp4")
+        with open(export, "xb") as archivo:
+            archivo.write(b"version anterior")
+        st = os.stat(export)
+        export_id = self.db.registrar_export_pendiente(export, "1010.mp4", st.st_size, st.st_mtime,
+                                                       sesion["id"], estado="copiado")
+        copia = copiar_export_a_videos_completos(export, sesion, self.montaje, self.db, ruta_bitacora=ruta_bit)
+        final = copia["destino"]
+        cola = self.gestor.listar()["archivos"]
+        entrada = next(a for a in cola if a.get("sesion_edicion") == sesion["id"])
+        self.assertNotIn("sesion_edicion", next(a for a in cola if a["nombre"] == "Cafe.mp4"))
+        plan = self.gestor.simular_vuelta_edicion(entrada["id"])
+        self.assertTrue(os.path.isfile(final))
+        self.assertFalse(os.path.exists(crudo))
+        with self.assertRaises(ValueError):
+            self.gestor.ejecutar_vuelta_edicion(plan["token"], False, ruta_bit)
+        os.makedirs(os.path.dirname(crudo), exist_ok=True)
+        with open(crudo, "xb") as archivo:
+            archivo.write(b"colision a conservar")
+        with self.assertRaises(FileExistsError):
+            self.gestor.ejecutar_vuelta_edicion(plan["token"], True, ruta_bit)
+        self.assertEqual(calcular_sha256(final), calcular_sha256(export))
+        os.rename(crudo, crudo + ".conservado")
+        plan = self.gestor.simular_vuelta_edicion(entrada["id"])
+        from bandeja.plataforma import mover_sin_sobrescribir
+
+        def fallar_al_mover_final(origen, destino):
+            if origen == final:
+                raise OSError("Fallo de traslado simulado")
+            mover_sin_sobrescribir(origen, destino)
+
+        with patch("bandeja.edicion.mover_sin_sobrescribir", side_effect=fallar_al_mover_final):
+            with self.assertRaisesRegex(OSError, "Fallo de traslado simulado"):
+                self.gestor.ejecutar_vuelta_edicion(plan["token"], True, ruta_bit)
+        self.assertFalse(os.path.exists(crudo))
+        self.assertTrue(os.path.exists(final))
+        self.assertEqual(self.db.obtener_sesion_por_id(sesion["id"])["estado"], "completado")
+        plan = self.gestor.simular_vuelta_edicion(entrada["id"])
+        resultado = self.gestor.ejecutar_vuelta_edicion(plan["token"], True, ruta_bit)
+        with self.assertRaises(ValueError):
+            self.gestor.ejecutar_vuelta_edicion(plan["token"], True, ruta_bit)
+        self.assertEqual(calcular_sha256(resultado["ruta_revertida"]), calcular_sha256(export))
+        self.assertFalse(os.path.exists(final))
+        with open(crudo, "rb") as archivo:
+            self.assertEqual(archivo.read(), b"crudo preservado")
+        self.assertEqual(obtener_secciones_edicion(self.montaje, self.db)["en_edicion"][0]["id"], sesion["id"])
+        viejo = next(e for e in self.db.obtener_exports_pendientes() if e["id"] == export_id)
+        self.assertIsNone(viejo["sesion_id"])
+        self.assertEqual(viejo["envio_automatico_bloqueado"], 1)
+        info = {"ruta_absoluta": export, "nombre": "1010.mp4", "tamano": st.st_size, "mtime": st.st_mtime}
+        self.assertEqual(vincular_nuevo_export(info, self.montaje, self.db)["modo"], "revertido")
+        nuevo = os.path.join(self.montaje, "1011.mp4")
+        with open(nuevo, "xb") as archivo:
+            archivo.write(b"version corregida")
+        st = os.stat(nuevo)
+        info.update(ruta_absoluta=nuevo, nombre="1011.mp4", tamano=st.st_size, mtime=st.st_mtime)
+        self.assertEqual(vincular_nuevo_export(info, self.montaje, self.db, ruta_bitacora=ruta_bit)["modo"],
+                         "copia_automatica")
+        self.assertTrue(finalizar_edicion_crudos(self.db, sesion["id"], self.montaje,
+                                                ruta_bitacora=ruta_bit)["exito"])
+        actuales = [a for a in self.gestor.listar()["archivos"] if a.get("sesion_edicion") == sesion["id"]]
+        self.assertEqual(len(actuales), 1)
+        self.assertEqual(calcular_sha256(os.path.join(self.raiz, actuales[0]["ruta"])), calcular_sha256(nuevo))
 
     def test_inventario_y_preview_excluyen_capcut_crudos_y_completos_publicados(self):
         for carpeta in ("CapCut", "videos sin editar", "videos ya editados", "videos completos"):

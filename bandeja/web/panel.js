@@ -302,7 +302,7 @@
 
     let capituloATerminarId = null;
 
-    function mostrarPestana(pestana, ev) {
+    function mostrarPestana(pestana, ev, sesionExport) {
       pestanaActual = pestana;
       document.body?.classList?.toggle('vista-eliminacion', pestana === 'eliminacion');
       document.body?.classList?.toggle('vista-secundaria', pestana !== 'lotes');
@@ -356,7 +356,7 @@
       document.getElementById('sec-historial').style.display = (pestana === 'historial') ? 'block' : 'none';
 
       if (pestana === 'publicacion') {
-        if (window.cargarPublicacionWifi) window.cargarPublicacionWifi();
+        if (window.cargarPublicacionWifi) window.cargarPublicacionWifi(sesionExport);
       } else if (pestana === 'eliminacion') {
         cargarEliminacion();
       } else if (pestana === 'historial') {
@@ -3707,7 +3707,7 @@
         renderizarSesionesEsperandoExport(data.sesiones_esperando_export || [], data.videos_completados || []);
 
         // 3. Editados y completos
-        renderizarEditadosYCompletos(data.conteos_capitulo || {});
+        renderizarEditadosYCompletos(data.conteos_capitulo || {}, data.archivos_ya_editados || {});
 
         // 4. Exports de CapCut
         renderizarExportsCapCut(data.videos_completados || [], data.sesiones_para_export || []);
@@ -3920,7 +3920,7 @@
       const aviso = document.getElementById('aviso-traslados-edicion');
       if (aviso) {
         aviso.style.display = sesiones.length ? 'block' : 'none';
-        aviso.textContent = sesiones.length ? sesiones.map(s => `${s.nombre}: ${s.archivos.length} clip(s) con copia en Ya editados y original pendiente de retiro.`).join(' ') +
+        aviso.textContent = sesiones.length ? sesiones.map(s => `${s.nombre}: sesión cerrada. ${s.archivos.length} original(es) con copia en Ya editados esperan retiro.`).join(' ') +
           (sesiones.every(s => s.archivos.every(a => a.automatico))
             ? ' Al quedar libres se retirarán automáticamente de Sin editar.'
             : ' Las ediciones anteriores requieren Completar traslado y confirmar su plan.') +
@@ -4025,10 +4025,11 @@
                 <strong style="font-size:1.05rem;">${escapeHTML(s.nombre)}</strong>
                 <span style="color:var(--text-muted); font-size:0.85rem; margin-left:8px;">(${escapeHTML(s.personaje)} / ${escapeHTML(s.capitulo)})</span>
               </div>
-              <div style="display:flex; gap:8px;">
+              <div style="display:flex; flex-wrap:wrap; gap:8px;">
                 ${!s.video_completo_ruta ? `<button class="btn-sm btn-secundario" onclick="sumarVideosSesion(${s.id})">Sumar video</button>` : ''}
                 <button class="btn-sm" onclick="terminarEdicionSesion(${s.id})" ${revisar || (revertido && !s.video_completo_ruta) ? 'disabled' : ''} style="background:#10b981; color:#000; font-weight:600; padding:6px 14px;">${revertido ? 'Cerrar sesión sin mover archivos' : cierrePendiente ? 'Registrar cierre' : 'Terminé de editar'}</button>
-                ${!s.video_completo_ruta ? `<button class="btn-sm btn-secundario" onclick="cancelarSesionEdicion(${s.id})" style="color:var(--danger);">Cancelar</button>` : ''}
+                ${!revertido ? `<button class="btn-sm btn-secundario" onclick="archivarCrudosSesion(${s.id}, this)" ${revisar ? 'disabled' : ''}>Mover lote a Ya editados</button>` : ''}
+                ${!s.video_completo_ruta ? `<button class="btn-sm btn-secundario" onclick="cancelarSesionEdicion(${s.id})">Deshacer inicio de edición</button>` : ''}
               </div>
             </div>
             ${revision.mensaje ? `<p style="margin:10px 0 0; color:var(--text-muted);">${escapeHTML(revision.mensaje)}${revertido && !s.video_completo_ruta ? ' Sin video final registrado: cancelá la sesión o revisá el envío original.' : ''}</p>` : ''}
@@ -4095,6 +4096,11 @@
           const motivos = [...new Set((data.retiro_originales?.pendientes || []).map(p => p.error).filter(Boolean))].join(' ');
           mostrarAvisoEdicion(
             data.sin_traslado ? escapeHTML(data.mensaje) : `${movidosCount} clip(s) organizados en 'videos ya editados'. ${pendientes ? `${pendientes} original(es) siguen en Sin editar en uso por CapCut; se retirarán automáticamente en segundo plano (no es necesario cerrar CapCut).` : 'Traslado completado.'} ${escapeHTML(data.export_final?.mensaje || '')} ${data.export_final?.destino ? escapeHTML(data.export_final.destino) : ''}`,
+            (data.export_final?.modo === 'copiado'
+              ? `<button class="btn-sm btn-secundario" onclick="mostrarPestana('publicacion', null, ${sesionId})">Ver en Enviar al celular</button>`
+              : data.export_final?.modo === 'revisar_version'
+                ? `<button class="btn-sm btn-secundario" onclick="mostrarPestana('completados')">Comparar exports</button>`
+                : '') +
             `<button class="btn-sm" onclick="deshacerTerminarEdicion(${sesionId})" style="background:#f59e0b; color:#000; font-weight:600;">Deshacer</button>`
           );
           await cargarVistaEdicion();
@@ -4108,6 +4114,34 @@
         }
       } catch (err) {
         alert("Error de comunicación: " + String(err));
+      }
+    }
+
+    async function archivarCrudosSesion(sesionId, boton) {
+      boton.disabled = true;
+      try {
+        const plan = await apiFetch('/api/edicion/archivar-crudos-simular', {
+          method: 'POST', body: JSON.stringify({sesion_id: sesionId})
+        });
+        const rutas = plan.archivos.map(a => `${a.origen}\n→ ${a.destino}`).join('\n\n');
+        if (!confirm(`¿Mover todo el lote a Ya editados y cerrar la sesión?\n\n${rutas}`)) return;
+        const resultado = await apiFetch('/api/edicion/archivar-crudos', {
+          method: 'POST', body: JSON.stringify({token: plan.token, confirmacion: true})
+        });
+        if (!resultado.exito) {
+          const errores = (resultado.conflictos || []).map(c => c.error).join(' ');
+          throw new Error(`La sesión sigue abierta. ${errores}`);
+        }
+        const pendientes = (resultado.retiro_originales?.pendientes || []).length;
+        const aviso = pendientes ? ` ${pendientes} original(es) en uso se retirarán cuando queden libres.` : '';
+        mostrarAvisoEdicion(`Lote organizado en Ya editados. Sesión cerrada.${aviso}`,
+          `<button class="btn-sm" onclick="deshacerTerminarEdicion(${sesionId})">Deshacer</button>`);
+        await cargarVistaEdicion();
+      } catch (error) {
+        mostrarAvisoEdicion(escapeHTML(error.message));
+        await cargarVistaEdicion();
+      } finally {
+        boton.disabled = false;
       }
     }
 
@@ -4130,7 +4164,7 @@
     }
 
     async function cancelarSesionEdicion(sesionId) {
-      if (!confirm("¿Deseas cancelar esta sesión? Ningún archivo físico será modificado.")) return;
+      if (!confirm("¿Deshacer el inicio de esta edición? Los clips volverán a Para editar y conservarán su ubicación. El proyecto de CapCut se conserva.")) return;
       try {
         const res = await fetchConCsrf('/api/edicion/cancelar-sesion', {
           method: 'POST',
@@ -4138,7 +4172,10 @@
         });
         const data = await res.json();
         if (data.exito) {
-          mostrarAvisoEdicion("Sesión cancelada. Los clips volvieron a 'Para editar'.");
+          mostrarAvisoEdicion("Los clips volvieron a Para editar.");
+          await cargarVistaEdicion();
+        } else {
+          mostrarAvisoEdicion(escapeHTML(data.error || "La sesión cambió. Actualizá Edición y revisá su estado."));
           await cargarVistaEdicion();
         }
       } catch (err) {
@@ -4146,7 +4183,7 @@
       }
     }
 
-    function renderizarEditadosYCompletos(conteos) {
+    function renderizarEditadosYCompletos(conteos, archivos) {
       const cont = document.getElementById('contenedor-editados-completos');
       if (!cont) return;
 
@@ -4156,6 +4193,8 @@
         return;
       }
 
+      const detallesAbiertos = new Set(Array.from(cont.querySelectorAll('details[open][data-capitulo]'),
+        detalle => detalle.dataset.capitulo));
       let html = `
         <table class="tabla-archivos" style="width:100%; border-collapse:collapse; margin-top:8px;">
           <thead>
@@ -4163,8 +4202,8 @@
               <th style="padding:8px;">Capítulo</th>
               <th style="padding:8px; text-align:center;">Sin editar</th>
               <th style="padding:8px; text-align:center;">En edición</th>
-              <th style="padding:8px; text-align:center;">Ya editados</th>
-              <th style="padding:8px; text-align:center;">Completos</th>
+              <th style="padding:8px; text-align:center;">Clips en Ya editados</th>
+              <th style="padding:8px; text-align:center;">Videos finales</th>
             </tr>
           </thead>
           <tbody>
@@ -4172,12 +4211,21 @@
 
       capitulos.forEach(cap => {
         const c = conteos[cap];
+        const clips = archivos[cap] || [];
+        const editados = clips.length
+          ? `<details data-capitulo="${escapeHTML(cap)}" ${detallesAbiertos.has(cap) ? 'open' : ''}>
+               <summary>${c.ya_editados} ${c.ya_editados === 1 ? 'clip' : 'clips'}</summary>
+               <ul style="text-align:left; padding-inline-start:1.25rem; overflow-wrap:anywhere;">
+                 ${clips.map(clip => `<li title="${escapeHTML(clip.ruta)}">${escapeHTML(clip.nombre)}</li>`).join('')}
+               </ul>
+             </details>`
+          : c.ya_editados;
         html += `
           <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
             <td style="padding:8px; font-weight:600;">${escapeHTML(cap)}</td>
             <td style="padding:8px; text-align:center; color:var(--text-muted);">${c.sin_editar}</td>
             <td style="padding:8px; text-align:center; color:#38bdf8; font-weight:600;">${c.en_edicion}</td>
-            <td style="padding:8px; text-align:center; color:#10b981; font-weight:600;">${c.ya_editados}</td>
+            <td style="padding:8px; text-align:center; color:#10b981; font-weight:600;">${editados}</td>
             <td style="padding:8px; text-align:center; color:var(--text-muted); font-weight:700;">${c.completos}</td>
           </tr>
         `;
@@ -4222,9 +4270,10 @@
                 <option value="">Seleccionar sesión...</option>
                 ${sesionesActivas.map(s => `<option value="${s.id}">${escapeHTML(s.nombre)} (${escapeHTML(s.capitulo)})</option>`).join('')}
               </select>` : ''}
-              ${!copiado ? `<button class="btn-sm" ${exp.archivo_reemplazado ? 'disabled' : ''} onclick="asignarExportASesion(${exp.id}, '${selectId}', ${exp.sesion_id || 'null'})" style="background:var(--accent); color:#000; font-weight:600;">Enviar al pendrive</button>
+              ${!copiado ? `<button class="btn-sm" ${exp.archivo_reemplazado || exp.sesion_con_final ? 'disabled' : ''} onclick="asignarExportASesion(${exp.id}, '${selectId}', ${exp.sesion_id || 'null'})" style="background:var(--accent); color:#000; font-weight:600;">Enviar al pendrive</button>
               <button class="btn-sm btn-secundario" onclick="descartarExportCapCut(${exp.id})">Descartar de la lista</button>` : ''}
-              ${copiado && exp.ruta_destino ? `<button class="btn-sm btn-secundario" data-ruta="${escapeHTML(exp.ruta_destino)}" onclick="deshacerCopiaCompleto(this.dataset.ruta)">Deshacer envío</button>` : ''}
+              ${copiado && exp.ruta_destino && !exp.ruta_destino.split(/[\\/]/).includes('videosPublicados') ? `<button class="btn-sm btn-secundario" data-ruta="${escapeHTML(exp.ruta_destino)}" onclick="deshacerCopiaCompleto(this.dataset.ruta)">Deshacer envío</button>` : ''}
+              ${copiado && exp.sesion_id && exp.ruta_destino ? `<button class="btn-sm btn-secundario" onclick="buscarOtraVersionExport(${exp.sesion_id})">Buscar otra versión</button>` : ''}
             </div>
             ${!copiado && !exp.sesion_id && !exp.archivo_reemplazado ? `<div class="export-sin-sesion">
               <p>Si este export no corresponde a una sesión pendiente, indicá su título y personaje. La copia usará ese título; el original de CapCut se conserva.</p>
@@ -4237,6 +4286,20 @@
       });
       html += '</div>';
       cont.innerHTML = html;
+    }
+
+    async function buscarOtraVersionExport(sesionId) {
+      try {
+        const resultado = await apiFetch('/api/edicion/revisar-export', {
+          method: 'POST', body: JSON.stringify({sesion_id: sesionId})
+        });
+        const revision = resultado.export_final || {};
+        const mensaje = revision.alternativas?.length
+          ? `Compará estas versiones de CapCut: ${revision.alternativas.join(', ')}.`
+          : 'No encontré otro export posterior dentro de la sesión.';
+        mostrarAvisoEdicion(escapeHTML(mensaje));
+        await cargarVistaEdicion();
+      } catch (error) { mostrarAvisoEdicion(escapeHTML(error.message)); }
     }
 
     async function guardarExportSinPublicar(exportId) {

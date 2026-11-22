@@ -40,6 +40,8 @@ from bandeja.edicion import (
     procesar_exports_pendientes_copia,
     obtener_videos_completados,
     registrar_evento_manifiesto_edicion,
+    plan_volver_a_editar,
+    volver_a_editar,
 )
 
 
@@ -263,6 +265,27 @@ class TestEdicionCapCut(unittest.TestCase):
         self.assertTrue(resultado["exito"], resultado)
         self.assertEqual(len(resultado["retiro_originales"]["pendientes"]), 1)
         return sesion, args, origen, resultado["movidos"][0]["destino"]
+
+    def test_volver_a_editar_con_original_retenido_conserva_ambas_copias(self):
+        sesion, _, original, copia_editada = self._preparar_retiro_pendiente()
+        export = os.path.join(os.path.dirname(self.bitacora_path), "export.mp4")
+        with open(export, "xb") as archivo:
+            archivo.write(b"video terminado")
+        completo = copiar_export_a_videos_completos(export, sesion, self.pendrive_montaje, self.db,
+                                                   self.carpeta_raiz, self.bitacora_path)["destino"]
+        raiz = os.path.join(self.pendrive_montaje, self.carpeta_raiz)
+        sesion = self.db.obtener_sesion_por_id(sesion["id"])
+        resguardo = os.path.join(raiz, "_revertidos", "edicion", "temporal")
+        plan = plan_volver_a_editar(self.db, raiz, sesion, completo, resguardo)
+        self.assertEqual([archivo["ruta"] for archivo in plan["retenidos"]], [original])
+        self.assertEqual(plan["clips"][0]["origen"], copia_editada)
+        self.assertTrue(volver_a_editar(self.db, raiz, plan, self.bitacora_path)["exito"])
+        self.assertEqual(calcular_sha256(original), calcular_sha256(plan["clips"][0]["destino"]))
+        self.assertFalse(os.path.exists(copia_editada))
+        retiros = procesar_retiros_edicion_pendientes(self.db, self.pendrive_montaje,
+                                                       self.carpeta_raiz, self.bitacora_path)
+        self.assertEqual(retiros["retirados"], [])
+        self.assertTrue(os.path.isfile(original))
 
     def test_retiro_diferido_tras_liberar_original_integridad_limpieza_y_deshacer(self):
         sesion, args, origen, destino = self._preparar_retiro_pendiente()
@@ -746,6 +769,23 @@ class TestEdicionCapCut(unittest.TestCase):
         self.assertTrue(revertido["exito"])
         self.assertEqual(len(revertido["revertidos"]), 2)
 
+    def test_deshacer_lote_con_destino_ocupado_no_revierte_el_primer_clip(self):
+        origenes = [self._crear_clip_crudo("lucie", "cafe", f"clip{n}.mp4", f"clip {n}".encode())
+                    for n in (1, 2)]
+        sesion = crear_sesion(self.db, ["lucie/cafe/clip1.mp4", "lucie/cafe/clip2.mp4"], "lucie", "cafe")
+        args = (self.db, sesion["id"], self.pendrive_montaje, self.carpeta_raiz, self.bitacora_path)
+        resultado = finalizar_edicion_crudos(*args)
+        self.assertTrue(resultado["exito"])
+        os.makedirs(os.path.dirname(origenes[1]), exist_ok=True)
+        with open(origenes[1], "xb") as archivo:
+            archivo.write(b"archivo nuevo")
+        deshacer = deshacer_finalizar_edicion(*args)
+        self.assertFalse(deshacer["exito"])
+        self.assertEqual(deshacer["revertidos"], [])
+        self.assertFalse(os.path.exists(origenes[0]))
+        self.assertTrue(all(os.path.isfile(a["destino"]) for a in resultado["movidos"]))
+        self.assertEqual(self.db.obtener_sesion_por_id(sesion["id"])["estado"], "editado")
+
     def test_destino_fechado_ocupado_no_pisa_y_deshacer_no_pisa_origen(self):
         origen = self._crear_clip_crudo("lucie", "cap01", "video.mp4", b"nuevo")
         destino = os.path.join(self.pendrive_raiz, "videos ya editados", "lucie",
@@ -806,12 +846,20 @@ class TestEdicionCapCut(unittest.TestCase):
         self.assertEqual(sesion["nombre_final_defecto"], "clip1.mp4")
         self.assertTrue(os.path.isfile(ruta_clip))
 
+        export = self.db.registrar_export_pendiente(
+            ruta_clip, "export.mp4", 5, os.stat(ruta_clip).st_mtime, sesion["id"], estado="pendiente_copia")
         # Cancelar sesión
         cancelada = cancelar_sesion(self.db, sesion["id"])
         self.assertTrue(cancelada)
 
         sesion_actualizada = self.db.obtener_sesion_por_id(sesion["id"])
         self.assertEqual(sesion_actualizada["estado"], "cancelado")
+        datos = obtener_secciones_edicion(self.pendrive_montaje, self.db)
+        self.assertEqual(datos["en_edicion"], [])
+        self.assertEqual([clip["identificador"] for clip in datos["para_editar"]], [rel_clip])
+        pendiente = next(e for e in self.db.obtener_exports_pendientes() if e["id"] == export)
+        self.assertIsNone(pendiente["sesion_id"])
+        self.assertEqual(pendiente["envio_automatico_bloqueado"], 1)
         # El archivo físico permanece intacto
         self.assertTrue(os.path.isfile(ruta_clip))
 

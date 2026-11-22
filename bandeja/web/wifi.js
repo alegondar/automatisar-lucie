@@ -14,6 +14,7 @@
   let conectando = false;
   let conexionRevision = 0;
   let enviando = false;
+  let volviendoAEditar = false;
   let historialEnvios = [];
   let trabajo = null;
   try { trabajo = sessionStorage.getItem('lucie-envio-wifi') || null; } catch (_) { /* Sin almacenamiento disponible. */ }
@@ -214,7 +215,17 @@
         abrir.target = '_blank';
         abrir.rel = 'noopener';
         abrir.textContent = 'Abrir vista previa';
-        fila.append(cabecera, marco, detalle, carpeta, abrir);
+        fila.append(cabecera);
+        if (archivo.sesion_edicion) {
+          const volver = document.createElement('button');
+          volver.type = 'button';
+          volver.className = 'btn-sm btn-secundario';
+          volver.textContent = 'Volver a editar';
+          volver.disabled = Boolean(trabajo);
+          volver.addEventListener('click', () => volverAEditar(archivo.id, volver));
+          fila.append(volver);
+        }
+        fila.append(marco, detalle, carpeta, abrir);
         if (archivo.personaje === 'sin_asignar') {
           const asignacion = document.createElement('label');
           asignacion.className = 'wifi-asignacion';
@@ -227,6 +238,27 @@
         if (observadorPreviews) observadorPreviews.observe(preview);
         else preview.src = preview.dataset.src;
       }
+    }
+  }
+
+  async function volverAEditar(archivoId, boton) {
+    if (trabajo || volviendoAEditar) return;
+    volviendoAEditar = boton.disabled = true;
+    try {
+      const revision = await peticion('volver-a-editar-simular', {archivo_id: archivoId});
+      const rutas = revision.movimientos.map(a => `${a.origen}\n→ ${a.destino}`).join('\n\n');
+      const retenidos = (revision.retenidos || []).map(ruta => `\n${ruta}`).join('');
+      const avisoRetenidos = retenidos ? `\n\nClips que conservan su ubicación:${retenidos}` : '';
+      if (!confirm(`¿Volver a editar «${revision.nombre}»?\nLa sesión volverá a En edición y el video final quedará resguardado fuera de la cola.\n\n${rutas}${avisoRetenidos}`)) return;
+      await peticion('volver-a-editar', {token: revision.token, confirmacion: true});
+      invalidarPlan();
+      await cargar();
+      mostrarPestana('edicion');
+      mostrarAvisoEdicion('La sesión volvió a En edición. El video final anterior quedó resguardado.');
+    } catch (error) {
+      estado(error.message);
+    } finally {
+      volviendoAEditar = boton.disabled = false;
     }
   }
 
@@ -250,7 +282,7 @@
     dibujarConteo();
   }
 
-  async function cargar() {
+  async function cargar(sesionExport) {
     const consulta = ++consultaLista;
     try {
       const datos = await apiFetch('/api/publicacion/lista');
@@ -263,6 +295,15 @@
       const firma = a => JSON.stringify([a.ruta, a.tamano, a.mtime, a.personaje]);
       if ([...seleccion].some(id => firma(archivos.find(a => a.id === id) || {}) !== firma(nuevos.find(a => a.id === id) || {}))) invalidarPlan();
       archivos = nuevos;
+      if (Number.isInteger(sesionExport) && !trabajo && !enviando) {
+        const video = archivos.find(a => a.sesion_edicion === sesionExport);
+        mostrarVista('envio');
+        el('wifi-personaje').value = video?.personaje || 'todos';
+        el('wifi-filtro').value = video?.nombre || '';
+        seleccion.clear();
+        invalidarPlan();
+        if (!video) estado('El video de esa sesión ya no figura en Sin publicar.');
+      }
       for (const id of personajesElegidos.keys()) if (!archivos.some(a => a.id === id)) personajesElegidos.delete(id);
       dibujarOrganizacion(datos);
       const disponibles = new Set(archivosVisibles().map(a => a.id));

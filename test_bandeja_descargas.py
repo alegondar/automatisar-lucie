@@ -6364,6 +6364,95 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
         self.assertTrue(os.path.isfile(resguardo))
         self.assertFalse(os.path.exists(self.clip_path))
 
+    def test_archivar_lote_confirma_rutas_cierra_sin_export_y_permite_deshacer(self):
+        from bandeja.edicion import crear_sesion, procesar_exports_pendientes_copia
+
+        segundo = os.path.join(os.path.dirname(self.clip_path), "toma_02.mp4")
+        with open(segundo, "xb") as archivo:
+            archivo.write(b"segundo clip")
+        clips = [f"lucie/capitulo_01/toma_0{n}.mp4" for n in (1, 2)]
+        sesion = crear_sesion(self.db, clips, "lucie", "capitulo_01", "Lote externo")
+        export = os.path.join(self.tmp_dir, "export.mp4")
+        with open(export, "xb") as archivo:
+            archivo.write(b"export pendiente")
+        st = os.stat(export)
+        self.db.registrar_export_pendiente(export, "export.mp4", st.st_size, st.st_mtime,
+                                           sesion["id"], estado="pendiente_copia")
+        pen = {"id": "temporal", "conectado": True, "punto_montaje": self.pendrive_dir}
+        simular = "/api/edicion/archivar-crudos-simular"
+        ejecutar = "/api/edicion/archivar-crudos"
+        with patch("bandeja.servidor.detectar_pendrive", return_value=pen), \
+                patch.object(self.servidor.RequestHandlerClass, "_revisar_export_sesion",
+                             side_effect=AssertionError("No revisar el export")):
+            status, plan = self._post(simular, {"sesion_id": sesion["id"]})
+            self.assertEqual(status, 200, plan)
+            self.assertEqual(len(plan["archivos"]), 2)
+            self.assertTrue(all(os.path.isfile(a["origen"]) and not os.path.exists(a["destino"])
+                                for a in plan["archivos"]))
+            self.assertEqual(self._post(ejecutar, {"token": plan["token"], "confirmacion": "true"})[0], 409)
+            datos = {"token": plan["token"], "confirmacion": True}
+            self.assertEqual(self._post(ejecutar, datos, csrf="incorrecto")[0], 403)
+            os.rename(segundo, segundo + ".conservado")
+            with open(segundo, "xb") as archivo:
+                archivo.write(b"version cambiada")
+            self.assertEqual(self._post(ejecutar, datos)[0], 409)
+            self.assertTrue(all(os.path.isfile(a["origen"]) and not os.path.exists(a["destino"])
+                                for a in plan["archivos"]))
+            status, plan = self._post(simular, {"sesion_id": sesion["id"]})
+            self.assertEqual(status, 200, plan)
+            hashes = [calcular_sha256(a["origen"]) for a in plan["archivos"]]
+            datos["token"] = plan["token"]
+            status, resultado = self._post(ejecutar, datos)
+            self.assertEqual(status, 200, resultado)
+            self.assertTrue(resultado["exito"], resultado)
+            self.assertEqual(self._post(ejecutar, datos)[0], 409)
+            self.assertEqual(hashes, [calcular_sha256(a["destino"]) for a in plan["archivos"]])
+            _, secciones, _ = self._get("/api/edicion/secciones")
+            self.assertEqual(secciones["en_edicion"], [])
+            self.assertEqual(secciones["sesiones_esperando_export"], [])
+            self.assertEqual(secciones["sesiones_para_export"], [])
+            listados = secciones["archivos_ya_editados"]["capitulo_01"]
+            self.assertEqual({a["nombre"] for a in listados}, {"toma_01.mp4", "toma_02.mp4"})
+            self.assertTrue(all(a["ruta"].startswith("videos ya editados/lucie/") for a in listados))
+            self.assertEqual(procesar_exports_pendientes_copia(self.pendrive_dir, self.db), [])
+            self.assertEqual(self._post("/api/edicion/revisar-export", {"sesion_id": sesion["id"]})[0], 409)
+            _, undo = self._post("/api/edicion/deshacer-terminar", {"sesion_id": sesion["id"]})
+            self.assertTrue(undo["exito"], undo)
+            self.assertEqual(hashes, [calcular_sha256(a["origen"]) for a in plan["archivos"]])
+            self.assertEqual(self.db.obtener_sesion_por_id(sesion["id"])["solo_crudos"], 0)
+
+    def test_export_alternativo_no_modifica_final_ya_guardado(self):
+        from bandeja.edicion import copiar_export_a_videos_completos, crear_sesion
+
+        capcut = os.path.join(self.tmp_dir, "CapCut")
+        os.makedirs(capcut)
+        self.config.carpeta_exportacion_capcut = capcut
+        sesion = crear_sesion(self.db, ["lucie/capitulo_01/toma_01.mp4"], "lucie", "capitulo_01", "Final")
+        vigente = os.path.join(capcut, "1014.mp4")
+        alternativo = os.path.join(capcut, "1015.mp4")
+        for ruta, datos in ((vigente, b"final correcto"), (alternativo, b"version anterior")):
+            with open(ruta, "xb") as archivo:
+                archivo.write(datos)
+        copia = copiar_export_a_videos_completos(vigente, sesion, self.pendrive_dir, self.db,
+                                                  ruta_bitacora=self.movimientos.ruta_bitacora)
+        st = os.stat(alternativo)
+        anterior = self.db.registrar_export_pendiente(alternativo, "1015.mp4", st.st_size, st.st_mtime,
+                                                       sesion["id"], envio_automatico_bloqueado=1)
+        pen = {"conectado": True, "punto_montaje": self.pendrive_dir}
+        with patch("bandeja.servidor.detectar_pendrive", return_value=pen):
+            status, _ = self._post("/api/capcut/enviar-export", {"export_id": anterior})
+            self.assertEqual(status, 409)
+            _, secciones, _ = self._get("/api/edicion/secciones")
+        actual = self.db.obtener_sesion_por_id(sesion["id"])
+        self.assertEqual(actual["export_asociado"], vigente)
+        self.assertEqual(actual["video_completo_ruta"], copia["destino"])
+        self.assertEqual(calcular_sha256(copia["destino"]), calcular_sha256(vigente))
+        listado = next(e for e in secciones["videos_completados"] if e["id"] == anterior)
+        self.assertEqual(listado["estado"], "sin_asignar")
+        self.assertEqual(listado["envio_automatico_bloqueado"], 1)
+        self.assertTrue(listado["sesion_con_final"])
+        self.assertIsNone(listado["ruta_destino"])
+
     def test_terminar_edicion_copia_export_registrado_y_muestra_destino(self):
         from bandeja.edicion import crear_sesion
         capcut = os.path.join(self.tmp_dir, "CapCut")

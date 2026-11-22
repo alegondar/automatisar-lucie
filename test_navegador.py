@@ -6,6 +6,7 @@ import threading
 import unittest
 from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -77,6 +78,15 @@ class TestNavegador(unittest.TestCase):
         with patch("bandeja.navegador.localizar_chrome", return_value="chrome-sintetico"), patch("bandeja.navegador.subprocess.Popen") as lanzar:
             self.assertFalse(abrir_dashboard_chrome(puerto, espera=0.1))
             lanzar.assert_not_called()
+
+    def test_abre_chrome_con_el_html_actual_del_panel(self):
+        html = (Path(__file__).parent / "bandeja" / "web" / "panel.html").read_bytes()
+        puerto, peticiones = self.servidor([(200, html)])
+        with patch("bandeja.navegador.localizar_chrome", return_value="chrome-sintetico"), \
+                patch("bandeja.navegador.subprocess.Popen") as lanzar:
+            self.assertTrue(abrir_dashboard_chrome(puerto, espera=0.5))
+            self.assertEqual(peticiones, ["/panel.html"])
+            lanzar.assert_called_once()
 
     def test_sin_chrome_no_hay_procesos_ni_sondeo_y_fallo_al_lanzar_no_corta(self):
         with patch("bandeja.navegador.localizar_chrome", return_value=None), patch("bandeja.navegador.http.client.HTTPConnection") as conectar, patch("bandeja.navegador.subprocess.Popen") as lanzar:

@@ -148,6 +148,8 @@ class GestorBaseDatosBandeja:
             columnas_sesion = {r[1] for r in con.execute("PRAGMA table_info(sesiones_edicion)")}
             if "revision_export_solicitada" not in columnas_sesion:
                 cur.execute("ALTER TABLE sesiones_edicion ADD COLUMN revision_export_solicitada INTEGER NOT NULL DEFAULT 0")
+            if "solo_crudos" not in columnas_sesion:
+                cur.execute("ALTER TABLE sesiones_edicion ADD COLUMN solo_crudos INTEGER NOT NULL DEFAULT 0")
 
             cur.execute("""
             CREATE TABLE IF NOT EXISTS exports_pendientes (
@@ -831,6 +833,33 @@ class GestorBaseDatosBandeja:
             con.commit()
             return cur.rowcount > 0
 
+    def revertir_sesion_edicion(self, sesion_id, *, cancelar=False, final_esperado=None):
+        """Actualiza la sesión y desvincula los exports anteriores en la misma transacción."""
+        ahora = datetime.datetime.now().isoformat()
+        with self._lock, self._conectar() as con:
+            if cancelar:
+                cambio = con.execute(
+                    """UPDATE sesiones_edicion SET estado = 'cancelado', fecha_cierre = ?,
+                       export_asociado = NULL, revision_export_solicitada = 0
+                       WHERE id = ? AND estado = 'en_edicion' AND video_completo_ruta IS NULL""",
+                    (ahora, sesion_id))
+            else:
+                cambio = con.execute(
+                    """UPDATE sesiones_edicion SET estado = 'en_edicion', fecha_cierre = NULL,
+                       fecha_creacion = ?, export_asociado = NULL, video_completo_ruta = NULL,
+                       revision_export_solicitada = 0, solo_crudos = 0
+                       WHERE id = ? AND estado = 'completado' AND video_completo_ruta = ?""",
+                    (ahora, sesion_id, final_esperado))
+            if not cambio.rowcount:
+                return False
+            con.execute(
+                """UPDATE exports_pendientes SET sesion_id = NULL, estado = 'sin_asignar',
+                   fecha_copia = NULL, ruta_destino = NULL, error = NULL, envio_automatico_bloqueado = 1
+                   WHERE sesion_id = ? AND estado IN ('pendiente_copia', 'sin_asignar', 'copiado')""",
+                (sesion_id,))
+            con.commit()
+            return True
+
     def registrar_export_pendiente(
         self,
         ruta_origen: str,
@@ -840,6 +869,7 @@ class GestorBaseDatosBandeja:
         sesion_id: Optional[int] = None,
         estado: str = "sin_asignar",
         sha256: Optional[str] = None,
+        envio_automatico_bloqueado: int = 0,
     ) -> int:
         """Registra un nuevo archivo exportado de CapCut."""
         with self._lock, self._conectar() as con:
@@ -847,9 +877,10 @@ class GestorBaseDatosBandeja:
             fecha_ahora = datetime.datetime.now().isoformat()
             cur.execute("""
             INSERT INTO exports_pendientes (
-                ruta_origen, nombre, tamano, mtime, sha256, sesion_id, estado, fecha_deteccion
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(ruta_origen, tamano, mtime) DO NOTHING
-            """, (ruta_origen, nombre, tamano, mtime, sha256, sesion_id, estado, fecha_ahora))
+                ruta_origen, nombre, tamano, mtime, sha256, sesion_id, estado, fecha_deteccion,
+                envio_automatico_bloqueado
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(ruta_origen, tamano, mtime) DO NOTHING
+            """, (ruta_origen, nombre, tamano, mtime, sha256, sesion_id, estado, fecha_ahora, envio_automatico_bloqueado))
             con.commit()
             cur.execute("SELECT id FROM exports_pendientes WHERE ruta_origen = ? AND tamano = ? AND mtime = ?", (ruta_origen, tamano, mtime))
             return cur.fetchone()[0]

@@ -118,7 +118,10 @@ def _destinos_editados_sesion(pendrive_raiz, identificador, incluir_preservados=
         if evento.get("sesion_id") != identificador:
             continue
         clip = evento.get("clip")
-        if evento.get("tipo_evento") == "editado" and evento.get("ruta_destino"):
+        if evento.get("tipo_evento") == "volver_a_editar":
+            destinos.clear()
+            preservados.clear()
+        elif evento.get("tipo_evento") == "editado" and evento.get("ruta_destino"):
             ruta = os.path.join(pendrive_raiz, evento["ruta_destino"].replace("/", os.sep))
             destinos[clip] = resolver_ruta(pendrive_raiz, ruta, traslados_mensuales)
             if evento.get("original_preservado"):
@@ -140,6 +143,8 @@ def _originales_pendientes(pendrive_raiz, sesion, eventos=None, traslados_mensua
         if evento.get("sesion_id") != sesion["identificador"]:
             continue
         clip, tipo = evento.get("clip"), evento.get("tipo_evento")
+        if tipo == "volver_a_editar":
+            pendientes.clear()
         if clip not in sesion.get("clips", []):
             continue
         if tipo == "editado" and evento.get("original_preservado"):
@@ -425,6 +430,7 @@ def obtener_secciones_edicion(
 
     para_editar: List[Dict[str, Any]] = []
     conteos_capitulo: Dict[str, Dict[str, int]] = {}
+    archivos_ya_editados: Dict[str, List[Dict[str, str]]] = {}
 
     def _asegurar_conteo(cap: str):
         if cap not in conteos_capitulo:
@@ -495,6 +501,10 @@ def obtener_secciones_edicion(
                     capitulo = capitulos_por_ruta.get(os.path.normcase(os.path.abspath(ruta_abs))) or partes_capitulo(partes)[1]
                     _asegurar_conteo(capitulo)
                     conteos_capitulo[capitulo]["ya_editados"] += 1
+                    archivos_ya_editados.setdefault(capitulo, []).append({
+                        "nombre": arch,
+                        "ruta": os.path.relpath(ruta_abs, pendrive_raiz).replace(os.sep, "/"),
+                    })
 
     # 3. Explorar 'videos completos'
     if os.path.exists(dir_completos):
@@ -517,11 +527,13 @@ def obtener_secciones_edicion(
         "para_editar": para_editar,
         "en_edicion": sesiones_activas,
         "conteos_capitulo": conteos_capitulo,
+        "archivos_ya_editados": archivos_ya_editados,
         "exports_sin_asignar": exports_sin_asignar,
         "videos_completados": obtener_videos_completados(db),
         "sesiones_para_export": obtener_sesiones_para_export(db),
         "sesiones_esperando_export": [s for s in sesiones
-                                     if s["estado"] == "editado" and not s.get("video_completo_ruta")],
+                                     if s["estado"] == "editado" and not s.get("video_completo_ruta")
+                                     and not s.get("solo_crudos")],
         "traslados_pendientes": [{"id": s["id"], "nombre": s["nombre"], "archivos": planes}
                                  for s in sesiones
                                  if s.get("fecha_cierre") and s["estado"] in ("editado", "completado")
@@ -533,6 +545,7 @@ def obtener_secciones_edicion(
 # Ciclo de Vida de Sesiones
 # =========================================================================
 
+@_serializar_crudos
 def crear_sesion(
     db: GestorBaseDatosBandeja,
     clips: List[str],
@@ -615,6 +628,7 @@ def obtener_carpeta_edicion(sesion, punto_montaje, carpeta_raiz="LucieSinReglas"
     return os.path.abspath(carpeta)
 
 
+@_serializar_crudos
 def sumar_videos_sesion(db, sesion_id, clips, punto_montaje, carpeta_raiz="LucieSinReglas"):
     """Agrega referencias de crudos a una sesión abierta sin mover archivos."""
     if not isinstance(clips, list) or not clips or any(not isinstance(c, str) for c in clips):
@@ -646,6 +660,7 @@ def sumar_videos_sesion(db, sesion_id, clips, punto_montaje, carpeta_raiz="Lucie
     return db.sumar_clips_sesion_edicion(sesion_id, [anteriores.get(_clip_efectivo(raiz, c), c) for c in clips])
 
 
+@_serializar_crudos
 def cancelar_sesion(
     db: GestorBaseDatosBandeja,
     sesion_id: int,
@@ -655,18 +670,57 @@ def cancelar_sesion(
     No altera archivos físicos; los clips vuelven a 'Para editar'.
     """
     sesion = db.obtener_sesion_por_id(sesion_id)
-    if not sesion or sesion["estado"] != "en_edicion":
+    if not sesion or sesion["estado"] != "en_edicion" or sesion.get("video_completo_ruta"):
         return False
-    return db.actualizar_sesion_edicion(
-        sesion_id,
-        estado="cancelado",
-        fecha_cierre=datetime.datetime.now().isoformat(),
-    )
+    return db.revertir_sesion_edicion(sesion_id, cancelar=True)
 
 
 # =========================================================================
 # Transición "Terminé de editar" (videos sin editar -> videos ya editados)
 # =========================================================================
+
+def _rutas_cierre_crudos(raiz, sesion, fecha, destinos):
+    categoria = os.path.join(raiz, "videos ya editados")
+    nombre = nombre_carpeta_ya_editado(nombre_video_sesion(sesion), fecha)
+    carpeta = carpeta_capitulo(raiz, "videos ya editados", sesion["personaje"], nombre, fecha)
+    for clip in sesion["clips"]:
+        base, origen = _origen_clip(raiz, clip)
+        anterior = os.path.join(categoria, clip.replace("/", os.sep))
+        destino = destinos.get(clip) or (anterior if os.path.exists(anterior)
+                                        else os.path.join(carpeta, os.path.basename(anterior)))
+        yield clip, base, origen, destino
+
+
+def simular_archivo_crudos(db, sesion_id, raiz, fecha):
+    sesion = db.obtener_sesion_por_id(sesion_id)
+    if not sesion or sesion.get("fecha_cierre") or sesion["estado"] not in ("en_edicion", "completado") or not sesion["clips"]:
+        raise ValueError("La sesión ya no está activa.")
+    if not _sin_enlaces(os.path.join(raiz, ".lucie", NOMBRE_MANIFIESTO_PENDRIVE)):
+        raise ValueError("El manifiesto del pendrive contiene un enlace.")
+    destinos = _destinos_editados_sesion(raiz, sesion["identificador"])
+    categoria = os.path.join(raiz, "videos ya editados")
+    archivos = []
+    destinos_vistos = set()
+    for clip, base, origen, destino in _rutas_cierre_crudos(raiz, sesion, fecha, destinos):
+        if (not esta_confinado_en_raiz(origen, base) or not esta_confinado_en_raiz(destino, categoria)
+                or not _sin_enlaces(origen) or not _sin_enlaces(destino)):
+            raise ValueError(f"Ruta no segura para {clip}.")
+        clave = os.path.normcase(destino)
+        if clave in destinos_vistos:
+            raise ValueError(f"Dos clips tienen el mismo destino: {destino}")
+        destinos_vistos.add(clave)
+        sha_origen = calcular_sha256(origen) if os.path.isfile(origen) else None
+        sha_destino = calcular_sha256(destino) if os.path.isfile(destino) else None
+        if not sha_origen and not (sha_destino and clip in destinos):
+            raise ValueError(f"No se encontró el clip registrado: {origen}")
+        if os.path.lexists(destino) and (clip not in destinos or not sha_destino
+                                      or (sha_origen and sha_origen != sha_destino)):
+            raise FileExistsError(f"El destino está ocupado: {destino}")
+        archivos.append({"clip": clip, "origen": origen, "destino": destino, "sha_origen": sha_origen,
+                         "sha_destino": sha_destino})
+    return {"sesion_id": sesion_id, "identificador": sesion["identificador"],
+            "fecha": fecha, "archivos": archivos}
+
 
 @_serializar_crudos
 def finalizar_edicion_crudos(
@@ -676,6 +730,7 @@ def finalizar_edicion_crudos(
     carpeta_raiz: str = "LucieSinReglas",
     ruta_bitacora: str = "bitacora_bandeja.jsonl",
     confirmar_cierre_revertido: bool = False,
+    plan_archivo: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Mueve los clips crudos de la sesión de 'videos sin editar' a 'videos ya editados'
@@ -687,6 +742,11 @@ def finalizar_edicion_crudos(
         raise ValueError(f"No existe la sesión {sesion_id}")
 
     pendrive_raiz = os.path.join(pendrive_montaje, carpeta_raiz)
+    if plan_archivo is not None:
+        actual = simular_archivo_crudos(db, sesion_id, pendrive_raiz, plan_archivo["fecha"])
+        if actual != plan_archivo:
+            raise ValueError("Cambió algún clip o destino. Revisá un nuevo plan.")
+    solo_crudos = plan_archivo is not None or bool(sesion.get("solo_crudos"))
     dir_sin_editar = os.path.join(pendrive_raiz, "videos sin editar")
     dir_ya_editados = os.path.join(pendrive_raiz, "videos ya editados")
 
@@ -719,23 +779,20 @@ def finalizar_edicion_crudos(
                 "conflictos": [{"clip": a["clip"], "error": "Envío revertido. Actualizá las sesiones y usá Cerrar sesión sin mover archivos."}
                                for a in revision["archivos"]], "omisiones": [], "fase": "validacion_previa"}
 
-    clips = sesion.get("clips", [])
     destinos_registrados, preservados = _destinos_editados_sesion(pendrive_raiz, sesion["identificador"], incluir_preservados=True)
-    fecha_traslado = datetime.datetime.now()
+    fecha_traslado = plan_archivo["fecha"] if plan_archivo is not None else datetime.datetime.now()
+    rutas = list(_rutas_cierre_crudos(pendrive_raiz, sesion, fecha_traslado, destinos_registrados))
+    esperados = {a["clip"]: a for a in plan_archivo["archivos"]} if plan_archivo is not None else {}
     movidos = []
     conflictos = []
     omisiones = []
 
     # Validar el lote entero antes de mover el primer clip. Un faltante no debe
     # dejar más archivos trasladados ni una sesión parcialmente finalizada.
-    for rel_clip in clips:
-        base_orig, ruta_orig = _origen_clip(pendrive_raiz, rel_clip)
-        ruta_anterior = os.path.join(dir_ya_editados, rel_clip.replace("/", os.sep))
-        ruta_dest = destinos_registrados.get(rel_clip) or (
-            ruta_anterior if os.path.exists(ruta_anterior) else os.path.join(
-                carpeta_capitulo(pendrive_raiz, "videos ya editados", sesion["personaje"],
-                                 nombre_carpeta_ya_editado(nombre_video_sesion(sesion), fecha_traslado), fecha_traslado),
-                os.path.basename(ruta_anterior)))
+    for rel_clip, base_orig, ruta_orig, ruta_dest in rutas:
+        if esperados and (ruta_orig, ruta_dest) != (esperados[rel_clip]["origen"], esperados[rel_clip]["destino"]):
+            conflictos.append({"clip": rel_clip, "error": "Cambió la ruta revisada; volvé a simular."})
+            continue
         if not esta_confinado_en_raiz(ruta_orig, base_orig) or not esta_confinado_en_raiz(ruta_dest, dir_ya_editados):
             conflictos.append({"clip": rel_clip, "error": "Ruta no confinada en el pendrive"})
         elif not os.path.isfile(ruta_orig) and not os.path.isfile(ruta_dest):
@@ -747,18 +804,7 @@ def finalizar_edicion_crudos(
         return {"exito": False, "sesion_id": sesion_id, "id_operacion": None,
                 "movidos": [], "conflictos": conflictos, "omisiones": [], "fase": "validacion_previa"}
 
-    for rel_clip in clips:
-        # Asegurar ruta confinada
-        base_orig, ruta_orig = _origen_clip(pendrive_raiz, rel_clip)
-        ruta_anterior = os.path.join(dir_ya_editados, rel_clip.replace("/", os.sep))
-        ruta_dest = destinos_registrados.get(rel_clip)
-        if not ruta_dest:
-            ruta_dest = ruta_anterior if os.path.exists(ruta_anterior) else os.path.join(
-                carpeta_capitulo(pendrive_raiz, "videos ya editados", sesion["personaje"],
-                                 nombre_carpeta_ya_editado(nombre_video_sesion(sesion), fecha_traslado), fecha_traslado),
-                os.path.basename(ruta_anterior),
-            )
-
+    for rel_clip, base_orig, ruta_orig, ruta_dest in rutas:
         if not esta_confinado_en_raiz(ruta_orig, base_orig) or not esta_confinado_en_raiz(ruta_dest, dir_ya_editados):
             conflictos.append({"clip": rel_clip, "error": "Ruta no confinada en el pendrive"})
             continue
@@ -792,9 +838,15 @@ def finalizar_edicion_crudos(
         # Traslado seguro
         os.makedirs(os.path.dirname(ruta_dest), exist_ok=True)
         sha_orig = calcular_sha256(ruta_orig)
+        if esperados and sha_orig != esperados[rel_clip]["sha_origen"]:
+            conflictos.append({"clip": rel_clip, "error": "Cambió el clip revisado; volvé a simular."})
+            continue
         original_preservado = False
         try:
-            os.rename(ruta_orig, ruta_dest)
+            if solo_crudos:
+                mover_sin_sobrescribir(ruta_orig, ruta_dest)
+            else:
+                os.rename(ruta_orig, ruta_dest)
         except OSError as e:
             if getattr(e, "winerror", None) not in (32, 33):
                 conflictos.append({"clip": rel_clip, "error": str(e)})
@@ -840,6 +892,7 @@ def finalizar_edicion_crudos(
         "sesion_identificador": sesion["identificador"],
         "movidos": movidos,
         "pendrive_raiz": pendrive_raiz,
+        "solo_crudos": solo_crudos,
     }
     registrar_bitacora_edicion(ruta_bitacora, registro_bit)
 
@@ -849,7 +902,8 @@ def finalizar_edicion_crudos(
             sesion_id,
             estado="completado" if sesion.get("video_completo_ruta") else "editado",
             fecha_cierre=sesion.get("fecha_cierre") or datetime.datetime.now().isoformat(),
-            revision_export_solicitada=1,
+            revision_export_solicitada=0 if solo_crudos else 1,
+            solo_crudos=int(solo_crudos),
         )
 
     carpetas_retiradas = retirar_carpetas_vacias_traslado(
@@ -867,6 +921,7 @@ def finalizar_edicion_crudos(
         "omisiones": omisiones,
         "carpetas_vacias_retiradas": carpetas_retiradas,
         "retiro_originales": retiros,
+        "solo_crudos": solo_crudos,
     }
 
 
@@ -907,26 +962,38 @@ def deshacer_finalizar_edicion(
     destinos_registrados, originales_preservados = _destinos_editados_sesion(pendrive_raiz, sesion["identificador"], incluir_preservados=True)
     revertidos = []
     conflictos = []
+    rutas = []
 
     for rel_clip in clips:
         base_orig, ruta_orig = _origen_clip(pendrive_raiz, rel_clip)
         ruta_dest = destinos_registrados.get(rel_clip) or os.path.join(dir_ya_editados, rel_clip.replace("/", os.sep))
 
-        if not esta_confinado_en_raiz(ruta_orig, base_orig) or not esta_confinado_en_raiz(ruta_dest, dir_ya_editados):
-            conflictos.append({"clip": rel_clip, "error": "Ruta no confinada en el pendrive"})
+        if (not esta_confinado_en_raiz(ruta_orig, base_orig)
+                or not esta_confinado_en_raiz(ruta_dest, dir_ya_editados)
+                or not _sin_enlaces(ruta_orig) or not _sin_enlaces(ruta_dest)):
+            conflictos.append({"clip": rel_clip, "error": "Ruta no segura en el pendrive"})
             continue
 
         if not os.path.isfile(ruta_dest):
             continue
 
-        if os.path.exists(ruta_orig):
+        if os.path.lexists(ruta_orig) and not (rel_clip in originales_preservados and os.path.isfile(ruta_orig)
+                                              and calcular_sha256(ruta_orig) == calcular_sha256(ruta_dest)):
+            conflictos.append({"clip": rel_clip, "error": f"La ruta de retorno '{ruta_orig}' está ocupada."})
+            continue
+        rutas.append((rel_clip, ruta_orig, ruta_dest))
+    if conflictos:
+        return {"exito": False, "sesion_id": sesion_id, "revertidos": [], "conflictos": conflictos}
+
+    for rel_clip, ruta_orig, ruta_dest in rutas:
+        if os.path.lexists(ruta_orig):
             if rel_clip in originales_preservados and os.path.isfile(ruta_orig) and calcular_sha256(ruta_orig) == calcular_sha256(ruta_dest):
                 conservada = os.path.join(pendrive_raiz, "_revertidos", str(uuid.uuid4()), os.path.basename(ruta_dest))
-                if not esta_confinado_en_raiz(conservada, pendrive_raiz):
+                if not esta_confinado_en_raiz(conservada, pendrive_raiz) or not _sin_enlaces(conservada):
                     conflictos.append({"clip": rel_clip, "error": "Ruta de reversión fuera del pendrive"})
                     continue
                 os.makedirs(os.path.dirname(conservada), exist_ok=True)
-                os.rename(ruta_dest, conservada)
+                mover_sin_sobrescribir(ruta_dest, conservada)
                 revertidos.append({"clip": rel_clip, "de": ruta_dest, "a": conservada, "original_conservado": ruta_orig})
                 registrar_evento_manifiesto_edicion(pendrive_raiz, {
                     "id_evento": str(uuid.uuid4()), "fecha": datetime.datetime.now().isoformat(),
@@ -940,7 +1007,7 @@ def deshacer_finalizar_edicion(
             continue
 
         os.makedirs(os.path.dirname(ruta_orig), exist_ok=True)
-        os.rename(ruta_dest, ruta_orig)
+        mover_sin_sobrescribir(ruta_dest, ruta_orig)
         revertidos.append({"clip": rel_clip, "de": ruta_dest, "a": ruta_orig})
 
         registrar_evento_manifiesto_edicion(
@@ -966,7 +1033,7 @@ def deshacer_finalizar_edicion(
 
     if revertidos:
         db.actualizar_sesion_edicion(sesion_id, estado="completado" if sesion.get("video_completo_ruta") else "en_edicion",
-                                    fecha_cierre=None, revision_export_solicitada=0)
+                                    fecha_cierre=None, revision_export_solicitada=0, solo_crudos=0)
 
     return {
         "exito": len(conflictos) == 0,
@@ -1133,6 +1200,7 @@ def copiar_export_a_videos_completos(
     }
 
 
+@_serializar_crudos
 def deshacer_copia_completo(
     video_completo_ruta: str,
     pendrive_montaje: str,
@@ -1142,17 +1210,21 @@ def deshacer_copia_completo(
 ) -> Dict[str, Any]:
     """
     Deshace la copia a 'videos completos' trasladando el archivo a
-    <pendrive>/<carpeta_raiz>/_revertidos/<nombre> mediante os.rename.
+    <pendrive>/<carpeta_raiz>/_revertidos/<nombre> sin sobrescribir.
     NO BORRA NUNCA EL ARCHIVO (Regla de Oro #1).
     """
     pendrive_raiz = os.path.join(pendrive_montaje, carpeta_raiz)
-    if not esta_confinado_en_raiz(video_completo_ruta, os.path.join(pendrive_raiz, "videos completos")):
+    completos = os.path.join(pendrive_raiz, "videos completos")
+    if not esta_confinado_en_raiz(video_completo_ruta, completos) or not _sin_enlaces(video_completo_ruta):
         raise ValueError("El video debe estar dentro de videos completos del pendrive vinculado.")
+    if esta_confinado_en_raiz(video_completo_ruta, os.path.join(completos, "videosPublicados")):
+        raise ValueError("Primero usá Volver a Sin publicar desde el historial del envío al celular.")
     if not os.path.isfile(video_completo_ruta):
         raise FileNotFoundError(f"El archivo no existe: '{video_completo_ruta}'")
 
-    pendrive_raiz = os.path.join(pendrive_montaje, carpeta_raiz)
     dir_revertidos = os.path.join(pendrive_raiz, "_revertidos")
+    if not _sin_enlaces(dir_revertidos) or not _sin_enlaces(os.path.join(pendrive_raiz, ".lucie", NOMBRE_MANIFIESTO_PENDRIVE)):
+        raise ValueError("La carpeta de resguardo o el manifiesto contiene un enlace.")
     os.makedirs(dir_revertidos, exist_ok=True)
 
     nombre_base = os.path.basename(video_completo_ruta)
@@ -1160,12 +1232,12 @@ def deshacer_copia_completo(
     dest_revertido = os.path.join(dir_revertidos, nombre_revertido)
 
     # Si ya existe en _revertidos, sufijar con timestamp para no pisar
-    if os.path.exists(dest_revertido):
+    if os.path.lexists(dest_revertido):
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         raiz_n, ext_n = os.path.splitext(nombre_base)
         dest_revertido = os.path.join(dir_revertidos, f"{raiz_n}_{ts}{ext_n}")
 
-    os.rename(video_completo_ruta, dest_revertido)
+    mover_sin_sobrescribir(video_completo_ruta, dest_revertido)
 
     # Registrar en manifiesto
     registrar_evento_manifiesto_edicion(
@@ -1193,7 +1265,7 @@ def deshacer_copia_completo(
     for sesion in db.obtener_sesiones_edicion():
         if sesion.get("video_completo_ruta") != video_completo_ruta:
             continue
-        db.actualizar_sesion_edicion(sesion["id"], video_completo_ruta=None,
+        db.actualizar_sesion_edicion(sesion["id"], video_completo_ruta=None, export_asociado=None,
                                     estado="editado" if sesion.get("fecha_cierre") else "en_edicion")
         for export in db.obtener_exports_pendientes():
             if export.get("sesion_id") == sesion["id"] and export["estado"] == "copiado":
@@ -1206,6 +1278,112 @@ def deshacer_copia_completo(
     return {"exito": True, "ruta_revertida": dest_revertido}
 
 
+def plan_volver_a_editar(db, raiz, sesion, final, resguardo):
+    """Plan para una copia de Sin publicar vinculada por ruta exacta."""
+    if (not sesion or sesion["estado"] != "completado" or not sesion.get("video_completo_ruta")
+            or os.path.normcase(os.path.abspath(sesion["video_completo_ruta"])) != os.path.normcase(final)
+            or not sesion["clips"]):
+        raise ValueError("El video ya no pertenece a esa sesión de edición.")
+    if not _sin_enlaces(os.path.join(raiz, ".lucie", NOMBRE_MANIFIESTO_PENDRIVE)):
+        raise ValueError("El manifiesto del pendrive contiene un enlace.")
+    eventos = list(eventos_manifiesto(raiz))
+    mensuales = [e for e in eventos if e.get("tipo_evento") == "organizacion_mensual_completada"]
+    clips_efectivos = {_clip_efectivo(raiz, clip, mensuales) for clip in sesion["clips"]}
+    for otra in obtener_sesiones_con_crudos_pendientes(db):
+        if otra["id"] != sesion["id"] and clips_efectivos.intersection(
+                _clip_efectivo(raiz, clip, mensuales) for clip in otra["clips"]):
+            raise ValueError("Hay clips que ya pertenecen a otra sesión abierta.")
+    destinos, preservados = _destinos_editados_sesion(raiz, sesion["identificador"],
+                                                       incluir_preservados=True, eventos=eventos,
+                                                       traslados_mensuales=mensuales)
+    registros = {e.get("clip"): e for e in eventos if e.get("sesion_id") == sesion["identificador"]
+                 and e.get("tipo_evento") in ("editado", "deshacer_editado")}
+    completos = os.path.join(raiz, "videos completos", "videos sin publicar")
+    editados = os.path.join(raiz, "videos ya editados")
+    if not esta_confinado_en_raiz(final, completos):
+        raise ValueError("El video debe seguir en Sin publicar.")
+
+    def comprobar(ruta, base):
+        if not esta_confinado_en_raiz(ruta, base) or not _sin_enlaces(ruta):
+            raise ValueError(f"Ruta no segura: {ruta}")
+
+    def movimiento(origen, destino, sha=None):
+        comprobar(origen, raiz)
+        comprobar(destino, raiz)
+        if os.path.lexists(destino):
+            raise FileExistsError(f"El destino está ocupado: {destino}")
+        hash_actual = calcular_sha256(origen)
+        if sha and sha != hash_actual:
+            raise ValueError(f"El archivo cambió desde su registro: {origen}")
+        return {"origen": origen, "destino": destino, "sha256": hash_actual}
+
+    restauraciones, retenidos = [], []
+    for clip in sesion["clips"]:
+        base, original = _origen_clip(raiz, clip, mensuales)
+        comprobar(original, base)
+        copia = destinos.get(clip)
+        sha = registros.get(clip, {}).get("sha256")
+        if copia is None and not sesion.get("fecha_cierre") and os.path.isfile(original):
+            retenidos.append({"ruta": original, "sha256": calcular_sha256(original)})
+            continue
+        if not copia:
+            raise ValueError(f"No se encontró un traslado registrado para {clip}.")
+        comprobar(copia, editados)
+        destino = original
+        if os.path.lexists(original):
+            if clip not in preservados or not os.path.isfile(original) or calcular_sha256(original) != calcular_sha256(copia):
+                raise FileExistsError(f"La ruta original está ocupada: {original}")
+            retenidos.append({"ruta": original, "sha256": calcular_sha256(original)})
+            destino = os.path.join(resguardo, "crudos", *clip.split("/"))
+            comprobar(destino, resguardo)
+        restauraciones.append({**movimiento(copia, destino, sha), "clip": clip})
+    sha_final = next((e.get("sha256") for e in reversed(eventos) if e.get("tipo_evento") == "completo"
+                      and e.get("sesion_id") == sesion["identificador"]), None)
+    video = movimiento(final, os.path.join(resguardo, os.path.basename(final)), sha_final)
+    return {"sesion": sesion, "video": video, "clips": restauraciones, "retenidos": retenidos}
+
+
+@_serializar_crudos
+def volver_a_editar(db, raiz, plan, ruta_bitacora):
+    sesion = db.obtener_sesion_por_id(plan["sesion"]["id"])
+    video = plan["video"]
+    if plan_volver_a_editar(db, raiz, sesion, video["origen"], os.path.dirname(video["destino"])) != plan:
+        raise ValueError("Cambió la sesión o un archivo. Revisá un nuevo plan.")
+    movimientos = [*plan["clips"], video]
+    for archivo in movimientos:
+        if not verificar_archivo_exclusivo(archivo["origen"]):
+            raise ValueError(f"El archivo está en uso: {archivo['origen']}. Cerrá su vista previa y volvé a intentar.")
+    evento = {"id_operacion": str(uuid.uuid4()), "tipo_operacion": "volver_a_editar",
+              "fecha": datetime.datetime.now().isoformat(), "sesion_id": sesion["identificador"],
+              "movimientos": movimientos, "fecha_creacion_anterior": sesion["fecha_creacion"]}
+    registrar_bitacora_edicion(ruta_bitacora, {**evento, "fase": "preparado"})
+    registrar_evento_manifiesto_edicion(raiz, {**evento, "tipo_evento": "volver_a_editar_preparado"})
+    movidos = []
+    try:
+        for archivo in movimientos:
+            os.makedirs(os.path.dirname(archivo["destino"]), exist_ok=True)
+            mover_sin_sobrescribir(archivo["origen"], archivo["destino"])
+            movidos.append(archivo)
+            if calcular_sha256(archivo["destino"]) != archivo["sha256"]:
+                raise ValueError(f"No se pudo verificar el archivo trasladado: {archivo['destino']}")
+        if not db.revertir_sesion_edicion(sesion["id"], final_esperado=sesion["video_completo_ruta"]):
+            raise ValueError("La sesión cambió mientras se restablecía la edición.")
+    except Exception:
+        conflictos = []
+        for archivo in reversed(movidos):
+            try:
+                mover_sin_sobrescribir(archivo["destino"], archivo["origen"])
+            except OSError as error:
+                conflictos.append(str(error))
+        if conflictos:
+            registrar_bitacora_edicion(ruta_bitacora, {**evento, "fase": "reversion_pendiente", "errores": conflictos})
+            raise ValueError("Un archivo impidió restaurar las rutas anteriores. Revisá la bitácora de edición.")
+        raise
+    registrar_evento_manifiesto_edicion(raiz, {**evento, "tipo_evento": "volver_a_editar"})
+    registrar_bitacora_edicion(ruta_bitacora, {**evento, "fase": "completado"})
+    return {"exito": True, "ruta_revertida": video["destino"], "sesion_id": sesion["id"]}
+
+
 # =========================================================================
 # Lógica de Vinculación Determinista y Cola Offline
 # =========================================================================
@@ -1213,7 +1391,7 @@ def deshacer_copia_completo(
 def obtener_sesiones_para_export(db: GestorBaseDatosBandeja) -> List[Dict[str, Any]]:
     """Una sesion terminada sigue esperando su export hasta que se asocie uno."""
     return [s for s in db.obtener_sesiones_edicion()
-            if s["estado"] in ("en_edicion", "editado") and not s.get("export_asociado")]
+            if s["estado"] in ("en_edicion", "editado") and not s.get("export_asociado") and not s.get("solo_crudos")]
 
 
 def elegir_sesion_export_automatico(sesiones):
@@ -1239,14 +1417,19 @@ def obtener_videos_completados(db: GestorBaseDatosBandeja) -> List[Dict[str, Any
             reemplazado = st.st_size != export["tamano"] or st.st_mtime != export["mtime"]
         except OSError:
             pass
+        ruta_destino = export.get("ruta_destino") if export["estado"] == "copiado" else None
+        if export["estado"] == "copiado" and sesion.get("export_asociado") == export["ruta_origen"]:
+            ruta_destino = sesion.get("video_completo_ruta") or ruta_destino
         resultado.append({**export, "nombre_video": sesion.get("nombre") or export["nombre"],
                           "archivo_reemplazado": reemplazado,
-                          "ruta_destino": sesion.get("video_completo_ruta") or export.get("ruta_destino"),
+                          "ruta_destino": ruta_destino,
+                          "sesion_con_final": bool(sesion.get("video_completo_ruta")),
                           "capitulo": sesion.get("capitulo"),
                           "personaje": sesion.get("personaje")})
     return resultado
 
 
+@_serializar_crudos
 def vincular_nuevo_export(
     export_info: Dict[str, Any],
     pendrive_montaje: Optional[str],
@@ -1379,6 +1562,37 @@ def verificar_version_export(export):
         raise ValueError("CapCut reemplazó este export. Elegí la nueva versión en Videos completados.")
 
 
+@_serializar_crudos
+def asignar_export_manual(db, export_id, sesion_id, carpeta_capcut, montaje, carpeta_raiz, ruta_bitacora):
+    exports = db.obtener_exports_pendientes()
+    export = next((e for e in exports if e["id"] == export_id), None)
+    sesion = db.obtener_sesion_por_id(sesion_id)
+    if not export or not sesion:
+        raise LookupError("No se encontró el export o la sesión.")
+    if export["estado"] in ("copiado", "descartado") or sesion["estado"] == "cancelado":
+        raise ValueError("El export o la sesión ya no están disponibles para el envío.")
+    if sesion.get("video_completo_ruta"):
+        raise FileExistsError("La sesión ya tiene un video final. Revisá esa copia antes de asignar otra versión.")
+    if export.get("sesion_id") not in (None, sesion_id) or any(
+            e["id"] != export_id and e.get("sesion_id") == sesion_id and e["estado"] == "pendiente_copia"
+            for e in exports):
+        raise ValueError("Ya hay otra asociación pendiente. Revisá el export asignado.")
+    origen = export["ruta_origen"]
+    if not esta_confinado_en_raiz(origen, carpeta_capcut) or not _sin_enlaces(origen):
+        raise PermissionError("Export fuera de la carpeta de CapCut o con enlaces.")
+    verificar_version_export(export)
+    if montaje:
+        copia = copiar_export_a_videos_completos(origen, sesion, montaje, db, carpeta_raiz, ruta_bitacora)
+        db.actualizar_export_pendiente(export_id, sesion_id=sesion_id, estado="copiado",
+                                      fecha_copia=datetime.datetime.now().isoformat(), sha256=copia["sha256"],
+                                      ruta_destino=copia["destino"], error=None, envio_automatico_bloqueado=0)
+        return {"exito": True, "resultado_copia": copia}
+    db.actualizar_export_pendiente(export_id, sesion_id=sesion_id, estado="pendiente_copia",
+                                  error=None, envio_automatico_bloqueado=0)
+    db.actualizar_sesion_edicion(sesion_id, export_asociado=origen)
+    return {"exito": True, "modo": "encolado_offline"}
+
+
 def revisar_export_terminado(db, sesion_id, pendrive_montaje, carpeta_raiz,
                             ruta_bitacora, automatico=True, ruta_capcut=None):
     """Conecta el cierre explícito de una sesión con su único export vigente."""
@@ -1394,8 +1608,25 @@ def registrar_exports_revision_ambigua(db, revision):
         if any(os.path.normcase(os.path.abspath(e["ruta_origen"])) == os.path.normcase(os.path.abspath(exp["ruta_absoluta"]))
                and e["tamano"] == exp["tamano"] and e["mtime"] == exp["mtime"] for e in existentes):
             continue
-        identificador = db.registrar_export_pendiente(exp["ruta_absoluta"], exp["nombre"], exp["tamano"], exp["mtime"])
-        db.actualizar_export_pendiente(identificador, envio_automatico_bloqueado=1)
+        db.registrar_export_pendiente(exp["ruta_absoluta"], exp["nombre"], exp["tamano"], exp["mtime"],
+                                      envio_automatico_bloqueado=1)
+
+
+def revisar_versiones_posteriores(db, vigilante, sesion):
+    """Ofrece versiones posteriores al export copiado sin asociarlas por fecha."""
+    if not vigilante or not sesion.get("export_asociado"):
+        return []
+    copias = [e for e in db.obtener_exports_pendientes(estado="copiado")
+              if e.get("sesion_id") == sesion["id"] and e["ruta_origen"] == sesion["export_asociado"]]
+    if not copias:
+        return []
+    revision = vigilante.revisar_export_sesion(sesion, posterior_a=max(e["mtime"] for e in copias))
+    candidatos = revision.get("exports", [])
+    registrar_exports_revision_ambigua(db, revision)
+    pendientes = db.obtener_exports_pendientes(estado="sin_asignar")
+    return [e["nombre"] for e in pendientes if not e.get("sesion_id") and any(
+        e["ruta_origen"] == a["ruta_absoluta"] and e["tamano"] == a["tamano"] and e["mtime"] == a["mtime"]
+        for a in candidatos)]
 
 
 def _revisar_export_terminado(db, sesion_id, pendrive_montaje, carpeta_raiz,
@@ -1403,6 +1634,8 @@ def _revisar_export_terminado(db, sesion_id, pendrive_montaje, carpeta_raiz,
     sesion = db.obtener_sesion_por_id(sesion_id)
     if not sesion or not sesion.get("fecha_cierre"):
         raise ValueError("Primero confirmá Terminé de editar en esta sesión.")
+    if sesion.get("solo_crudos"):
+        raise ValueError("La sesión se cerró moviendo solamente los clips a Ya editados.")
     if sesion.get("video_completo_ruta"):
         if not os.path.isfile(sesion["video_completo_ruta"]):
             return {"modo": "error", "mensaje": "La copia registrada del video final no está disponible. Revisá Videos completados."}
@@ -1591,6 +1824,7 @@ def retomar_export_actual_sin_asignar(db, pendrive_montaje, carpeta_raiz, ruta_b
                                 pendrive_montaje, db, carpeta_raiz, ruta_bitacora)
 
 
+@_serializar_crudos
 def procesar_exports_pendientes_copia(
     pendrive_montaje: str,
     db: GestorBaseDatosBandeja,
@@ -1608,7 +1842,7 @@ def procesar_exports_pendientes_copia(
         if not sesion_id:
             continue
         sesion = db.obtener_sesion_por_id(sesion_id)
-        if not sesion:
+        if not sesion or sesion.get("solo_crudos"):
             continue
 
         try:

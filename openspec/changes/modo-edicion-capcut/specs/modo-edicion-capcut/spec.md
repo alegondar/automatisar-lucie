@@ -11,6 +11,20 @@ Permite gestionar el ciclo de posproducción con CapCut: agrupar clips en sesion
 
 ## ADDED Requirements
 
+### Requirement: Regresar a edición desde la cola del celular
+El sistema SHALL ofrecer «Volver a editar» en un video de Sin publicar vinculado por ruta exacta a una única sesión. El plan SHALL mostrar los traslados y pedir confirmación antes de ejecutarlos.
+
+#### Scenario: Reabrir para corregir un video
+- **WHEN** el usuario confirma un plan vigente
+- **THEN** se restablecen los crudos en sus rutas originales, se resguarda el completo anterior fuera de la cola y se reabre la misma sesión. Los originales retenidos que coinciden por hash conservan su lugar y la copia redundante se resguarda. El export anterior queda bloqueado para copia automática.
+
+#### Scenario: Deshacer el inicio de una sesión abierta
+- **WHEN** el usuario confirma «Deshacer inicio de edición» en una sesión sin copia del final
+- **THEN** los clips vuelven a «Para editar», los archivos conservan su ubicación y cualquier export anterior de esa sesión queda disponible para revisión manual.
+
+### Requirement: Mover un lote a Ya editados
+El sistema SHALL ofrecer «Mover lote a Ya editados» en una sesión activa. La acción SHALL simular las rutas de todo el lote, pedir confirmación explícita y cerrar la sesión cuando se hayan organizado todos sus clips. El cierre SHALL conservar la opción de deshacer y dejar fuera de la revisión y copia automáticas de exports a esa sesión.
+
 ### Requirement: Creación y gestión de sesiones de edición
 El sistema SHALL permitir agrupar uno o más clips crudos en una sesión de edición con identificador único, nombre editable y cálculo automático del nombre del video final (`<capítulo>videocompleto` o `<clip>videocompleto`).
 

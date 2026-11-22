@@ -19,6 +19,8 @@ import subprocess
 import logging
 import mimetypes
 import socket
+import threading
+import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Set, Tuple, Any, Union
@@ -52,6 +54,7 @@ from bandeja.pendrive import (
     leer_omisiones_envio,
     montar_unidad_pendrive,
     desmontar_unidad_pendrive,
+    operacion_pendrive_exclusiva,
 )
 from bandeja.vigilante import VigilanteBandeja
 from bandeja.eliminacion import GestorEliminacionPendrive
@@ -66,10 +69,12 @@ from bandeja.edicion import (
     sumar_videos_sesion,
     cancelar_sesion,
     finalizar_edicion_crudos,
+    simular_archivo_crudos,
     revisar_export_terminado,
     registrar_exports_revision_ambigua,
+    revisar_versiones_posteriores,
     deshacer_finalizar_edicion,
-    copiar_export_a_videos_completos,
+    asignar_export_manual,
     deshacer_copia_completo,
     vincular_nuevo_export,
     procesar_exports_pendientes_copia,
@@ -692,6 +697,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         if ruta in ("/api/publicacion/buscar", "/api/publicacion/conectar", "/api/publicacion/simular",
                     "/api/publicacion/enviar", "/api/publicacion/cancelar", "/api/publicacion/deshacer",
                     "/api/publicacion/resguardar", "/api/publicacion/resguardar-simular", "/api/publicacion/organizar-simular",
+                    "/api/publicacion/volver-a-editar", "/api/publicacion/volver-a-editar-simular",
                     "/api/publicacion/organizar", "/api/publicacion/deshacer-organizacion"):
             self._handle_publicacion(ruta, body)
         elif ruta == "/api/pendrive/eliminacion-simular":
@@ -746,6 +752,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._handle_edicion_cancelar_sesion(body)
         elif ruta == "/api/edicion/terminar":
             self._handle_edicion_terminar(body)
+        elif ruta in ("/api/edicion/archivar-crudos-simular", "/api/edicion/archivar-crudos"):
+            self._handle_archivar_crudos(body, simular=ruta.endswith("-simular"))
         elif ruta == "/api/edicion/revisar-export":
             self._handle_edicion_revisar_export(body)
         elif ruta == "/api/edicion/deshacer-terminar":
@@ -787,6 +795,10 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
                 resultado = self.publicacion.deshacer(body.get("id_operacion"))
             elif ruta.endswith("/resguardar-simular"):
                 resultado = self.publicacion.simular_resguardo(body.get("export_id"), body.get("titulo"), body.get("personaje"))
+            elif ruta.endswith("/volver-a-editar-simular"):
+                resultado = self.publicacion.simular_vuelta_edicion(body.get("archivo_id"))
+            elif ruta.endswith("/volver-a-editar"):
+                resultado = self.publicacion.ejecutar_vuelta_edicion(body.get("token"), body.get("confirmacion"), self.movimientos.ruta_bitacora)
             else:
                 resultado = self.publicacion.resguardar(body.get("token"), body.get("confirmacion"), self.movimientos.ruta_bitacora)
             self._enviar_json(resultado)
@@ -1474,11 +1486,53 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         try:
             res = finalizar_edicion_crudos(self.db, int(sesion_id), punto_pen, carpeta_raiz, ruta_bit,
                                           confirmar_cierre_revertido=body.get("confirmar_cierre_revertido") is True)
-            if res["exito"] and not res.get("sin_traslado"):
+            if res["exito"] and not res.get("sin_traslado") and not res.get("solo_crudos"):
                 res["export_final"] = self._revisar_export_sesion(int(sesion_id), punto_pen, carpeta_raiz, ruta_bit)
             self._enviar_json(res)
         except Exception as e:
             self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al finalizar edición: {e}")
+
+    def _handle_archivar_crudos(self, body, simular):
+        try:
+            if not isinstance(body, dict):
+                raise ValueError("Solicitud inválida.")
+            pen = detectar_pendrive(self.config)
+            if not pen or not pen.get("conectado"):
+                raise ValueError("Conectá el pendrive para mover el lote.")
+            montaje = pen.get("punto_montaje") or pen.get("ruta_montaje")
+            carpeta = self.config.carpeta_raiz_pendrive
+            raiz = os.path.abspath(os.path.join(montaje, carpeta))
+            st = os.stat(raiz)
+            identidad = (pen.get("id"), raiz, st.st_dev, st.st_ino)
+            ahora = time.monotonic()
+            if simular:
+                if type(body.get("sesion_id")) is not int:
+                    raise ValueError("Sesión inválida.")
+                plan = simular_archivo_crudos(self.db, body["sesion_id"], raiz, datetime.datetime.now())
+                token = secrets.token_urlsafe(32)
+                with self.lock_archivar_crudos:
+                    vencidos = [k for k, datos in self.planes_archivar_crudos.items() if datos[0] <= ahora]
+                    for k in vencidos:
+                        self.planes_archivar_crudos.pop(k)
+                    self.planes_archivar_crudos[token] = (ahora + 300, identidad, plan)
+                respuesta = {"token": token, "archivos": [
+                    {"origen": a["origen"], "destino": a["destino"]} for a in plan["archivos"]]}
+            else:
+                token = body.get("token")
+                if body.get("confirmacion") is not True or not isinstance(token, str):
+                    raise ValueError("Confirmá primero el plan para mover el lote.")
+                with operacion_pendrive_exclusiva():
+                    with self.lock_archivar_crudos:
+                        datos = self.planes_archivar_crudos.pop(token, None)
+                    if not datos or datos[0] <= ahora or datos[1] != identidad:
+                        raise ValueError("El plan venció, ya se usó o cambió el pendrive. Volvé a simular.")
+                    plan = datos[2]
+                    respuesta = finalizar_edicion_crudos(
+                        self.db, plan["sesion_id"], os.path.abspath(montaje), carpeta,
+                        self.movimientos.ruta_bitacora, plan_archivo=plan)
+            self._enviar_json(respuesta)
+        except (OSError, ValueError) as error:
+            self._enviar_error(HTTPStatus.CONFLICT, str(error))
 
     def _revisar_export_sesion(self, sesion_id, punto_pen, carpeta_raiz, ruta_bit):
         try:
@@ -1486,6 +1540,11 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             estado = revisar_export_terminado(self.db, sesion_id, punto_pen, carpeta_raiz, ruta_bit, automatico,
                                              self.config.obtener_carpeta_exportacion_capcut())
             sesion = self.db.obtener_sesion_por_id(sesion_id)
+            if estado["modo"] == "copiado":
+                alternativas = revisar_versiones_posteriores(self.db, self.vigilante_capcut, sesion)
+                if alternativas:
+                    estado = {**estado, "modo": "revisar_version", "alternativas": alternativas,
+                              "mensaje": "Hay un export posterior al que está en la cola. Compará las versiones en Videos completados antes de enviar."}
             if automatico and estado["modo"] == "esperando_export" and not sesion.get("export_asociado"):
                 if self.vigilante_capcut:
                     revision = self.vigilante_capcut.revisar_export_sesion(sesion, self.db.obtener_sesiones_edicion())
@@ -1512,6 +1571,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             sesion = self.db.obtener_sesion_por_id(body["sesion_id"])
             if not sesion or not sesion.get("fecha_cierre"):
                 raise ValueError("Primero confirmá Terminé de editar en esta sesión.")
+            if sesion.get("solo_crudos"):
+                raise ValueError("La sesión se cerró moviendo solamente los clips a Ya editados.")
             self.db.actualizar_sesion_edicion(sesion["id"], revision_export_solicitada=1)
             punto = pen.get("punto_montaje") or pen.get("ruta_montaje")
             ruta_bit = getattr(self.movimientos, "ruta_bitacora", "bitacora_bandeja.jsonl")
@@ -1542,65 +1603,35 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al deshacer finalización: {e}")
 
     def _handle_capcut_asignar_export(self, body: Dict[str, Any]):
-        export_id = body.get("export_id")
-        sesion_id = body.get("sesion_id")
-        if not export_id:
+        if not isinstance(body, dict) or not body.get("export_id"):
             self._enviar_error(HTTPStatus.BAD_REQUEST, "Campo 'export_id' requerido.")
             return
-
-        exp_list = self.db.obtener_exports_pendientes() if self.db else []
-        target_exp = next((e for e in exp_list if e["id"] == int(export_id)), None)
-        if not target_exp:
-            self._enviar_error(HTTPStatus.NOT_FOUND, "Export no encontrado.")
-            return
-
-        if target_exp["estado"] in ("copiado", "descartado"):
-            self._enviar_error(HTTPStatus.CONFLICT, "El export ya fue enviado o descartado.")
-            return
-        if not esta_confinado_en_raiz(target_exp["ruta_origen"], self.config.obtener_carpeta_exportacion_capcut()):
-            self._enviar_error(HTTPStatus.FORBIDDEN, "Export fuera de la carpeta de CapCut.")
-            return
-        sesion_id = sesion_id or target_exp.get("sesion_id")
-        if not sesion_id:
-            self._enviar_error(HTTPStatus.BAD_REQUEST, "Selecciona la edicion correspondiente al export.")
-            return
-
-        sesion = self.db.obtener_sesion_por_id(int(sesion_id))
-        if not sesion:
-            self._enviar_error(HTTPStatus.NOT_FOUND, "Sesión no encontrada.")
-            return
-
         try:
-            verificar_version_export(target_exp)
-        except (ValueError, OSError) as e:
-            self._enviar_error(HTTPStatus.CONFLICT, str(e))
-            return
-        self.db.actualizar_export_pendiente(int(export_id), sesion_id=int(sesion_id), estado="pendiente_copia", error=None, envio_automatico_bloqueado=0)
-        self.db.actualizar_sesion_edicion(int(sesion_id), export_asociado=target_exp["ruta_origen"])
-
-        info_pen = detectar_pendrive(self.config)
-        if info_pen and info_pen.get("conectado"):
-            punto_pen = info_pen.get("punto_montaje") or info_pen.get("ruta_montaje")
-            carpeta_raiz = getattr(self.config, "carpeta_raiz_pendrive", "LucieSinReglas")
-            ruta_bit = getattr(self.movimientos, "ruta_bitacora", "bitacora_bandeja.jsonl") if self.movimientos else "bitacora_bandeja.jsonl"
-            try:
-                res_copia = copiar_export_a_videos_completos(
-                    target_exp["ruta_origen"], sesion, punto_pen, self.db, carpeta_raiz, ruta_bit
-                )
-                self.db.actualizar_export_pendiente(
-                    int(export_id),
-                    estado="copiado",
-                    fecha_copia=datetime.datetime.now().isoformat(),
-                    sha256=res_copia.get("sha256"),
-                    error=None,
-                )
-                self._enviar_json({"exito": True, "resultado_copia": res_copia})
-            except Exception as e:
-                self.db.actualizar_export_pendiente(int(export_id), error=str(e))
-                self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al copiar export: {e}")
-        else:
-            self.db.actualizar_export_pendiente(int(export_id), estado="pendiente_copia")
-            self._enviar_json({"exito": True, "modo": "encolado_offline"})
+            export_id = int(body["export_id"])
+            export = next((e for e in self.db.obtener_exports_pendientes() if e["id"] == export_id), None)
+            if not export:
+                raise LookupError("Export no encontrado.")
+            if export["estado"] in ("copiado", "descartado"):
+                raise ValueError("El export ya fue enviado o descartado.")
+            sesion_id = int(body.get("sesion_id") or export.get("sesion_id") or 0)
+            if not sesion_id:
+                self._enviar_error(HTTPStatus.BAD_REQUEST, "Seleccion? la edici?n correspondiente al export.")
+                return
+            with operacion_pendrive_exclusiva():
+                pen = detectar_pendrive(self.config)
+                montaje = (pen.get("punto_montaje") or pen.get("ruta_montaje")) if pen and pen.get("conectado") else None
+                carpeta = getattr(self.config, "carpeta_raiz_pendrive", "LucieSinReglas")
+                bitacora = getattr(self.movimientos, "ruta_bitacora", "bitacora_bandeja.jsonl")
+                resultado = asignar_export_manual(self.db, export_id, sesion_id,
+                                                   self.config.obtener_carpeta_exportacion_capcut(),
+                                                   montaje, carpeta, bitacora)
+            self._enviar_json(resultado)
+        except LookupError as error:
+            self._enviar_error(HTTPStatus.NOT_FOUND, str(error))
+        except PermissionError as error:
+            self._enviar_error(HTTPStatus.FORBIDDEN, str(error))
+        except (OSError, ValueError, TypeError) as error:
+            self._enviar_error(HTTPStatus.CONFLICT, str(error))
 
     def _handle_capcut_descartar_export(self, body: Dict[str, Any]):
         export_id = body.get("export_id")
@@ -1626,10 +1657,11 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
         ruta_bit = getattr(self.movimientos, "ruta_bitacora", "bitacora_bandeja.jsonl") if self.movimientos else "bitacora_bandeja.jsonl"
 
         try:
-            res = deshacer_copia_completo(video_completo_ruta, punto_pen, self.db, carpeta_raiz, ruta_bit)
+            with operacion_pendrive_exclusiva():
+                res = deshacer_copia_completo(video_completo_ruta, punto_pen, self.db, carpeta_raiz, ruta_bit)
             self._enviar_json(res)
-        except Exception as e:
-            self._enviar_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Error al deshacer copia de completo: {e}")
+        except (OSError, ValueError) as e:
+            self._enviar_error(HTTPStatus.CONFLICT, str(e))
 
     def _handle_capcut_escanear(self, body: Dict[str, Any]):
         if self.vigilante_capcut:
@@ -1743,6 +1775,8 @@ def crear_servidor(config: ConfiguracionBandeja, db: GestorBaseDatosBandeja,
     CustomHandler.token_csrf = token
     CustomHandler.eliminacion = GestorEliminacionPendrive(config)
     CustomHandler.publicacion = GestorPublicacion(config, db)
+    CustomHandler.planes_archivar_crudos = {}
+    CustomHandler.lock_archivar_crudos = threading.Lock()
 
     servidor = ServidorBandejaHTTPServer((config.host_servidor, config.puerto_servidor), CustomHandler)
     servidor.daemon_threads = True

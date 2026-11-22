@@ -232,7 +232,7 @@ class VigilanteCapCut:
             except Exception as e:
                 logger.error(f"[CapCut] Error al procesar pendientes: {e}")
 
-    def revisar_export_sesion(self, sesion, otras_sesiones=()):
+    def revisar_export_sesion(self, sesion, otras_sesiones=(), *, posterior_a=None):
         """Revisa solo un export de la ventana de la sesión confirmada.
 
         Permite detectar un export anterior al arranque del vigilante, sin
@@ -272,6 +272,10 @@ class VigilanteCapCut:
                         continue
                     if st.st_size <= 0 or not inicio <= st.st_mtime <= fin:
                         continue
+                    if posterior_a is not None:
+                        if st.st_mtime > posterior_a:
+                            candidatos.append((os.path.normcase(os.path.abspath(ruta)), st, ruta))
+                        continue
                     if any(s["id"] != sesion["id"] and s["estado"] != "cancelado"
                            and datetime.datetime.fromisoformat(s["fecha_creacion"]).timestamp() <= st.st_mtime
                            and (not s.get("fecha_cierre") or
@@ -284,6 +288,10 @@ class VigilanteCapCut:
                     if self._exports_detectados.get(norm) == self._firma(st):
                         continue
                     candidatos.append((norm, st, ruta))
+            if posterior_a is not None:
+                return {"modo": "otras_versiones", "exports": [
+                    {"ruta_absoluta": ruta, "nombre": os.path.basename(ruta),
+                     "tamano": st.st_size, "mtime": st.st_mtime} for _, st, ruta in candidatos]}
             if len(candidatos) != 1 or superpuestas:
                 return {"modo": "ambiguo" if candidatos or superpuestas else "esperando_export", "cantidad": len(candidatos),
                         "exports": [{"ruta_absoluta": ruta, "nombre": os.path.basename(ruta),

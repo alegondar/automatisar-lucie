@@ -15,7 +15,7 @@ function elemento() {
     addEventListener(tipo, fn) { this.eventos[tipo] = fn; }};
 }
 async function probar() {
-  const cont = elemento(); const avisos = []; const llamadas = [];
+  const cont = elemento(); const avisos = []; const acciones = []; const llamadas = [];
   let modo = 'copiado';
   let pendientes = [];
   const confirmaciones = [];
@@ -23,8 +23,9 @@ async function probar() {
     revisionesCrudosEdicion: new Map(),
     document: {getElementById: () => cont, createElement: elemento},
     confirm: mensaje => {confirmaciones.push(mensaje); return true;}, alert: mensaje => { throw Error(mensaje); },
-    escapeHTML: s => String(s).replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
-    mostrarAvisoEdicion: mensaje => avisos.push(mensaje), cargarVistaEdicion: async () => {},
+    escapeHTML: s => String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
+    mostrarAvisoEdicion: (mensaje, botones) => { avisos.push(mensaje); acciones.push(botones); },
+    cargarVistaEdicion: async () => {},
     apiFetch: async (ruta, datos) => { llamadas.push({ruta, datos}); return {export_final: {modo, mensaje: 'Esperando export'}}; },
     fetchConCsrf: async (ruta, datos) => {
       llamadas.push({ruta, datos}); return {json: async () => ({exito: true, movidos: [{}], retiro_originales: {pendientes},
@@ -46,10 +47,16 @@ async function probar() {
   await ctx.terminarEdicionSesion(7);
   assert.ok(avisos.at(-1).includes('Video final copiado'));
   assert.ok(avisos.at(-1).includes('videos completos/videos sin publicar'));
+  assert.ok(acciones.at(-1).includes("mostrarPestana('publicacion', null, 7)"));
   modo = 'error'; await ctx.terminarEdicionSesion(7);
   assert.ok(avisos.at(-1).includes('sin espacio'));
   assert.ok(!avisos.at(-1).includes('Video final copiado'));
+  assert.ok(!acciones.at(-1).includes('Ver en Enviar al celular'));
   assert.equal(llamadas.filter(c => c.ruta === '/api/edicion/terminar').length, 2);
+  modo = 'revisar_version';
+  await ctx.terminarEdicionSesion(7);
+  assert.ok(acciones.at(-1).includes('Comparar exports'));
+  modo = 'error';
   pendientes = [{clip: 'clip.mp4'}];
   await ctx.terminarEdicionSesion(7);
   assert.ok(avisos.at(-1).includes('siguen en Sin editar'));
@@ -89,6 +96,24 @@ async function probar() {
   assert(cont.innerHTML.includes('&lt;ruta&gt;'));
   ctx.renderizarSesionesEnEdicion([{...sesionRevertida, revision_crudos: {estado: 'cierre_pendiente', mensaje: 'Ya organizados'}}]);
   assert(cont.innerHTML.includes('Registrar cierre'));
+  assert(cont.innerHTML.includes('Mover lote a Ya editados'));
+  const archivar = [];
+  ctx.apiFetch = async (ruta, datos) => {
+    archivar.push([ruta, JSON.parse(datos.body)]);
+    return ruta.endsWith('-simular') ? {token: 'lote', archivos: [{origen: 'Sin editar/clip.mp4',
+      destino: 'Ya editados/clip.mp4'}]} : {exito: true};
+  };
+  vm.runInContext(extraer('archivarCrudosSesion', 'deshacerTerminarEdicion'), ctx);
+  ctx.confirm = () => false;
+  await ctx.archivarCrudosSesion(62, {});
+  assert.equal(archivar.length, 1);
+  ctx.confirm = mensaje => {
+    assert(mensaje.includes('Ya editados/clip.mp4'));
+    return true;
+  };
+  await ctx.archivarCrudosSesion(62, {});
+  assert.deepEqual(archivar.at(-1), ['/api/edicion/archivar-crudos', {token: 'lote', confirmacion: true}]);
+  assert(avisos.at(-1).includes('Sesión cerrada'));
   ctx.renderizarSesionesEnEdicion([]);
   assert.equal(ctx.revisionesCrudosEdicion.size, 0);
   ctx.fetchConCsrf = fetchOriginal;
@@ -145,6 +170,7 @@ async function probar() {
   ctx.renderizarTrasladosPendientes([{id: 32, nombre: 'Lucie pedo', archivos: [{automatico: true, en_uso: true}]}]);
   assert.equal(resumen.style.display, 'block');
   assert(resumen.textContent.includes('Ya editados'));
+  assert(resumen.textContent.includes('sesión cerrada'));
   assert(resumen.textContent.includes('automáticamente'));
   assert(lista.children[0].children[0].textContent.includes('Windows los mantiene en uso'));
   ctx.renderizarTrasladosPendientes([historico]);
@@ -167,6 +193,20 @@ async function probar() {
   await consultaAnterior;
   assert.equal(ctx.revisionesCrudosEdicion.size, 0, 'La respuesta anterior al cierre no puede restaurar la sesión.');
   ctx.cargarVistaEdicion = async () => {};
+
+  const capituloEditado = 'Ejemplo <clip>';
+  const contEditados = elemento();
+  contEditados.querySelectorAll = () => [{dataset: {capitulo: capituloEditado}}];
+  const obtenerElemento = ctx.document.getElementById;
+  ctx.document.getElementById = id => id === 'contenedor-editados-completos' ? contEditados : obtenerElemento(id);
+  vm.runInContext(extraer('renderizarEditadosYCompletos', 'renderizarExportsCapCut'), ctx);
+  ctx.renderizarEditadosYCompletos({[capituloEditado]: {sin_editar: 0, en_edicion: 0, ya_editados: 1, completos: 1}},
+    {[capituloEditado]: [{nombre: 'clip<&>.mp4', ruta: 'videos ya editados/clip<&>.mp4'}]});
+  assert(contEditados.innerHTML.includes('Clips en Ya editados'));
+  assert(contEditados.innerHTML.includes('Videos finales'));
+  assert(contEditados.innerHTML.includes('clip&lt;&amp;&gt;.mp4'));
+  assert(/<details[^>]+ open>/.test(contEditados.innerHTML));
+  ctx.document.getElementById = obtenerElemento;
 
   vm.runInContext(extraer('guardarExportSinPublicar', 'asignarExportASesion'), ctx);
   const campoTitulo = {value: '', focus() {this.enfocado = true;}};

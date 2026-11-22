@@ -13,12 +13,13 @@ import threading
 import time
 import unicodedata
 import uuid
+from collections import Counter
 
 from bandeja.config import calcular_sha256
 from bandeja.carpetas_vacias import retirar_carpetas_vacias_traslado
 from bandeja.localsend import ClienteLocalSend, PUERTO_LUCIE, tipo_receptor, validar_receptor
 from bandeja.pendrive import detectar_pendrive, operacion_pendrive_exclusiva
-from bandeja.edicion import registrar_evento_manifiesto_edicion
+from bandeja.edicion import plan_volver_a_editar, registrar_evento_manifiesto_edicion, volver_a_editar
 from bandeja.plataforma import mover_sin_sobrescribir
 
 CARPETA_SIN_PUBLICAR = "videos sin publicar"
@@ -53,6 +54,7 @@ class GestorPublicacion:
         self.cliente = cliente or ClienteLocalSend()
         self._planes = {}
         self._planes_resguardo = {}
+        self._planes_edicion = {}
         self._dispositivos = {}
         self._trabajos = {}
         self._cancelaciones = {}
@@ -94,9 +96,13 @@ class GestorPublicacion:
             return archivos
         personajes_por_ruta = {}
         sesiones = {s["id"]: s for s in self.db.obtener_sesiones_edicion()}
+        sesiones_por_ruta = {}
         for sesion in sesiones.values():
             if sesion.get("video_completo_ruta"):
-                personajes_por_ruta[os.path.normcase(os.path.abspath(sesion["video_completo_ruta"]))] = personaje_conocido(sesion["personaje"])
+                clave = os.path.normcase(os.path.abspath(sesion["video_completo_ruta"]))
+                personajes_por_ruta[clave] = personaje_conocido(sesion["personaje"])
+                if sesion["estado"] == "completado":
+                    sesiones_por_ruta.setdefault(clave, []).append(sesion["id"])
         for export in self.db.obtener_exports_pendientes():
             sesion = sesiones.get(export.get("sesion_id"))
             if sesion and export.get("ruta_destino"):
@@ -140,6 +146,9 @@ class GestorPublicacion:
                                            "carpeta_relativa": "/".join(partes[:-1]) or "Sin publicar (raíz)",
                                            "tipo": "imagen" if nombre.lower().endswith(EXTENSIONES_IMAGEN) else "video",
                                            "id_media": "publicacion:" + identificador}
+                asociadas = sesiones_por_ruta.get(os.path.normcase(ruta), [])
+                if len(asociadas) == 1:
+                    archivos[identificador]["sesion_edicion"] = asociadas[0]
         return archivos
 
     def resolver_media(self, identificador):
@@ -258,6 +267,36 @@ class GestorPublicacion:
                 self.db, self.config.carpeta_raiz_pendrive, ruta_bitacora, plan=revision["plan"])
             return {"exito": True, "destino": destino}
 
+    def simular_vuelta_edicion(self, archivo_id):
+        identidad = self._identidad()
+        entrada = self._inventario(identidad).get(archivo_id) if isinstance(archivo_id, str) else None
+        if not entrada or not entrada.get("sesion_edicion"):
+            raise ValueError("El video ya no está en Sin publicar o no tiene una sesión vinculada.")
+        raiz = identidad[1]
+        sesion = self.db.obtener_sesion_por_id(entrada["sesion_edicion"])
+        token = secrets.token_urlsafe(32)
+        resguardo = self._ruta(raiz, "_revertidos/edicion/" + str(uuid.uuid4()))
+        plan = plan_volver_a_editar(self.db, raiz, sesion, self._ruta(raiz, entrada["ruta"]), resguardo)
+        ahora = time.monotonic()
+        with self._lock:
+            self._planes_edicion = {k: v for k, v in self._planes_edicion.items() if v["vence"] > ahora}
+            self._planes_edicion[token] = {"identidad": identidad, "plan": plan, "vence": ahora + 300}
+        return {"token": token, "nombre": sesion["nombre"], "movimientos": [plan["video"], *plan["clips"]],
+                "retenidos": [archivo["ruta"] for archivo in plan["retenidos"]]}
+
+    def ejecutar_vuelta_edicion(self, token, confirmacion, ruta_bitacora):
+        if confirmacion is not True or not isinstance(token, str):
+            raise ValueError("Confirmá primero el plan para volver a editar.")
+        with operacion_pendrive_exclusiva():
+            with self._lock:
+                revision = self._planes_edicion.pop(token, None)
+            if not revision or revision["vence"] < time.monotonic():
+                raise ValueError("El plan venció o ya se utilizó. Revisá nuevamente.")
+            identidad = self._identidad()
+            if identidad != revision["identidad"]:
+                raise ValueError("Cambió el pendrive desde la revisión.")
+            return volver_a_editar(self.db, identidad[1], revision["plan"], ruta_bitacora)
+
     def buscar_dispositivos(self, receptor=None):
         validar_receptor(receptor)
         return [self._guardar_dispositivo(d) for d in self.cliente.descubrir(receptor=receptor)
@@ -337,13 +376,23 @@ class GestorPublicacion:
             raise FileExistsError("Se ocupó el destino de publicación. No se sobrescribe.")
 
     def _actualizar_rutas(self, origen, destino):
-        sesiones = []
+        origen = os.path.normcase(os.path.abspath(origen))
+        sesiones = {}
         for sesion in self.db.obtener_sesiones_edicion():
-            if sesion.get("video_completo_ruta") == origen:
+            ruta = sesion.get("video_completo_ruta")
+            if ruta and os.path.normcase(os.path.abspath(ruta)) == origen:
                 self.db.actualizar_sesion_edicion(sesion["id"], video_completo_ruta=destino)
-                sesiones.append(sesion["id"])
-        for export in self.db.obtener_exports_pendientes():
-            if export.get("ruta_destino") == origen or export.get("sesion_id") in sesiones:
+                sesiones[sesion["id"]] = sesion.get("export_asociado")
+        copiados = self.db.obtener_exports_pendientes(estado="copiado")
+        cantidad_por_sesion = Counter(export.get("sesion_id") for export in copiados)
+        for export in copiados:
+            sesion_id = export.get("sesion_id")
+            ruta = export.get("ruta_destino")
+            coincide = ruta and os.path.normcase(os.path.abspath(ruta)) == origen
+            vinculado = sesiones.get(sesion_id) == export["ruta_origen"]
+            historico = (sesion_id in sesiones and not sesiones[sesion_id] and not ruta
+                         and cantidad_por_sesion[sesion_id] == 1)
+            if coincide or vinculado or historico:
                 self.db.actualizar_export_pendiente(export["id"], ruta_destino=destino)
 
     def iniciar_envio(self, token, confirmacion, pin=""):
