@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#101011">
   <meta name="csrf-token" content="__TOKEN_CSRF__">
   <title>Lucie Sin Reglas · Bandeja de Descargas</title>
-  <link rel="stylesheet" href="/panel.css?v=20261122-eliminar-lote">
+  <link rel="stylesheet" href="/panel.css?v=20261122-eliminar-local">
 </head>
 <body>
   <a class="saltar-contenido" href="#contenido-principal">Saltar al contenido</a>
@@ -324,7 +324,7 @@
           </button>
         </div>
       </div>
-      <p id="eliminar-lote-estado" role="status" class="eliminar-lote-estado"></p>
+      <p id="eliminar-archivo-estado-lotes" role="status" class="eliminar-lote-estado"></p>
       <div id="contenedor-lotes">Cargando lotes...</div>
 
       <div id="sec-lotes-anteriores" style="display:none; margin-top:24px;">
@@ -346,6 +346,7 @@
         <p style="color:var(--text-muted); margin-bottom:16px;">
           Archivos de media sin patrón conocido. Marcá si corresponden al proyecto o ignorar. La decisión se recuerda por hash.
         </p>
+        <p id="eliminar-archivo-estado-sin-identificar" role="status" class="eliminar-lote-estado"></p>
         <div id="contenedor-sin-identificar">Cargando...</div>
       </div>
     </section>
@@ -762,7 +763,7 @@
   <script>
     const REFRESCO_PANEL_SEGUNDOS = __REFRESCO__;
   </script>
-  <script src="/panel.js?v=20261122-eliminar-lote"></script>
+  <script src="/panel.js?v=20261122-eliminar-local"></script>
   <script src="/wifi.js?v=20261122-cola"></script>
   <div id="toast-llegada" class="toast-llegada"></div>
 </body>

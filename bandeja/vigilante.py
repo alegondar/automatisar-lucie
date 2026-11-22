@@ -500,7 +500,7 @@ class VigilanteBandeja:
             self._detener.wait(self.config.intervalo_sondeo_segundos)
 
     def retirar_archivo_eliminado(self, ruta, id_media):
-        """Quita el archivo del inventario sin cambiar los IDs de los lotes restantes."""
+        """Quita el archivo de las vistas sin cambiar los IDs de los lotes restantes."""
         def retirar(lotes):
             restantes = []
             for lote in lotes:
@@ -515,6 +515,9 @@ class VigilanteBandeja:
         with self._lock:
             self._lotes_actuales = retirar(self._lotes_actuales)
             self._lotes_anteriores_actuales = retirar(self._lotes_anteriores_actuales)
+            self._sin_identificar_actuales = [
+                a for a in self._sin_identificar_actuales if a.get("id_media") != id_media
+            ]
             self._ultimo_conteo_lotes = len(self._lotes_actuales)
             self._mapa_media.pop(id_media, None)
             self._media_registrada.pop(id_media, None)

@@ -7,3 +7,8 @@
 ## 2. Verificación
 
 - [x] 2.1 Validar el flujo y rechazos en temporales, revisar la interfaz y ejecutar las auditorías y la suite.
+
+## 3. Extensión a Sin identificar
+
+- [x] 3.1 Reutilizar la acción y el diálogo en la tabla y validar el archivo en su inventario de origen.
+- [x] 3.2 Comprobar el borrado, la cancelación y la reclasificación en temporales.

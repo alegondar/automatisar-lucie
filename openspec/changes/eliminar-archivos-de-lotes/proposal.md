@@ -1,10 +1,10 @@
 ## Why
 
-Quien revisa Lotes detectados necesita eliminar una foto o un video local que ya no quiere conservar.
+Quien revisa Lotes detectados o Sin identificar necesita eliminar una foto o un video local que ya no quiere conservar.
 
 ## What Changes
 
-- Cada foto o video de los lotes ofrece «Eliminar del disco».
+- Cada foto o video de Lotes detectados y Sin identificar ofrece «Eliminar del disco».
 - Una ventana muestra la ruta y pregunta si se confirma el borrado permanente, con «Sí» y «No».
 - Las Reglas de Oro admiten esta segunda excepción manual con simulación previa, registro y auditoría AST.
 
@@ -12,7 +12,7 @@ Quien revisa Lotes detectados necesita eliminar una foto o un video local que ya
 
 ### New Capabilities
 
-- `eliminacion-local-de-lotes`: Borrado individual y permanente de fotos y videos de Lotes detectados.
+- `eliminacion-local-de-lotes`: Borrado individual y permanente de fotos y videos de Lotes detectados y Sin identificar.
 
 ### Modified Capabilities
 

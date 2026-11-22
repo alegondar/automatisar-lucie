@@ -1639,11 +1639,11 @@
       });
     }
 
-    function botonEliminarArchivoLote(archivo) {
+    function botonEliminarArchivoLocal(archivo, origen = 'lotes') {
       const esFotoOVideo = /\.(mp4|mov|webm|m4v|mkv|avi|jpe?g|png|webp|gif|bmp)$/i.test(archivo.nombre);
       if (!archivo.id_media || !archivo.hash || !esFotoOVideo) return '';
-      return `<button type="button" class="btn-sm eliminar-archivo-lote"
-        data-media="${escapeHTML(archivo.id_media)}" data-sha256="${escapeHTML(archivo.hash)}"
+      return `<button type="button" class="btn-sm eliminar-archivo-local"
+        data-media="${escapeHTML(archivo.id_media)}" data-sha256="${escapeHTML(archivo.hash)}" data-origen="${origen}"
         aria-label="Eliminar del disco: ${escapeHTML(archivo.nombre)}"
         onclick="revisarEliminacionArchivoLote(this)">Eliminar del disco</button>`;
     }
@@ -1652,15 +1652,17 @@
       const dialogo = document.getElementById('dialog-eliminar-archivo-lote');
       if (eliminacionArchivoLoteEnCurso || dialogo.dataset.token) return;
       eliminacionArchivoLoteEnCurso = true;
-      const estado = document.getElementById('eliminar-lote-estado');
+      const {media, sha256, origen} = boton.dataset;
+      const estado = document.getElementById(`eliminar-archivo-estado-${origen}`);
       estado.textContent = '';
       try {
         const plan = await apiFetch('/api/lotes/eliminacion-simular', {
-          method: 'POST', body: JSON.stringify({id_media: boton.dataset.media, sha256: boton.dataset.sha256})
+          method: 'POST', body: JSON.stringify({id_media: media, sha256, origen})
         });
-        if (pestanaActual !== 'lotes' || !boton.isConnected) return;
+        if (pestanaActual !== origen || !boton.isConnected) return;
         document.getElementById('eliminar-lote-ruta').textContent = plan.ruta;
         dialogo.dataset.token = plan.token;
+        dialogo.dataset.origen = origen;
         dialogo.returnValue = '';
         dialogo.showModal();
       } catch (error) {
@@ -1672,13 +1674,14 @@
     }
 
     async function cerrarEliminacionArchivoLote(dialogo) {
-      const token = dialogo.dataset.token;
+      const {token, origen} = dialogo.dataset;
       const confirmado = dialogo.returnValue === 'si';
       delete dialogo.dataset.token;
+      delete dialogo.dataset.origen;
       dialogo.returnValue = '';
       if (!confirmado || !token || eliminacionArchivoLoteEnCurso) return;
       eliminacionArchivoLoteEnCurso = true;
-      const estado = document.getElementById('eliminar-lote-estado');
+      const estado = document.getElementById(`eliminar-archivo-estado-${origen}`);
       try {
         const resultado = await apiFetch('/api/lotes/eliminar', {
           method: 'POST', body: JSON.stringify({token, confirmado: true})
@@ -1776,7 +1779,7 @@
                   <div class="archivo-peso">${formatearBytes(a.tamanio)}</div>
                   ${detalleDup}
                   <div class="archivo-llegada" style="font-size:0.75rem; color:var(--text-muted);" title="Fecha de llegada: ${a.fecha_llegada || a.fecha || ''}"> ${a.fecha_llegada || a.fecha || ''}</div>
-                  ${botonEliminarArchivoLote(a)}
+                  ${botonEliminarArchivoLocal(a)}
                 </div>
               </div>
             `;}).join('')}
@@ -1858,7 +1861,7 @@
                   <div class="archivo-peso">${formatearBytes(a.tamanio)}</div>
                   ${detalleDup}
                   <div class="archivo-llegada" style="font-size:0.75rem; color:var(--text-muted);" title="Fecha de llegada: ${a.fecha_llegada || a.fecha || ''}"> ${a.fecha_llegada || a.fecha || ''}</div>
-                  ${botonEliminarArchivoLote(a)}
+                  ${botonEliminarArchivoLocal(a)}
                 </div>
               </div>
             `;}).join('')}
@@ -2188,8 +2191,11 @@
                 <td><span style="cursor:pointer; font-weight:500;" onclick="abrirVisorMedia('sin_identificar', '${a.id_media}')" title="Clic para vista previa">${escapeHTML(a.nombre)}</span></td>
                 <td>${formatearBytes(a.tamanio)}</td>
                 <td>
-                  <button class="btn-accion btn-sin-id-proyecto" style="padding:4px 8px;font-size:0.75rem;" onclick="clasificarSinId('${a.hash}', true)">Del Proyecto</button>
-                  <button class="btn-cancelar btn-sin-id-ignorar" style="padding:4px 8px;font-size:0.75rem;" onclick="clasificarSinId('${a.hash}', false)">Ignorar</button>
+                  <div class="acciones-sin-identificar">
+                    <button class="btn-accion btn-sin-id-proyecto" style="padding:4px 8px;font-size:0.75rem;" onclick="clasificarSinId('${a.hash}', true)">Del Proyecto</button>
+                    <button class="btn-cancelar btn-sin-id-ignorar" style="padding:4px 8px;font-size:0.75rem;" onclick="clasificarSinId('${a.hash}', false)">Ignorar</button>
+                    ${botonEliminarArchivoLocal(a, 'sin-identificar')}
+                  </div>
                 </td>
               </tr>
             `).join('')}

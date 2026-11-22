@@ -1,5 +1,20 @@
 # Estado actual del sistema — 2026-11-22
 
+## Eliminación manual desde Sin identificar (2026-11-22)
+
+Las filas de fotos y videos en «Sin identificar» ofrecen «Eliminar del disco».
+El diálogo compartido muestra la ruta y permite cancelar con «No» o Escape.
+«Sí» elimina únicamente el archivo revisado y su fila. El plan queda vinculado
+a la vista de origen y se rechaza si el archivo ya se clasificó o dejó de
+figurar allí. Las Reglas de Oro incluyen esta vista en la excepción local.
+
+En Kali con Python 3.14.8 se ejecutaron **540 pruebas en 70.863 s**, con
+12 omisiones de Windows nativo. Chromium comprobó en tres tamaños la
+cancelación, el borrado de una foto y un video y la actualización de la tabla
+con archivos temporales. Pasaron las pruebas de interfaz, las auditorías y
+la validación de OpenSpec. El recuento del manifiesto del pendrive permaneció
+en **1687 líneas** durante la validación.
+
 ## Eliminación manual de fotos y videos desde Lotes detectados (2026-11-22)
 
 «Eliminar del disco» actúa sobre una sola tarjeta de Lotes detectados, también

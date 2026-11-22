@@ -15,9 +15,9 @@ conformidad para lo ya autorizado. Ver evidencia y límites de validación en
 ESTADO_ACTUAL.md. Los nuevos lotes siguen sujetos a la regla de publicación.
 
 - No borrar automáticamente ni sobrescribir material. Se autoriza la eliminación
-  manual desde «Eliminar capítulos» para el pendrive y desde «Lotes detectados»
-  para una sola foto o video en la carpeta Descargas del host. Ambos flujos exigen
-  selección explícita, simulación, revalidación y registro. El flujo local
+  manual desde «Eliminar capítulos» para el pendrive y desde «Lotes detectados» o
+  «Sin identificar» para una sola foto o video en la carpeta Descargas del host.
+  Ambos flujos exigen selección explícita, simulación, revalidación y registro. El flujo local
   ofrece «Sí» o «No» para confirmar el borrado permanente. Fuera de estas
   excepciones, sigue prohibido borrar archivos.
   Toda copia debe respetar colisiones,

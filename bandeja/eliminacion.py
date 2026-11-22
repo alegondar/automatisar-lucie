@@ -200,7 +200,7 @@ def _anexar_registro(ruta, evento):
 
 
 class GestorEliminacionLocal:
-    """Elimina un archivo de Descargas que figura en las tarjetas de lotes."""
+    """Elimina un archivo de Descargas de Lotes detectados o Sin identificar."""
 
     def __init__(self, config, vigilante, movimientos):
         self.config = config
@@ -209,15 +209,19 @@ class GestorEliminacionLocal:
         self._planes = {}
         self._lock = threading.Lock()
 
-    def _archivo_del_lote(self, id_media, sha256):
+    def _archivo_del_inventario(self, id_media, sha256, origen):
         if not isinstance(id_media, str) or not isinstance(sha256, str):
             raise ValueError("Identificación de archivo inválida.")
+        if origen not in ('lotes', 'sin-identificar'):
+            raise ValueError("Vista de origen inválida.")
         estado = self.vigilante.obtener_estado()
-        for lote in estado['lotes'] + estado['lotes_anteriores']:
-            for archivo in lote['archivos']:
-                if archivo.get('id_media') == id_media and archivo.get('hash') == sha256:
-                    return archivo
-        raise ValueError("El archivo cambió o ya no figura en los lotes. Actualizá el panel.")
+        archivos = estado['sin_identificar'] if origen == 'sin-identificar' else (
+            archivo for lote in estado['lotes'] + estado['lotes_anteriores'] for archivo in lote['archivos']
+        )
+        for archivo in archivos:
+            if archivo.get('id_media') == id_media and archivo.get('hash') == sha256:
+                return archivo
+        raise ValueError("El archivo cambió o ya no figura en esta vista. Actualizá el panel.")
 
     def _identidad(self, ruta):
         raiz = os.path.abspath(self.config.ruta_descargas)
@@ -243,8 +247,8 @@ class GestorEliminacionLocal:
         if not verificar_archivo_exclusivo(ruta):
             raise ValueError("El archivo está en uso o no se puede abrir. Cerralo y volvé a revisar.")
 
-    def simular(self, id_media, sha256):
-        archivo = self._archivo_del_lote(id_media, sha256)
+    def simular(self, id_media, sha256, origen='lotes'):
+        archivo = self._archivo_del_inventario(id_media, sha256, origen)
         ruta = os.path.abspath(archivo['ruta'])
         identidad = self._identidad(ruta)
         self._verificar(ruta, identidad, sha256)
@@ -254,7 +258,7 @@ class GestorEliminacionLocal:
             if len(self._planes) >= 128:
                 raise ValueError("Demasiadas revisiones pendientes. Intentá nuevamente en unos minutos.")
             token = secrets.token_urlsafe(32)
-            self._planes[token] = {'id_media': id_media, 'sha256': sha256, 'ruta': ruta,
+            self._planes[token] = {'id_media': id_media, 'sha256': sha256, 'ruta': ruta, 'origen': origen,
                                    'identidad': identidad, 'vence': ahora + 300}
         return {'token': token, 'ruta': ruta}
 
@@ -269,7 +273,7 @@ class GestorEliminacionLocal:
         ruta = plan['ruta']
         sha256 = plan['sha256']
         with self.vigilante.bloqueo_escaneo, self.movimientos.bloqueo_archivos_locales:
-            archivo = self._archivo_del_lote(plan['id_media'], sha256)
+            archivo = self._archivo_del_inventario(plan['id_media'], sha256, plan['origen'])
             if os.path.abspath(archivo['ruta']) != ruta:
                 raise ValueError("El archivo cambió de ubicación. No se eliminó.")
             identidad = plan['identidad']

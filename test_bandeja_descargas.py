@@ -6132,6 +6132,47 @@ class TestNombresEspecialesServidorYClasificacion(unittest.TestCase):
         self.assertTrue(os.path.isfile(audio))
         self.assertFalse(os.path.exists(self.bitacora))
 
+    def test_eliminacion_desde_sin_identificar_valida_origen_y_reclasificacion(self):
+        rutas = [os.path.join(self.descargas, nombre) for nombre in ("imagen ñ.png", "sin título.mp4")]
+        for ruta in rutas:
+            with open(ruta, "xb") as archivo:
+                archivo.write(os.path.basename(ruta).encode("utf-8"))
+        self.vigilante.escanear()
+        time.sleep(0.1)
+        self.vigilante.escanear()
+        _, inventario, _ = self._get("/api/sin-identificar")
+        por_ruta = {a["ruta"]: a for a in inventario["sin_identificar"]}
+        imagen, video = [por_ruta[ruta] for ruta in rutas]
+        simulaciones = []
+        for archivo in (imagen, video):
+            solicitud = {"id_media": archivo["id_media"], "sha256": archivo["hash"]}
+            status, _ = self._post("/api/lotes/eliminacion-simular", solicitud)
+            self.assertEqual(status, 409)
+            status, plan = self._post("/api/lotes/eliminacion-simular", {**solicitud, "origen": "sin-identificar"})
+            self.assertEqual(status, 200, plan)
+            self.assertEqual(plan["ruta"], archivo["ruta"])
+            simulaciones.append({"token": plan["token"], "confirmado": True})
+
+        status, _ = self._post("/api/lotes/eliminar", {**simulaciones[0], "confirmado": False})
+        self.assertEqual(status, 409)
+        self.assertTrue(all(os.path.isfile(ruta) for ruta in rutas))
+        self.assertFalse(os.path.exists(self.bitacora))
+        status, _ = self._post("/api/clasificar-sin-identificar",
+                               {"hash": video["hash"], "ruta": video["ruta"], "es_proyecto": True})
+        self.assertEqual(status, 200)
+        status, _ = self._post("/api/lotes/eliminar", simulaciones[1])
+        self.assertEqual(status, 409)
+        self.assertTrue(os.path.isfile(video["ruta"]))
+
+        status, resultado = self._post("/api/lotes/eliminar", simulaciones[0])
+        self.assertEqual(status, 200, resultado)
+        self.assertFalse(os.path.exists(imagen["ruta"]))
+        self.assertIsNone(self.vigilante.resolver_ruta_media(imagen["id_media"]))
+        _, inventario, _ = self._get("/api/sin-identificar")
+        self.assertNotIn(imagen["id_media"], {a["id_media"] for a in inventario["sin_identificar"]})
+        _, lotes, _ = self._get("/api/lotes")
+        self.assertIn(video["id_media"], {a["id_media"] for lote in lotes["lotes"] for a in lote["archivos"]})
+
     def test_clasificacion_nombres_complejos(self):
         nom_emoji = "JAJAJAJA🎤#humor #viralvideos.mp4"
         nom_acento = "Mujeres_arrojando_naranjas_a_ladrón_20261009110452.mp4"

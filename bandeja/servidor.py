@@ -831,7 +831,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             if not isinstance(body, dict):
                 raise ValueError("El cuerpo debe ser un objeto JSON.")
             if simular:
-                resultado = self.eliminacion_local.simular(body.get("id_media"), body.get("sha256"))
+                resultado = self.eliminacion_local.simular(body.get("id_media"), body.get("sha256"),
+                                                           body.get("origen", "lotes"))
             else:
                 resultado = self.eliminacion_local.ejecutar(body.get("token"), body.get("confirmado"))
             self._enviar_json(resultado)
