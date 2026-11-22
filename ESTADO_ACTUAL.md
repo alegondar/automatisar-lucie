@@ -1,4 +1,49 @@
-# Estado actual del sistema — 2026-11-14
+# Estado actual del sistema — 2026-11-22
+
+## Eliminación manual de fotos y videos desde Lotes detectados (2026-11-22)
+
+«Eliminar del disco» actúa sobre una sola tarjeta de Lotes detectados, también
+en Anteriores. La ventana muestra la ruta exacta y ofrece «No» y «Sí». Con
+«No» o Escape se conserva el archivo. «Sí» confirma el borrado permanente
+de Descargas y retira la tarjeta. Las casillas para mover material conservan
+su función.
+
+El servidor exige un plan de un uso protegido por CSRF y revalida que el
+archivo siga en el inventario, en la carpeta Descargas y con la misma identidad
+y SHA-256. Registra la intención y el resultado en la bitácora local. Las
+Reglas de Oro y la auditoría AST incluyen la excepción acotada. El borrado
+del pendrive conserva su flujo.
+
+Validación en Kali con Python 3.14.8. La suite hermética completó **539 pruebas
+en 69.969 s**, con 12 omisiones de Windows nativo. Pasaron las pruebas JS,
+las auditorías AST y de repositorio e historial, y la validación de OpenSpec.
+Chromium comprobó en tres tamaños el foco en «No», la cancelación por botón
+y Escape, y el borrado y la actualización de la tarjeta al confirmar «Sí».
+Se usaron exclusivamente archivos temporales. El manifiesto del pendrive
+tuvo **1686 líneas antes y después**. Lucie se reabrió para uso habitual y
+sirvió el panel y los recursos actualizados.
+
+## Actualización del host Kali desde GitHub (2026-11-22)
+
+La rama `feat/lucie-recibir` avanzó de `f3c2ec2` a `75b072b` por fast-forward.
+Los dos commits actualizan el panel al cerrar sesiones y copiar exports,
+mejoran la revisión de versiones de CapCut y permiten revertir lotes de edición
+de forma segura. La rama local coincide con su upstream. Se conservaron
+íntegros los cambios locales preexistentes.
+
+En Kali GNU/Linux Rolling con Python 3.14.8, la suite hermética completó
+**537 pruebas en 67.152 s**, con **12 omisiones** por funciones nativas de
+Windows de archivos, sockets, iconos y accesos directos. Pasaron las cinco
+suites de interfaz, la comprobación de sintaxis JS, la auditoría AST
+(0 infracciones en 36 archivos operativos) y la de repositorio e historial
+(0 infracciones en 261 archivos rastreados). El diff pasó la comprobación
+de espacios. Las pruebas usaron temporales con Lucie detenida y la guardia
+intacta. El manifiesto del pendrive tuvo **1683 líneas antes y después**.
+La validación se realizó en Kali, sin una prueba física de envío al celular.
+
+Lucie se reabrió mediante el lanzador Linux habitual para uso normal.
+El panel devolvió HTTP 200 en `http://127.0.0.1:8766/` y sirvió los dos
+archivos JavaScript actualizados. Para refrescar una pestaña abierta, usar Ctrl+F5.
 
 ## Sesiones con envío revertido y cierre interrumpido (2026-11-14)
 

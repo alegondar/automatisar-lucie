@@ -157,6 +157,11 @@ class GestorMovimientosBandeja:
         self._lock = threading.Lock()
         self.config = kwargs.get("config")
 
+    @property
+    def bloqueo_archivos_locales(self):
+        """Serializa cambios en archivos de Descargas y su bitácora local."""
+        return self._lock
+
     def asegurar_carpeta_capitulo(self, personaje: str, nombre: str) -> Dict[str, Any]:
         """Asegura la creación segura y validada de la carpeta de capítulo en el destino."""
         return asegurar_carpeta_capitulo(personaje, nombre, self.ruta_destino_base, self.ruta_descargas)

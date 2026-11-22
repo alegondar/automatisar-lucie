@@ -59,6 +59,7 @@ class VigilanteBandeja:
         self._hashes_archivos = {}
         self._version_forzada: int = 0
         self._lock = threading.Lock()
+        self.bloqueo_escaneo = threading.Lock()
 
     def forzar_actualizacion_version(self):
         with self._lock:
@@ -80,6 +81,10 @@ class VigilanteBandeja:
 
     def escanear(self):
         """Realiza un pase de escaneo no invasivo en ~/Descargas."""
+        with self.bloqueo_escaneo:
+            self._escanear()
+
+    def _escanear(self):
         if not os.path.exists(self.config.ruta_descargas):
             return
 
@@ -181,7 +186,7 @@ class VigilanteBandeja:
                 cache = self._hashes_archivos.get(ruta_completa)
                 hash_val = cache[1] if cache and cache[0] == firma else calcular_sha256(ruta_completa)
                 self._hashes_archivos[ruta_completa] = (firma, hash_val)
-                if reg and reg["hash"] != hash_val:
+                if reg and (reg["hash"] != hash_val or reg["estado"] == "eliminado"):
                     reg = None
             except (PermissionError, OSError) as e_hash:
                 logger.debug(f"[BANDEJA][VIGILANTE] Archivo bloqueado o inaccesible al calcular hash '{ruta_completa}': {e_hash}")
@@ -189,7 +194,8 @@ class VigilanteBandeja:
 
             if not reg:
                 reg_hash = self.db.obtener_por_hash(hash_val)
-                if reg_hash and reg_hash.get("ruta_actual") == ruta_completa:
+                if (reg_hash and reg_hash.get("ruta_actual") == ruta_completa
+                        and reg_hash.get("estado") != "eliminado"):
                     reg = reg_hash
 
             # Detección de duplicados
@@ -492,6 +498,27 @@ class VigilanteBandeja:
             except Exception:
                 pass
             self._detener.wait(self.config.intervalo_sondeo_segundos)
+
+    def retirar_archivo_eliminado(self, ruta, id_media):
+        """Quita el archivo del inventario sin cambiar los IDs de los lotes restantes."""
+        def retirar(lotes):
+            restantes = []
+            for lote in lotes:
+                archivos = [a for a in lote["archivos"] if a.get("id_media") != id_media]
+                if len(archivos) == len(lote["archivos"]):
+                    restantes.append(lote)
+                elif archivos:
+                    restantes.append({**lote, "archivos": archivos, "total_archivos": len(archivos),
+                                      "total_bytes": sum(a["tamanio"] for a in archivos)})
+            return restantes
+
+        with self._lock:
+            self._lotes_actuales = retirar(self._lotes_actuales)
+            self._lotes_anteriores_actuales = retirar(self._lotes_anteriores_actuales)
+            self._ultimo_conteo_lotes = len(self._lotes_actuales)
+            self._mapa_media.pop(id_media, None)
+            self._media_registrada.pop(id_media, None)
+            self._hashes_archivos.pop(ruta, None)
 
     def obtener_estado(self) -> Dict[str, Any]:
         sesiones = self.db.obtener_sesiones_edicion(estado="en_edicion")

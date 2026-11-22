@@ -14,10 +14,12 @@ el uso de Artemis y el commit/push de este lote. La continuación está en
 conformidad para lo ya autorizado. Ver evidencia y límites de validación en
 ESTADO_ACTUAL.md. Los nuevos lotes siguen sujetos a la regla de publicación.
 
-- No borrar automáticamente ni sobrescribir material. La eliminación manual
-  desde «Eliminar capítulos» del dashboard está autorizada exclusivamente con
-  selección del usuario, simulación previa y confirmación explícita; es permanente
-  y no permite deshacer. Fuera de ese flujo, el borrado sigue prohibido.
+- No borrar automáticamente ni sobrescribir material. Se autoriza la eliminación
+  manual desde «Eliminar capítulos» para el pendrive y desde «Lotes detectados»
+  para una sola foto o video en la carpeta Descargas del host. Ambos flujos exigen
+  selección explícita, simulación, revalidación y registro. El flujo local
+  ofrece «Sí» o «No» para confirmar el borrado permanente. Fuera de estas
+  excepciones, sigue prohibido borrar archivos.
   Toda copia debe respetar colisiones,
   comprobar integridad y permitir deshacer sin eliminar archivos.
 - Pruebas exclusivamente en directorios temporales. No tocar Descargas reales,

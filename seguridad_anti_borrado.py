@@ -6,8 +6,8 @@ seguridad_anti_borrado.py
 Analizador estático de código basado en AST (Abstract Syntax Tree) que hace
 cumplir la Regla de Oro #1 y #7 del proyecto:
 PROHIBICIÓN DE BORRADO AUTOMÁTICO Y PISADO CIEGO.
-Solo se admiten os.unlink(ruta) y os.rmdir(ruta) en el método manual confirmado
-GestorEliminacionPendrive.ejecutar (bandeja/eliminacion.py).
+Se admiten os.unlink(ruta) y os.rmdir(ruta) en GestorEliminacionPendrive.ejecutar
+y solo os.unlink(ruta) en GestorEliminacionLocal.ejecutar (bandeja/eliminacion.py).
 También se permite únicamente os.rmdir(ruta) en la limpieza autorizada de
 carpetas vacías después de un envío exitoso (bandeja/pendrive.py).
 La excepción del 2026-10-14 admite también solo os.rmdir(ruta) en
@@ -168,20 +168,23 @@ def analizar_ast_codigo(codigo_fuente: str, nombre_archivo: str = "<codigo>") ->
     
     analizador = AnalizadorASTAntiBorrado(nombre_archivo=nombre_archivo)
     analizador.visit(arbol)
-    # Excepción manual autorizada: únicamente las dos llamadas explícitas dentro
-    # de GestorEliminacionPendrive.ejecutar. No se excluye ningún archivo completo.
+    # Excepciones manuales limitadas al método y a las primitivas autorizadas.
     ruta_norm = nombre_archivo.replace("\\", "/")
     if ruta_norm.endswith("/bandeja/eliminacion.py") or ruta_norm == "bandeja/eliminacion.py":
+        primitivas_por_gestor = {
+            "GestorEliminacionPendrive": ("unlink", "rmdir"),
+            "GestorEliminacionLocal": ("unlink",),
+        }
         permitidas = set()
         for clase in arbol.body:
-            if isinstance(clase, ast.ClassDef) and clase.name == "GestorEliminacionPendrive":
+            if isinstance(clase, ast.ClassDef) and clase.name in primitivas_por_gestor:
                 for metodo in clase.body:
                     if isinstance(metodo, ast.FunctionDef) and metodo.name == "ejecutar":
                         for llamada in ast.walk(metodo):
                             if (isinstance(llamada, ast.Call) and isinstance(llamada.func, ast.Attribute)
                                     and isinstance(llamada.func.value, ast.Name)
                                     and llamada.func.value.id == "os"
-                                    and llamada.func.attr in ("unlink", "rmdir")
+                                    and llamada.func.attr in primitivas_por_gestor[clase.name]
                                     and len(llamada.args) == 1 and not llamada.keywords
                                     and isinstance(llamada.args[0], ast.Name)
                                     and llamada.args[0].id == "ruta"):

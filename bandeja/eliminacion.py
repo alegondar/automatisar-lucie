@@ -1,4 +1,4 @@
-"""Única excepción de borrado: selección manual confirmada desde el dashboard.
+"""Excepciones de borrado por selección manual confirmada desde el dashboard.
 
 Nunca se invoca desde vigilantes ni tareas automáticas. Los planes son privados
 del servidor, de un solo uso y caducan a los cinco minutos.
@@ -6,12 +6,14 @@ del servidor, de un solo uso y caducan a los cinco minutos.
 import json
 import os
 import secrets
+import sqlite3
 import stat
 import threading
 import time
 
 from bandeja.config import calcular_sha256
 from bandeja.pendrive import detectar_pendrive, operacion_pendrive_exclusiva
+from bandeja.plataforma import verificar_archivo_exclusivo
 
 EXTENSIONES_PREVIA = {
     '.mp4': 'video', '.mov': 'video', '.webm': 'video', '.m4v': 'video',
@@ -19,6 +21,17 @@ EXTENSIONES_PREVIA = {
     '.png': 'imagen', '.webp': 'imagen', '.gif': 'imagen', '.bmp': 'imagen',
     '.mp3': 'audio',
 }
+
+
+def _sin_enlaces(ruta):
+    actual = os.path.abspath(ruta)
+    while True:
+        if os.path.islink(actual) or (hasattr(os.path, 'isjunction') and os.path.isjunction(actual)):
+            raise ValueError("No se permite eliminar a través de enlaces o junctions.")
+        padre = os.path.dirname(actual)
+        if padre == actual:
+            break
+        actual = padre
 
 
 class GestorEliminacionPendrive:
@@ -36,20 +49,9 @@ class GestorEliminacionPendrive:
         if not nombre or os.path.basename(nombre) != nombre or nombre in ('.', '..'):
             raise ValueError("Raíz del pendrive inválida.")
         raiz = os.path.join(montaje, nombre)
-        self._sin_enlaces(raiz)
+        _sin_enlaces(raiz)
         st = os.stat(raiz)
         return (pen['id'], montaje, raiz, st.st_dev, st.st_ino)
-
-    @staticmethod
-    def _sin_enlaces(ruta):
-        actual = os.path.abspath(ruta)
-        while True:
-            if os.path.islink(actual) or (hasattr(os.path, 'isjunction') and os.path.isjunction(actual)):
-                raise ValueError("No se permite eliminar a través de enlaces o junctions.")
-            padre = os.path.dirname(actual)
-            if padre == actual:
-                break
-            actual = padre
 
     def _ruta(self, raiz, relativa):
         if not isinstance(relativa, str) or not relativa or '\\' in relativa or ':' in relativa:
@@ -58,7 +60,7 @@ class GestorEliminacionPendrive:
         if any(p in ('', '.', '..') or p.startswith('.') for p in partes):
             raise ValueError("La raíz y los metadatos están protegidos.")
         ruta = os.path.join(raiz, *partes)
-        self._sin_enlaces(ruta)
+        _sin_enlaces(ruta)
         if os.path.commonpath([os.path.realpath(raiz), os.path.realpath(ruta)]) != os.path.realpath(raiz):
             raise ValueError("Ruta fuera del pendrive.")
         return ruta
@@ -137,14 +139,11 @@ class GestorEliminacionPendrive:
     @staticmethod
     def _registrar(raiz, evento):
         meta = os.path.join(raiz, '.lucie')
-        GestorEliminacionPendrive._sin_enlaces(meta)
+        _sin_enlaces(meta)
         os.makedirs(meta, exist_ok=True)
         ruta = os.path.join(meta, 'eliminaciones.jsonl')
-        GestorEliminacionPendrive._sin_enlaces(ruta)
-        with open(ruta, 'a', encoding='utf-8', newline='\n') as f:
-            f.write(json.dumps(evento, ensure_ascii=False) + '\n')
-            f.flush()
-            os.fsync(f.fileno())
+        _sin_enlaces(ruta)
+        _anexar_registro(ruta, evento)
 
     def ejecutar(self, token, confirmacion):
         if confirmacion != 'ELIMINAR':
@@ -191,3 +190,111 @@ class GestorEliminacionPendrive:
                     break
             return {'exito': not errores, 'eliminados': eliminados, 'errores': errores,
                     'irreversible': True}
+
+
+def _anexar_registro(ruta, evento):
+    with open(ruta, 'a', encoding='utf-8', newline='\n') as archivo:
+        archivo.write(json.dumps(evento, ensure_ascii=False) + '\n')
+        archivo.flush()
+        os.fsync(archivo.fileno())
+
+
+class GestorEliminacionLocal:
+    """Elimina un archivo de Descargas que figura en las tarjetas de lotes."""
+
+    def __init__(self, config, vigilante, movimientos):
+        self.config = config
+        self.vigilante = vigilante
+        self.movimientos = movimientos
+        self._planes = {}
+        self._lock = threading.Lock()
+
+    def _archivo_del_lote(self, id_media, sha256):
+        if not isinstance(id_media, str) or not isinstance(sha256, str):
+            raise ValueError("Identificación de archivo inválida.")
+        estado = self.vigilante.obtener_estado()
+        for lote in estado['lotes'] + estado['lotes_anteriores']:
+            for archivo in lote['archivos']:
+                if archivo.get('id_media') == id_media and archivo.get('hash') == sha256:
+                    return archivo
+        raise ValueError("El archivo cambió o ya no figura en los lotes. Actualizá el panel.")
+
+    def _identidad(self, ruta):
+        raiz = os.path.abspath(self.config.ruta_descargas)
+        if (os.path.normcase(os.path.dirname(ruta)) != os.path.normcase(raiz)
+                or os.path.basename(ruta).startswith('.')
+                or EXTENSIONES_PREVIA.get(os.path.splitext(ruta)[1].lower()) not in ('imagen', 'video')):
+            raise ValueError("Solo se pueden eliminar fotos y videos de la carpeta Descargas.")
+        _sin_enlaces(ruta)
+        directorio = os.stat(raiz)
+        archivo = os.lstat(ruta)
+        if (not stat.S_ISREG(archivo.st_mode)
+                or getattr(archivo, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                or archivo.st_dev != directorio.st_dev
+                or os.path.ismount(ruta)):
+            raise ValueError("El elemento no es un archivo regular de Descargas.")
+        return (directorio.st_dev, directorio.st_ino, archivo.st_ino, archivo.st_size,
+                archivo.st_mtime_ns, archivo.st_ctime_ns)
+
+    def _verificar(self, ruta, identidad, sha256):
+        if (self._identidad(ruta) != identidad or calcular_sha256(ruta) != sha256
+                or self._identidad(ruta) != identidad):
+            raise ValueError("El archivo cambió desde la revisión. No se eliminó.")
+        if not verificar_archivo_exclusivo(ruta):
+            raise ValueError("El archivo está en uso o no se puede abrir. Cerralo y volvé a revisar.")
+
+    def simular(self, id_media, sha256):
+        archivo = self._archivo_del_lote(id_media, sha256)
+        ruta = os.path.abspath(archivo['ruta'])
+        identidad = self._identidad(ruta)
+        self._verificar(ruta, identidad, sha256)
+        with self._lock:
+            ahora = time.monotonic()
+            self._planes = {k: v for k, v in self._planes.items() if v['vence'] > ahora}
+            if len(self._planes) >= 128:
+                raise ValueError("Demasiadas revisiones pendientes. Intentá nuevamente en unos minutos.")
+            token = secrets.token_urlsafe(32)
+            self._planes[token] = {'id_media': id_media, 'sha256': sha256, 'ruta': ruta,
+                                   'identidad': identidad, 'vence': ahora + 300}
+        return {'token': token, 'ruta': ruta}
+
+    def ejecutar(self, token, confirmado):
+        if confirmado is not True or not isinstance(token, str):
+            raise ValueError("Elegí Sí en la ventana para confirmar la eliminación.")
+        with self._lock:
+            plan = self._planes.pop(token, None)
+        if not plan or time.monotonic() >= plan['vence']:
+            raise ValueError("La revisión venció o ya fue utilizada. Volvé a revisar el archivo.")
+
+        ruta = plan['ruta']
+        sha256 = plan['sha256']
+        with self.vigilante.bloqueo_escaneo, self.movimientos.bloqueo_archivos_locales:
+            archivo = self._archivo_del_lote(plan['id_media'], sha256)
+            if os.path.abspath(archivo['ruta']) != ruta:
+                raise ValueError("El archivo cambió de ubicación. No se eliminó.")
+            identidad = plan['identidad']
+            self._verificar(ruta, identidad, sha256)
+            bitacora = self.movimientos.ruta_bitacora
+            _sin_enlaces(bitacora)
+            registro = {'evento': 'eliminacion_local_confirmada', 'operacion': secrets.token_hex(16),
+                        'ruta': ruta, 'sha256': sha256, 'fecha': time.time()}
+            _anexar_registro(bitacora, registro)
+            try:
+                if self._identidad(ruta) != identidad:
+                    raise ValueError("El archivo cambió desde la revisión. No se eliminó.")
+                os.unlink(ruta)
+            except (OSError, ValueError):
+                _anexar_registro(bitacora, {**registro, 'evento': 'eliminacion_local_fallida'})
+                raise
+
+            self.vigilante.retirar_archivo_eliminado(ruta, plan['id_media'])
+            respuesta = {'exito': True, 'ruta': ruta, 'avisos': []}
+            try:
+                _anexar_registro(bitacora, {**registro, 'evento': 'archivo_local_eliminado'})
+            except OSError:
+                respuesta['avisos'].append("El archivo se eliminó pero no se pudo registrar el resultado en la bitácora.")
+            try:
+                self.movimientos.db.registrar_eliminacion_local(archivo['ruta'], sha256)
+            except sqlite3.Error:
+                respuesta['avisos'].append("El archivo se eliminó pero no se pudo actualizar el registro de archivos pendientes.")
+        return respuesta

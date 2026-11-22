@@ -6066,6 +6066,72 @@ class TestNombresEspecialesServidorYClasificacion(unittest.TestCase):
             parsed = {}
         return res.status, parsed, raw
 
+    def _preparar_eliminacion_lote(self, nombre="lucie_foto con acento ñ.png"):
+        ruta = os.path.join(self.descargas, nombre)
+        with open(ruta, "xb") as archivo:
+            archivo.write(b"foto original")
+        self.vigilante.escanear()
+        time.sleep(0.1)
+        self.vigilante.escanear()
+        rutas = self.vigilante.obtener_estado()
+        return ruta, next(a for lote in rutas["lotes"] + rutas["lotes_anteriores"]
+                          for a in lote["archivos"] if a["nombre"] == nombre)
+
+    def test_eliminacion_individual_confirmada_preserva_el_duplicado_y_audita(self):
+        ruta, item = self._preparar_eliminacion_lote()
+        otro, _ = self._preparar_eliminacion_lote("lucie_foto vecina.png")
+        solicitud = {"id_media": item["id_media"], "sha256": item["hash"]}
+        status, plan = self._post("/api/lotes/eliminacion-simular", solicitud)
+        self.assertEqual(status, 200, plan)
+        self.assertEqual(plan["ruta"], ruta)
+        for confirmacion in (False, "Sí", 1):
+            status, _ = self._post("/api/lotes/eliminar", {"token": plan["token"], "confirmado": confirmacion})
+            self.assertEqual(status, 409)
+            self.assertTrue(os.path.isfile(ruta))
+            self.assertFalse(os.path.exists(self.bitacora))
+
+        status, respuesta = self._post("/api/lotes/eliminar", {"token": plan["token"], "confirmado": True})
+        self.assertEqual(status, 200, respuesta)
+        self.assertTrue(respuesta["exito"])
+        self.assertFalse(os.path.exists(ruta))
+        self.assertTrue(os.path.isfile(otro))
+        self.assertIsNone(self.vigilante.resolver_ruta_media(item["id_media"]))
+        _, datos, _ = self._get("/api/lotes")
+        nombres = [a["nombre"] for lote in datos["lotes"] + datos["lotes_anteriores"] for a in lote["archivos"]]
+        self.assertNotIn(item["nombre"], nombres)
+        self.assertIn(os.path.basename(otro), nombres)
+        with open(self.bitacora, encoding="utf-8") as archivo:
+            eventos = [json.loads(linea) for linea in archivo]
+        self.assertEqual([e["evento"] for e in eventos], ["eliminacion_local_confirmada", "archivo_local_eliminado"])
+        self.assertEqual(eventos[0]["operacion"], eventos[1]["operacion"])
+        self.assertEqual(self.db.obtener_por_id(item["id_db"])["estado"], "eliminado")
+        status, _ = self._post("/api/lotes/eliminar", {"token": plan["token"], "confirmado": True})
+        self.assertEqual(status, 409)
+        with open(ruta, "xb") as archivo:
+            archivo.write(b"foto original")
+        self.vigilante.escanear()
+        self.assertTrue(os.path.isfile(ruta))
+
+    def test_eliminacion_rechaza_archivo_cambiado_y_audio(self):
+        ruta, item = self._preparar_eliminacion_lote("lucie_video.mp4")
+        solicitud = {"id_media": item["id_media"], "sha256": item["hash"]}
+        status, plan = self._post("/api/lotes/eliminacion-simular", solicitud)
+        self.assertEqual(status, 200, plan)
+        info = os.stat(ruta)
+        with open(ruta, "wb") as archivo:
+            archivo.write(b"foto alterada")
+        os.utime(ruta, ns=(info.st_atime_ns, info.st_mtime_ns))
+        status, _ = self._post("/api/lotes/eliminar", {"token": plan["token"], "confirmado": True})
+        self.assertEqual(status, 409)
+        with open(ruta, "rb") as archivo:
+            self.assertEqual(archivo.read(), b"foto alterada")
+        audio, item_audio = self._preparar_eliminacion_lote("lucie_voz.mp3")
+        status, _ = self._post("/api/lotes/eliminacion-simular",
+                               {"id_media": item_audio["id_media"], "sha256": item_audio["hash"]})
+        self.assertEqual(status, 409)
+        self.assertTrue(os.path.isfile(audio))
+        self.assertFalse(os.path.exists(self.bitacora))
+
     def test_clasificacion_nombres_complejos(self):
         nom_emoji = "JAJAJAJA🎤#humor #viralvideos.mp4"
         nom_acento = "Mujeres_arrojando_naranjas_a_ladrón_20261009110452.mp4"

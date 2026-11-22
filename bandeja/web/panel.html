@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#101011">
   <meta name="csrf-token" content="__TOKEN_CSRF__">
   <title>Lucie Sin Reglas · Bandeja de Descargas</title>
-  <link rel="stylesheet" href="/panel.css?v=20261122">
+  <link rel="stylesheet" href="/panel.css?v=20261122-eliminar-lote">
 </head>
 <body>
   <a class="saltar-contenido" href="#contenido-principal">Saltar al contenido</a>
@@ -295,6 +295,17 @@
 
     <div id="alert-box" style="display:none;" class="alert-error"></div>
 
+    <dialog id="dialog-eliminar-archivo-lote" aria-labelledby="eliminar-lote-titulo"
+            aria-describedby="eliminar-lote-ruta eliminar-lote-aviso" onclose="cerrarEliminacionArchivoLote(this)">
+      <h2 id="eliminar-lote-titulo">¿Estás seguro de que querés eliminar este archivo?</h2>
+      <p id="eliminar-lote-ruta"></p>
+      <p id="eliminar-lote-aviso">Se borrará del disco y del dashboard de forma permanente.</p>
+      <form method="dialog" class="eliminacion-acciones">
+        <button type="submit" value="no" class="btn-sm" autofocus>No</button>
+        <button type="submit" value="si" class="btn-sm confirmar-eliminacion-lote">Sí</button>
+      </form>
+    </dialog>
+
     <section id="sec-lotes">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; flex-wrap:wrap; gap:8px;">
         <h2 class="lotes-titulo">Material recibido</h2>
@@ -313,6 +324,7 @@
           </button>
         </div>
       </div>
+      <p id="eliminar-lote-estado" role="status" class="eliminar-lote-estado"></p>
       <div id="contenedor-lotes">Cargando lotes...</div>
 
       <div id="sec-lotes-anteriores" style="display:none; margin-top:24px;">
@@ -750,7 +762,7 @@
   <script>
     const REFRESCO_PANEL_SEGUNDOS = __REFRESCO__;
   </script>
-  <script src="/panel.js?v=20261122-revision"></script>
+  <script src="/panel.js?v=20261122-eliminar-lote"></script>
   <script src="/wifi.js?v=20261122-cola"></script>
   <div id="toast-llegada" class="toast-llegada"></div>
 </body>

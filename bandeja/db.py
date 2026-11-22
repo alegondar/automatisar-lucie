@@ -234,6 +234,14 @@ class GestorBaseDatosBandeja:
             row = cur.fetchone()
             return dict(row) if row else None
 
+    def registrar_eliminacion_local(self, ruta: str, sha256: str):
+        with self._lock, self._conectar() as con:
+            con.execute("""
+                UPDATE bandeja_archivos
+                SET estado = 'eliminado', personaje = NULL, escena = NULL, adoptado_a_mano = 0
+                WHERE ruta_actual = ? AND hash = ? AND estado IN ('detectado', 'clasificado')
+            """, (ruta, sha256))
+
     def obtener_por_ruta(self, ruta_actual: str) -> Optional[Dict[str, Any]]:
         with self._lock, self._conectar() as con:
             cur = con.cursor()

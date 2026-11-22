@@ -12,6 +12,7 @@
     let descarteSimulacionActiva = null;
     let loteActivoId = null;
     let terminarCapituloTrasMover = null;
+    let eliminacionArchivoLoteEnCurso = false;
     let pestanaActual = 'lotes';
     let historialActual = [];
     let operacionAvisoActual = null;
@@ -65,7 +66,8 @@
     }
 
     function hayModalAbierto() {
-      if (document.getElementById('dialog-eliminacion')?.open || document.getElementById('dialog-eliminacion-imagen')?.open) return true;
+      const dialogos = ['dialog-eliminacion', 'dialog-eliminacion-imagen', 'dialog-eliminar-archivo-lote'];
+      if (eliminacionArchivoLoteEnCurso || dialogos.some(id => document.getElementById(id)?.open)) return true;
       const idsModales = ['modal-simulacion', 'modal-terminar-capitulo', 'modal-descartar-capitulo', 'modal-plan-envio', 'modal-vincular-pendrive', 'modal-visor-media', 'modal-control-pendrive'];
       return idsModales.some(id => {
         const el = document.getElementById(id);
@@ -1637,6 +1639,61 @@
       });
     }
 
+    function botonEliminarArchivoLote(archivo) {
+      const esFotoOVideo = /\.(mp4|mov|webm|m4v|mkv|avi|jpe?g|png|webp|gif|bmp)$/i.test(archivo.nombre);
+      if (!archivo.id_media || !archivo.hash || !esFotoOVideo) return '';
+      return `<button type="button" class="btn-sm eliminar-archivo-lote"
+        data-media="${escapeHTML(archivo.id_media)}" data-sha256="${escapeHTML(archivo.hash)}"
+        aria-label="Eliminar del disco: ${escapeHTML(archivo.nombre)}"
+        onclick="revisarEliminacionArchivoLote(this)">Eliminar del disco</button>`;
+    }
+
+    async function revisarEliminacionArchivoLote(boton) {
+      const dialogo = document.getElementById('dialog-eliminar-archivo-lote');
+      if (eliminacionArchivoLoteEnCurso || dialogo.dataset.token) return;
+      eliminacionArchivoLoteEnCurso = true;
+      const estado = document.getElementById('eliminar-lote-estado');
+      estado.textContent = '';
+      try {
+        const plan = await apiFetch('/api/lotes/eliminacion-simular', {
+          method: 'POST', body: JSON.stringify({id_media: boton.dataset.media, sha256: boton.dataset.sha256})
+        });
+        if (pestanaActual !== 'lotes' || !boton.isConnected) return;
+        document.getElementById('eliminar-lote-ruta').textContent = plan.ruta;
+        dialogo.dataset.token = plan.token;
+        dialogo.returnValue = '';
+        dialogo.showModal();
+      } catch (error) {
+        estado.textContent = error.message;
+        mostrarError(error.message);
+      } finally {
+        eliminacionArchivoLoteEnCurso = false;
+      }
+    }
+
+    async function cerrarEliminacionArchivoLote(dialogo) {
+      const token = dialogo.dataset.token;
+      const confirmado = dialogo.returnValue === 'si';
+      delete dialogo.dataset.token;
+      dialogo.returnValue = '';
+      if (!confirmado || !token || eliminacionArchivoLoteEnCurso) return;
+      eliminacionArchivoLoteEnCurso = true;
+      const estado = document.getElementById('eliminar-lote-estado');
+      try {
+        const resultado = await apiFetch('/api/lotes/eliminar', {
+          method: 'POST', body: JSON.stringify({token, confirmado: true})
+        });
+        estado.textContent = ['Archivo eliminado del disco.', ...(resultado.avisos || [])].join(' ');
+        await recargarConPreservacion();
+      } catch (error) {
+        estado.textContent = error.message;
+        mostrarError(error.message);
+        await recargarConPreservacion();
+      } finally {
+        eliminacionArchivoLoteEnCurso = false;
+      }
+    }
+
     function generarHtmlCardLote(lote) {
       const esLoteAdoptado = Boolean(lote.adoptado_a_mano || (lote.archivos || []).some(a => a.adoptado_a_mano));
 
@@ -1709,16 +1766,17 @@
               const badgeAdop = a.adoptado_a_mano ? `<span class="badge" style="background:var(--card-alt); color:var(--text); font-size:0.7rem; padding:1px 5px; border-radius:3px; margin-left:4px; font-weight:600;" title="Adoptado a mano desde Sin Identificar">Adoptado a mano</span>` : '';
               const detalleDup = esDup ? `<div class="archivo-duplicado-info" style="font-size:0.72rem; color:#ef4444; margin-top:2px;" title="${escapeHTML(a.duplicado.mensaje || '')}">${escapeHTML(a.duplicado.mensaje || 'Duplicado')}</div>` : '';
               return `
-              <div class="archivo-item" title="Archivo: ${a.nombre}&#10;Fecha llegada: ${a.fecha_llegada || a.fecha || ''}&#10;Fecha modificación: ${a.fecha || ''}&#10;Tamaño: ${formatearBytes(a.tamanio)}">
+              <div class="archivo-item" title="Archivo: ${escapeHTML(a.nombre)}&#10;Fecha llegada: ${a.fecha_llegada || a.fecha || ''}&#10;Fecha modificación: ${a.fecha || ''}&#10;Tamaño: ${formatearBytes(a.tamanio)}">
                 <div class="chk-container">
                   <input type="checkbox" class="chk-archivo chk-lote-${lote.lote_id}" data-id="${a.id_db}" ${isChecked ? 'checked' : ''} onchange="actualizarSeleccionLote('${lote.lote_id}')">
                 </div>
                 ${generarHtmlMiniatura(lote.lote_id, a)}
                 <div class="archivo-meta">
-                  <div class="archivo-nombre" title="${a.nombre}">${escapeHTML(a.nombre)} ${badgeDup} ${badgeAdop}</div>
+                  <div class="archivo-nombre" title="${escapeHTML(a.nombre)}">${escapeHTML(a.nombre)} ${badgeDup} ${badgeAdop}</div>
                   <div class="archivo-peso">${formatearBytes(a.tamanio)}</div>
                   ${detalleDup}
                   <div class="archivo-llegada" style="font-size:0.75rem; color:var(--text-muted);" title="Fecha de llegada: ${a.fecha_llegada || a.fecha || ''}"> ${a.fecha_llegada || a.fecha || ''}</div>
+                  ${botonEliminarArchivoLote(a)}
                 </div>
               </div>
             `;}).join('')}
@@ -1790,16 +1848,17 @@
               const badgeDup = esDup ? `<span class="badge-duplicado" title="${escapeHTML(a.duplicado.mensaje || 'Archivo duplicado')}">Duplicado</span>` : '';
               const detalleDup = esDup ? `<div class="archivo-duplicado-info" style="font-size:0.72rem; color:#ef4444; margin-top:2px;" title="${escapeHTML(a.duplicado.mensaje || '')}">${escapeHTML(a.duplicado.mensaje || 'Duplicado')}</div>` : '';
               return `
-              <div class="archivo-item" title="Archivo: ${a.nombre}&#10;Fecha llegada: ${a.fecha_llegada || a.fecha || ''}&#10;Fecha modificación: ${a.fecha || ''}&#10;Tamaño: ${formatearBytes(a.tamanio)}">
+              <div class="archivo-item" title="Archivo: ${escapeHTML(a.nombre)}&#10;Fecha llegada: ${a.fecha_llegada || a.fecha || ''}&#10;Fecha modificación: ${a.fecha || ''}&#10;Tamaño: ${formatearBytes(a.tamanio)}">
                 <div class="chk-container">
                   <input type="checkbox" class="chk-archivo chk-lote-${lote.lote_id}" data-id="${a.id_db}" onchange="actualizarSeleccionLote('${lote.lote_id}')">
                 </div>
                 ${generarHtmlMiniatura(lote.lote_id, a)}
                 <div class="archivo-meta">
-                  <div class="archivo-nombre" title="${a.nombre}">${escapeHTML(a.nombre)} ${badgeDup}</div>
+                  <div class="archivo-nombre" title="${escapeHTML(a.nombre)}">${escapeHTML(a.nombre)} ${badgeDup}</div>
                   <div class="archivo-peso">${formatearBytes(a.tamanio)}</div>
                   ${detalleDup}
                   <div class="archivo-llegada" style="font-size:0.75rem; color:var(--text-muted);" title="Fecha de llegada: ${a.fecha_llegada || a.fecha || ''}"> ${a.fecha_llegada || a.fecha || ''}</div>
+                  ${botonEliminarArchivoLote(a)}
                 </div>
               </div>
             `;}).join('')}

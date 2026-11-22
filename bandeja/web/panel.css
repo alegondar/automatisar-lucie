@@ -1170,6 +1170,26 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .badge-capitulo-activo { color: var(--accent); background: #263b39; }
 .modal-content, dialog { background: var(--card-bg); border: 1px solid #59595f; border-radius: 16px; box-shadow: 0 24px 80px #0009; max-width: calc(100vw - 32px); }
 dialog::backdrop { background: #101011cc; }
+
+#dialog-eliminar-archivo-lote {
+  box-sizing: border-box;
+  width: min(32rem, calc(100vw - 2rem));
+  max-height: 85vh;
+  margin: auto;
+  padding: clamp(1rem, 4vw, 1.5rem);
+  color: var(--text);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+#dialog-eliminar-archivo-lote::backdrop { overflow: hidden; overscroll-behavior: contain; }
+#eliminar-lote-titulo { font-size: 1.2rem; margin: 0 0 .8rem; }
+#eliminar-lote-ruta { overflow-wrap: anywhere; font-weight: 600; margin: 0 0 .5rem; }
+#eliminar-lote-aviso, .eliminar-lote-estado { color: var(--text-muted); }
+#dialog-eliminar-archivo-lote .eliminacion-acciones { justify-content: flex-end; gap: .65rem; }
+#dialog-eliminar-archivo-lote .confirmar-eliminacion-lote { border-color: #ed8290; color: #ffd1d6; }
+#dialog-eliminar-archivo-lote button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.eliminar-archivo-lote.btn-sm { margin: .5rem 0 0; padding-inline: .65rem; font-size: .83rem; }
+.eliminar-lote-estado:empty { margin: 0; }
 .tabla-historial th { background: transparent; text-transform: none; font-size: 12px; color: var(--text-muted); }
 .tabla-historial td { font-size: 14px; }
 #sec-publicacion .wifi-eyebrow { color: var(--text-muted); font-size: 12px; letter-spacing: 0; }

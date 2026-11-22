@@ -225,6 +225,10 @@ class TestEliminacionManual(unittest.TestCase):
         self.assertTrue(analizar_ast_codigo(autorizado.replace('ejecutar', 'automatico'), ruta))
         self.assertTrue(analizar_ast_codigo(autorizado.replace('os.unlink(ruta)', 'shutil.rmtree(ruta)'), ruta))
         self.assertTrue(analizar_ast_codigo(autorizado + '\nos.unlink(ruta)\n', ruta))
+        local = 'class GestorEliminacionLocal:\n def ejecutar(self):\n  os.unlink(ruta)\n'
+        self.assertEqual(analizar_ast_codigo(local, ruta), [])
+        self.assertTrue(analizar_ast_codigo(local.replace('unlink', 'rmdir'), ruta))
+        self.assertTrue(analizar_ast_codigo(local.replace('ejecutar', 'simular'), ruta))
 
 
 if __name__ == '__main__':

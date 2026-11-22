@@ -57,7 +57,7 @@ from bandeja.pendrive import (
     operacion_pendrive_exclusiva,
 )
 from bandeja.vigilante import VigilanteBandeja
-from bandeja.eliminacion import GestorEliminacionPendrive
+from bandeja.eliminacion import GestorEliminacionLocal, GestorEliminacionPendrive
 from bandeja.publicacion import GestorPublicacion
 from bandeja.organizacion_mensual import resolver_relativa
 from bandeja.edicion import (
@@ -704,6 +704,8 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._handle_eliminacion(body, simular=True)
         elif ruta == "/api/pendrive/eliminar":
             self._handle_eliminacion(body)
+        elif ruta in ("/api/lotes/eliminacion-simular", "/api/lotes/eliminar"):
+            self._handle_eliminacion_local(body, simular=ruta.endswith("-simular"))
         elif ruta == "/api/clasificar-sin-identificar":
             self._handle_clasificar_sin_identificar(body)
         elif ruta == "/api/deshacer-clasificar-sin-identificar":
@@ -823,6 +825,18 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
             self._enviar_json(resultado)
         except (ValueError, OSError) as e:
             self._enviar_error(HTTPStatus.CONFLICT, str(e))
+
+    def _handle_eliminacion_local(self, body, simular):
+        try:
+            if not isinstance(body, dict):
+                raise ValueError("El cuerpo debe ser un objeto JSON.")
+            if simular:
+                resultado = self.eliminacion_local.simular(body.get("id_media"), body.get("sha256"))
+            else:
+                resultado = self.eliminacion_local.ejecutar(body.get("token"), body.get("confirmado"))
+            self._enviar_json(resultado)
+        except (ValueError, OSError) as error:
+            self._enviar_error(HTTPStatus.CONFLICT, str(error))
 
     def _handle_pendrive_envio_simular(self, body: Dict[str, Any]):
         capitulos = body.get("capitulos")
@@ -1774,6 +1788,7 @@ def crear_servidor(config: ConfiguracionBandeja, db: GestorBaseDatosBandeja,
     CustomHandler.miniaturas = miniaturas
     CustomHandler.token_csrf = token
     CustomHandler.eliminacion = GestorEliminacionPendrive(config)
+    CustomHandler.eliminacion_local = GestorEliminacionLocal(config, vigilante, movimientos)
     CustomHandler.publicacion = GestorPublicacion(config, db)
     CustomHandler.planes_archivar_crudos = {}
     CustomHandler.lock_archivar_crudos = threading.Lock()
