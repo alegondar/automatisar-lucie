@@ -666,6 +666,59 @@ class TestPublicacionWifi(unittest.TestCase):
         with open(destino, "rb") as archivo:
             self.assertEqual(archivo.read(), b"otro video")
 
+    def test_archivo_local_actualiza_rutas_conserva_hash_y_recupera_registro(self):
+        from bandeja.edicion import registrar_evento_manifiesto_edicion
+
+        sesion = self.db.crear_sesion_edicion("cafe", "Cafe", "Cafe", "lucie", "Cafe", [])
+        self.db.actualizar_sesion_edicion(sesion, estado="completado", video_completo_ruta=self.video)
+        otro = self.crear("roli/Otro/Otro.mp4")
+        sha = calcular_sha256(self.video)
+        id_video = next(a["id"] for a in self.gestor.listar()["archivos"] if a["nombre"] == "Cafe.mp4")
+        plan = self.gestor.simular_archivo([id_video])
+        destino = plan["archivos"][0]["destino"]
+        self.assertIn("videos completos/videos archivados/lucie/", destino.replace(os.sep, "/"))
+        self.assertEqual(self.gestor.listar()["historial"], [])
+
+        def registrar(raiz, evento):
+            if evento["tipo_evento"] == "archivado_en_pendrive":
+                raise OSError("fallo simulado de registro final")
+            registrar_evento_manifiesto_edicion(raiz, evento)
+
+        with patch.object(self.gestor.cliente, "enviar") as enviar, patch(
+                "bandeja.publicacion.registrar_evento_manifiesto_edicion", side_effect=registrar):
+            with self.assertRaisesRegex(OSError, "registro final"):
+                self.gestor.archivar(plan["token"], True)
+            enviar.assert_not_called()
+        lista = self.gestor.listar()
+        self.assertEqual([a["nombre"] for a in lista["archivos"]], ["Otro.mp4"])
+        self.assertTrue(os.path.isfile(otro))
+        self.assertEqual(calcular_sha256(destino), sha)
+        self.assertEqual(self.db.obtener_sesion_por_id(sesion)["video_completo_ruta"], destino)
+        evento, = lista["historial"]
+        self.assertEqual(evento["modo"], "pendrive")
+        retorno = self.gestor.simular_deshacer_archivo(evento["id_operacion"])
+        self.gestor.deshacer(evento["id_operacion"], retorno["token"], True)
+        self.assertEqual(calcular_sha256(self.video), sha)
+        self.assertEqual(self.db.obtener_sesion_por_id(sesion)["video_completo_ruta"], self.video)
+        self.assertEqual(self.gestor.listar()["historial"], [])
+
+    def test_archivo_local_valida_todo_el_lote_antes_de_mover(self):
+        segundo = self.crear("lucie/Cafe/Segundo.mp4")
+        ids = [a["id"] for a in self.gestor.listar()["archivos"]]
+        plan = self.gestor.simular_archivo(ids)
+        primero, ultimo = plan["archivos"]
+        os.makedirs(os.path.dirname(ultimo["destino"]))
+        with open(ultimo["destino"], "xb") as archivo:
+            archivo.write(b"destino existente")
+        with self.assertRaises(FileExistsError):
+            self.gestor.archivar(plan["token"], True)
+        self.assertTrue(os.path.isfile(self.video))
+        self.assertTrue(os.path.isfile(segundo))
+        self.assertFalse(os.path.lexists(primero["destino"]))
+        with open(ultimo["destino"], "rb") as archivo:
+            self.assertEqual(archivo.read(), b"destino existente")
+        self.assertEqual(self.gestor.listar()["historial"], [])
+
     def test_plan_un_solo_uso_y_confirmacion_obligatoria(self):
         plan = self.plan()
         with self.assertRaises(ValueError):

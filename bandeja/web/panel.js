@@ -328,7 +328,7 @@
         eliminacion: ['Eliminar capítulos', 'Elegí el material y revisá la simulación antes de confirmar su eliminación permanente.'],
         edicion: ['Edición', 'Del material sin editar al video final de cada capítulo.'],
         completados: ['Videos completados', 'Revisá los exports y conservá cada versión del video final.'],
-        publicacion: ['Enviar al celular', 'Tu material sin publicar, listo para revisar y enviar.'],
+        publicacion: ['Enviar al celular', 'Elegí videos sin publicar para guardarlos en el pendrive o enviarlos al celular.'],
         historial: ['Historial', 'Consultá los movimientos registrados y las opciones de Deshacer.']
       };
       const vista = vistas[pestana];
@@ -4318,6 +4318,7 @@
         const tamStr = (exp.tamano / (1024 * 1024)).toFixed(1) + ' MB';
         const selectId = `sel-sesion-export-${exp.id}`;
         const copiado = exp.estado === 'copiado';
+        const rutaArchivada = exp.ruta_destino?.split(/[\\/]/).some(parte => parte === 'videosPublicados' || parte === 'videos archivados');
         const estado = copiado ? 'ENVIADO AL PENDRIVE' : exp.archivo_reemplazado ? 'EXPORT REEMPLAZADO EN CAPCUT' : exp.error ? 'ERROR DE ENVÍO' : exp.sesion_id ? 'PENDIENTE DE ENVÍO' : 'ELEGIR EDICIÓN';
         html += `
           <div style="background:var(--card-alt); border:1px solid var(--border); border-radius:6px; padding:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
@@ -4337,7 +4338,7 @@
               </select>` : ''}
               ${!copiado ? `<button class="btn-sm" ${exp.archivo_reemplazado || exp.sesion_con_final ? 'disabled' : ''} onclick="asignarExportASesion(${exp.id}, '${selectId}', ${exp.sesion_id || 'null'})" style="background:var(--accent); color:#000; font-weight:600;">Enviar al pendrive</button>
               <button class="btn-sm btn-secundario" onclick="descartarExportCapCut(${exp.id})">Descartar de la lista</button>` : ''}
-              ${copiado && exp.ruta_destino && !exp.ruta_destino.split(/[\\/]/).includes('videosPublicados') ? `<button class="btn-sm btn-secundario" data-ruta="${escapeHTML(exp.ruta_destino)}" onclick="deshacerCopiaCompleto(this.dataset.ruta)">Deshacer envío</button>` : ''}
+              ${copiado && exp.ruta_destino && !rutaArchivada ? `<button class="btn-sm btn-secundario" data-ruta="${escapeHTML(exp.ruta_destino)}" onclick="deshacerCopiaCompleto(this.dataset.ruta)">Deshacer envío</button>` : ''}
               ${copiado && exp.sesion_id && exp.ruta_destino ? `<button class="btn-sm btn-secundario" onclick="buscarOtraVersionExport(${exp.sesion_id})">Buscar otra versión</button>` : ''}
             </div>
             ${!copiado && !exp.sesion_id && !exp.archivo_reemplazado ? `<div class="export-sin-sesion">

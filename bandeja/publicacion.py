@@ -24,6 +24,7 @@ from bandeja.plataforma import mover_sin_sobrescribir
 
 CARPETA_SIN_PUBLICAR = "videos sin publicar"
 CARPETA_PUBLICADOS = "videosPublicados"
+CARPETA_ARCHIVADOS = "videos archivados"
 from bandeja.organizacion_mensual import es_carpeta_mes, mes_del_nombre, nombre_mes, resolver_relativa
 EXTENSIONES_IMAGEN = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp")
 EXTENSIONES_VIDEO = (".mp4", ".mov", ".webm", ".mkv")
@@ -166,6 +167,7 @@ class GestorPublicacion:
         sin_enlaces(ruta)
         publicados = {}
         preparados = {}
+        reversiones_preparadas = set()
         if not os.path.isfile(ruta):
             return []
         with open(ruta, "r", encoding="utf-8") as archivo:
@@ -174,10 +176,13 @@ class GestorPublicacion:
                     evento = json.loads(linea)
                 except ValueError:
                     continue
-                if evento.get("tipo_evento") in ("recepcion_wifi_confirmada", "publicado_por_envio_wifi"):
+                if evento.get("tipo_evento") in ("recepcion_wifi_confirmada", "publicado_por_envio_wifi",
+                                                  "archivo_pendrive_preparado", "archivado_en_pendrive"):
                     publicados[evento["id_operacion"]] = evento
-                elif evento.get("tipo_evento") == "deshacer_publicacion_wifi":
+                elif evento.get("tipo_evento") in ("deshacer_publicacion_wifi", "deshacer_archivo_pendrive"):
                     publicados.pop(evento.get("id_operacion"), None)
+                elif evento.get("tipo_evento") == "deshacer_archivo_pendrive_preparado":
+                    reversiones_preparadas.add(evento["id_operacion"])
                 elif evento.get("tipo_evento") == "organizacion_completada":
                     preparados.pop(evento.get("id_organizacion"), None)
                     publicacion = evento.get("publicacion")
@@ -194,7 +199,15 @@ class GestorPublicacion:
         for evento in list(publicados.values())[::-1]:
             evento = {**evento, "ruta_destino": resolver_relativa(raiz, evento["ruta_destino"]),
                       "ruta_origen": resolver_relativa(raiz, evento["ruta_origen"])}
-            if evento["tipo_evento"] == "recepcion_wifi_confirmada":
+            if evento["id_operacion"] in reversiones_preparadas:
+                try:
+                    origen = self._ruta(raiz, evento["ruta_origen"])
+                    destino = self._ruta(raiz, evento["ruta_destino"])
+                    if not os.path.lexists(destino) and calcular_sha256(origen) == evento["sha256"]:
+                        continue
+                except (OSError, ValueError):
+                    pass
+            if evento["tipo_evento"] in ("recepcion_wifi_confirmada", "archivo_pendrive_preparado"):
                 # Recuperar el historial si el proceso paró entre el renombrado
                 # y el último registro. No mueve ni modifica archivos al listar.
                 try:
@@ -311,19 +324,26 @@ class GestorPublicacion:
 
     def simular(self, seleccion, dispositivo_id, personajes=None, receptor=None):
         validar_receptor(receptor)
-        if not isinstance(seleccion, list) or not seleccion or len(seleccion) > 50 or any(not isinstance(i, str) for i in seleccion):
-            raise ValueError("Elegí entre uno y cincuenta videos.")
         if not isinstance(dispositivo_id, str):
             raise ValueError("Elegí un dispositivo válido.")
-        personajes = {} if personajes is None else personajes
-        if not isinstance(personajes, dict) or not set(personajes).issubset(seleccion):
-            raise ValueError("Asignación de personajes inválida.")
         with self._lock:
             dispositivo = self._dispositivos.get(dispositivo_id)
         if not dispositivo:
             raise ValueError("Buscá y elegí el celular antes de preparar el envío.")
         if receptor is not None and tipo_receptor(dispositivo) != receptor:
             raise ValueError("El receptor no corresponde a la app elegida. Buscá nuevamente el celular.")
+        return self._simular_destino(seleccion, personajes, dispositivo, dispositivo_id)
+
+    def simular_archivo(self, seleccion, personajes=None):
+        return self._simular_destino(seleccion, personajes)
+
+    def _simular_destino(self, seleccion, personajes, dispositivo=None, dispositivo_id=None):
+        if not isinstance(seleccion, list) or not seleccion or len(seleccion) > 50 or any(not isinstance(i, str) for i in seleccion):
+            raise ValueError("Elegí entre uno y cincuenta archivos.")
+        personajes = {} if personajes is None else personajes
+        if not isinstance(personajes, dict) or not set(personajes).issubset(seleccion):
+            raise ValueError("Asignación de personajes inválida.")
+        carpeta = CARPETA_PUBLICADOS if dispositivo else CARPETA_ARCHIVADOS
         identidad = self._identidad()
         inventario = self._inventario(identidad)
         archivos = []
@@ -346,22 +366,36 @@ class GestorPublicacion:
                 partes = partes[1:]
             if partes and not es_carpeta_mes(partes[0]):
                 partes.insert(0, mes_del_nombre(partes[0]) or nombre_mes(datetime.datetime.fromtimestamp(entrada["mtime"])))
-            destino_rel = "videos completos/" + CARPETA_PUBLICADOS + "/" + personaje + "/" + "/".join(partes)
+            destino_rel = "videos completos/" + carpeta + "/" + personaje + "/" + "/".join(partes)
             destino = self._ruta(identidad[1], destino_rel)
-            if destino_rel in destinos or os.path.lexists(destino):
+            clave_destino = destino_rel.casefold()
+            if clave_destino in destinos or os.path.lexists(destino):
                 raise FileExistsError("Ya existe el destino de publicación: " + destino_rel + ". No se sobrescribe.")
-            destinos.add(destino_rel)
+            destinos.add(clave_destino)
             st = os.stat(origen)
             archivos.append({**entrada, "personaje": personaje, "origen": origen, "destino": destino, "destino_rel": destino_rel,
                              "sha256": calcular_sha256(origen), "firma": (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)})
-        token = secrets.token_urlsafe(32)
-        with self._lock:
-            self._planes = {k: v for k, v in self._planes.items() if v["vence"] > time.monotonic()}
-            self._planes[token] = {"identidad": identidad, "dispositivo": dict(dispositivo), "dispositivo_id": dispositivo_id, "archivos": archivos,
-                                   "vence": time.monotonic() + 300}
+        token = self._guardar_plan("wifi" if dispositivo else "archivo", identidad, archivos=archivos,
+                                   dispositivo=dispositivo, dispositivo_id=dispositivo_id)
         return {"token": token, "dispositivo": dispositivo, "archivos": archivos,
                 "total_bytes": sum(a["tamano"] for a in archivos),
-                "aviso": "Tras la recepción, pasan a videos completos/videosPublicados separados por personaje. Esto no verifica Instagram."}
+                "aviso": ("Tras la recepción, pasan a videos completos/videosPublicados separados por personaje. Esto no verifica Instagram."
+                          if dispositivo else "Los archivos seleccionados pasarán a Videos completos en este pendrive.")}
+
+    def _guardar_plan(self, tipo, identidad, **datos):
+        token = secrets.token_urlsafe(32)
+        ahora = time.monotonic()
+        with self._lock:
+            self._planes = {k: v for k, v in self._planes.items() if v["vence"] > ahora}
+            self._planes[token] = {"tipo": tipo, "identidad": identidad, "vence": ahora + 300, **datos}
+        return token
+
+    def _tomar_plan(self, token, tipo):
+        with self._lock:
+            plan = self._planes.get(token)
+            if not plan or plan["tipo"] != tipo or plan["vence"] < time.monotonic():
+                raise ValueError("El plan venció, ya se utilizó o corresponde a otra opción. Revisá nuevamente.")
+            return self._planes.pop(token)
 
     def _validar_archivo(self, plan, archivo):
         if self._identidad() != plan["identidad"]:
@@ -372,7 +406,7 @@ class GestorPublicacion:
         st = os.stat(ruta)
         if (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns) != tuple(archivo["firma"]) or calcular_sha256(ruta) != archivo["sha256"]:
             raise ValueError("El video cambió desde la simulación. No se publica.")
-        if os.path.exists(destino):
+        if os.path.lexists(destino):
             raise FileExistsError("Se ocupó el destino de publicación. No se sobrescribe.")
 
     def _actualizar_rutas(self, origen, destino):
@@ -403,9 +437,7 @@ class GestorPublicacion:
         with self._lock:
             if any(t["estado"] == "en_curso" for t in self._trabajos.values()):
                 raise ValueError("Ya hay un envío Wi-Fi en curso.")
-            plan = self._planes.pop(token, None)
-            if not plan or plan["vence"] < time.monotonic():
-                raise ValueError("El plan venció o ya se utilizó. Prepará un nuevo envío.")
+            plan = self._tomar_plan(token, "wifi")
             identificador = str(uuid.uuid4())
             self._trabajos[identificador] = {"id": identificador, "estado": "en_curso", "fase": "preparando", "mensaje": "Preparando envío",
                                             "dispositivo": {"id": plan["dispositivo_id"], **plan["dispositivo"]},
@@ -434,6 +466,36 @@ class GestorPublicacion:
             self._cancelaciones[identificador].set()
         return self.estado(identificador)
 
+    @staticmethod
+    def _evento_archivo(archivo):
+        return {"id_evento": str(uuid.uuid4()), "id_operacion": str(uuid.uuid4()),
+                "fecha": datetime.datetime.now().isoformat(), "ruta_origen": archivo["ruta"],
+                "ruta_destino": archivo["destino_rel"], "sha256": archivo["sha256"],
+                "bytes": archivo["tamano"], "personaje": archivo["personaje"]}
+
+    def _trasladar_archivo(self, archivo):
+        os.makedirs(os.path.dirname(archivo["destino"]), exist_ok=True)
+        mover_sin_sobrescribir(archivo["origen"], archivo["destino"])
+
+    def archivar(self, token, confirmacion):
+        if confirmacion is not True or not isinstance(token, str):
+            raise ValueError("Confirmá primero el plan para guardar en el pendrive.")
+        with operacion_pendrive_exclusiva():
+            plan = self._tomar_plan(token, "archivo")
+            raiz = plan["identidad"][1]
+            for archivo in plan["archivos"]:
+                self._validar_archivo(plan, archivo)
+            archivados = []
+            for archivo in plan["archivos"]:
+                self._validar_archivo(plan, archivo)
+                evento = {**self._evento_archivo(archivo), "modo": "pendrive"}
+                registrar_evento_manifiesto_edicion(raiz, {**evento, "tipo_evento": "archivo_pendrive_preparado"})
+                self._trasladar_archivo(archivo)
+                self._actualizar_rutas(archivo["origen"], archivo["destino"])
+                registrar_evento_manifiesto_edicion(raiz, {**evento, "tipo_evento": "archivado_en_pendrive"})
+                archivados.append(evento)
+            return {"archivados": archivados}
+
     def _enviar(self, identificador, plan, pin):
         raiz = plan["identidad"][1]
         cancelacion = self._cancelaciones[identificador]
@@ -446,17 +508,12 @@ class GestorPublicacion:
 
         def recibido(archivo):
             self._validar_archivo(plan, archivo)
-            id_operacion = str(uuid.uuid4())
-            evento = {"id_evento": str(uuid.uuid4()), "id_operacion": id_operacion,
-                      "fecha": datetime.datetime.now().isoformat(), "ruta_origen": archivo["ruta"],
-                      "ruta_destino": archivo["destino_rel"], "sha256": archivo["sha256"],
-                      "bytes": archivo["tamano"], "personaje": archivo["personaje"], "dispositivo": plan["dispositivo"]["alias"]}
+            evento = {**self._evento_archivo(archivo), "dispositivo": plan["dispositivo"]["alias"]}
             registrar_evento_manifiesto_edicion(raiz, {**evento, "tipo_evento": "recepcion_wifi_confirmada"})
             with self._lock:
                 self._trabajos[identificador]["recibidos"].append(archivo["nombre"])
                 self._trabajos[identificador]["fase"] = "recibido"
-            os.makedirs(os.path.dirname(archivo["destino"]), exist_ok=True)
-            mover_sin_sobrescribir(archivo["origen"], archivo["destino"])
+            self._trasladar_archivo(archivo)
             registrar_evento_manifiesto_edicion(raiz, {**evento, "tipo_evento": "publicado_por_envio_wifi"})
             self._actualizar_rutas(archivo["origen"], archivo["destino"])
             with self._lock:
@@ -490,22 +547,44 @@ class GestorPublicacion:
                                                     codigo_http=getattr(error, "codigo_http", None),
                                                     cancelacion_confirmada=getattr(error, "cancelacion_confirmada", None))
 
-    def deshacer(self, id_operacion):
+    def _plan_retorno(self, identidad, id_operacion):
+        raiz = identidad[1]
+        evento = next((e for e in self._historial(raiz, limite=None) if e["id_operacion"] == id_operacion), None)
+        if not evento:
+            raise ValueError("Operación no encontrada o ya deshecha.")
+        origen = self._ruta(raiz, evento["ruta_destino"])
+        destino = self._ruta(raiz, evento["ruta_origen"])
+        if os.path.lexists(destino):
+            raise FileExistsError("La ruta de retorno está ocupada. No se sobrescribe.")
+        if calcular_sha256(origen) != evento["sha256"]:
+            raise ValueError("El archivo cambió desde que se archivó.")
+        return {"evento": evento, "origen": origen, "destino": destino}
+
+    def simular_deshacer_archivo(self, id_operacion):
+        identidad = self._identidad()
+        retorno = self._plan_retorno(identidad, id_operacion)
+        if retorno["evento"].get("modo") != "pendrive":
+            raise ValueError("Elegí un archivo guardado en el pendrive.")
+        token = self._guardar_plan("retorno", identidad, retorno=retorno)
+        return {"token": token, "origen": retorno["origen"], "destino": retorno["destino"]}
+
+    def deshacer(self, id_operacion, token=None, confirmacion=None):
         with operacion_pendrive_exclusiva():
             identidad = self._identidad()
-            evento = next((e for e in self._historial(identidad[1], limite=None) if e["id_operacion"] == id_operacion), None)
-            if not evento:
-                raise ValueError("Publicación no encontrada o ya deshecha.")
-            origen = self._ruta(identidad[1], evento["ruta_destino"])
-            destino = self._ruta(identidad[1], evento["ruta_origen"])
-            if os.path.exists(destino):
-                raise FileExistsError("La ruta de retorno está ocupada. No se sobrescribe.")
-            if calcular_sha256(origen) != evento["sha256"]:
-                raise ValueError("El video publicado cambió; no se revierte automáticamente.")
-            os.makedirs(os.path.dirname(destino), exist_ok=True)
-            mover_sin_sobrescribir(origen, destino)
-            registrar_evento_manifiesto_edicion(identidad[1], {"id_evento": str(uuid.uuid4()),
-                "tipo_evento": "deshacer_publicacion_wifi", "id_operacion": id_operacion,
-                "fecha": datetime.datetime.now().isoformat(), "ruta_destino": evento["ruta_origen"]})
-            self._actualizar_rutas(origen, destino)
-            return {"exito": True, "destino": destino}
+            retorno = self._plan_retorno(identidad, id_operacion)
+            evento = retorno["evento"]
+            local = evento.get("modo") == "pendrive"
+            tipo = "deshacer_archivo_pendrive" if local else "deshacer_publicacion_wifi"
+            registro = {"id_evento": str(uuid.uuid4()), "id_operacion": id_operacion,
+                        "fecha": datetime.datetime.now().isoformat(), "ruta_destino": evento["ruta_origen"]}
+            if local:
+                if confirmacion is not True or not isinstance(token, str):
+                    raise ValueError("Revisá y confirmá el retorno a Sin publicar.")
+                plan = self._tomar_plan(token, "retorno")
+                if plan["identidad"] != identidad or plan["retorno"] != retorno:
+                    raise ValueError("Cambió el pendrive o la ruta de retorno. Revisá nuevamente.")
+                registrar_evento_manifiesto_edicion(identidad[1], {**registro, "tipo_evento": tipo + "_preparado"})
+            self._trasladar_archivo(retorno)
+            registrar_evento_manifiesto_edicion(identidad[1], {**registro, "tipo_evento": tipo})
+            self._actualizar_rutas(retorno["origen"], retorno["destino"])
+            return {"exito": True, "destino": retorno["destino"]}

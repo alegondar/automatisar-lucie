@@ -105,14 +105,14 @@
       aliasDispositivo(celular) + ' · ' + celular.ip + ':' + celular.port : trabajo ? 'Envío en curso. El receptor se conserva hasta que termine.' : 'Todavía no elegiste un celular.');
     const ocupado = Boolean(trabajo) || enviando;
     const sinPersonaje = elegidos.filter(a => a.personaje === 'sin_asignar' && !personajesElegidos.get(a.id));
-    const listo = !ocupado && !revisando && !buscando && !conectando && elegidos.length > 0 && !sinPersonaje.length && Boolean(celular);
+    const listoPendrive = pendriveConectado && !ocupado && !revisando && elegidos.length > 0 && !sinPersonaje.length;
+    const listo = listoPendrive && !buscando && !conectando && Boolean(celular);
     el('wifi-preparar').disabled = !listo || Boolean(plan);
-    el('wifi-preparar').textContent = revisando ? 'Revisando archivos…' : plan ? 'Revisión lista abajo' : 'Revisar envío';
-    texto('wifi-siguiente', ocupado ? 'Esperá a que termine este envío.' : revisando ? 'Comprobando archivos y destinos…' :
-      !elegidos.length ? '1. Marcá el video que querés enviar.' : sinPersonaje.length ? 'Elegí el personaje de ' + sinPersonaje.map(a => a.nombre).join(', ') + ' aquí arriba.' :
-      buscando || conectando ? 'Buscando conexión con el celular…' : !celular ? '2. Buscá tu celular y elegilo en la lista.' :
-      plan ? '3. Revisá el detalle y pulsá Confirmar y enviar.' : 'Todo listo. Revisá el envío para continuar.');
-    el('wifi-siguiente').dataset.estado = listo || plan ? 'listo' : sinPersonaje.length ? 'pendiente' : 'esperando';
+    el('wifi-archivar').disabled = !listoPendrive || Boolean(plan);
+    texto('wifi-siguiente', ocupado ? 'Esperá a que termine la operación.' : revisando ? 'Comprobando archivos y destinos…' :
+      !elegidos.length ? 'Marcá los archivos que querés guardar o enviar.' : sinPersonaje.length ? 'Elegí el personaje de ' + sinPersonaje.map(a => a.nombre).join(', ') + ' aquí arriba.' :
+      plan ? 'Revisá el detalle y confirmá.' : !celular ? 'Podés guardar en el pendrive ahora. Para enviar por Wi-Fi, elegí el celular.' : 'Elegí cómo querés guardar o enviar los archivos.');
+    el('wifi-siguiente').dataset.estado = listoPendrive || plan ? 'listo' : sinPersonaje.length ? 'pendiente' : 'esperando';
     el('wifi-paso-celular').dataset.estado = celular ? 'listo' : 'pendiente';
     texto('wifi-conexion-resumen', celular ? 'Cambiar celular o app' : 'Buscar o elegir celular');
     for (const id of ['wifi-app', 'wifi-dispositivo', 'wifi-ip', 'wifi-puerto', 'wifi-todos', 'wifi-ninguno', 'wifi-actualizar', 'wifi-tab-historial', 'wifi-tab-organizacion']) el(id).disabled = ocupado;
@@ -320,8 +320,8 @@
       historial.replaceChildren();
       texto('wifi-historial-conteo', String(historialEnvios.length));
       const busqueda = el('wifi-historial-filtro').value.trim().toLocaleLowerCase();
-      const visibles = historialEnvios.filter(e => (e.ruta_destino + ' ' + e.dispositivo + ' ' + e.fecha).toLocaleLowerCase().includes(busqueda));
-      if (!visibles.length) historial.textContent = historialEnvios.length ? 'No hay envíos que coincidan con tu búsqueda.' : 'Todavía no enviaste archivos desde esta sección.';
+      const visibles = historialEnvios.filter(e => (e.ruta_destino + ' ' + (e.dispositivo || 'pendrive') + ' ' + e.fecha).toLocaleLowerCase().includes(busqueda));
+      if (!visibles.length) historial.textContent = historialEnvios.length ? 'No hay resultados para tu búsqueda.' : 'Todavía no enviaste ni guardaste archivos desde esta sección.';
       for (const envio of visibles) {
         const fila = document.createElement('article');
         fila.className = 'wifi-historial-fila';
@@ -333,7 +333,9 @@
         const fecha = new Date(envio.fecha);
         const fechaLegible = Number.isNaN(fecha.getTime()) ? envio.fecha : fecha.toLocaleString('es-AR', {dateStyle: 'medium', timeStyle: 'short'});
         const personaje = envio.personaje || envio.ruta_destino.split('/')[2];
-        meta.textContent = (etiquetasPersonaje[personaje] || 'Sin asignar') + ' · ' + fechaLegible + ' · Recibido en ' + envio.dispositivo;
+        const local = envio.modo === 'pendrive';
+        meta.textContent = (etiquetasPersonaje[personaje] || 'Sin asignar') + ' · ' + fechaLegible +
+          (local ? ' · Guardado en el pendrive' : ' · Recibido en ' + envio.dispositivo);
         const detalles = document.createElement('details'); detalles.className = 'wifi-detalles';
         const resumen = document.createElement('summary'); resumen.textContent = 'Ver ubicación del archivo';
         const ruta = document.createElement('p'); ruta.textContent = envio.ruta_destino;
@@ -343,13 +345,19 @@
         boton.textContent = 'Volver a Sin publicar';
         boton.disabled = Boolean(trabajo);
         boton.addEventListener('click', async () => {
-          if (!confirm('¿Volver a colocar este video en Videos sin publicar? Se conservará el archivo y no se quitará la copia del celular.')) return;
           boton.disabled = true;
           try {
-            await peticion('deshacer', {id_operacion: envio.id_operacion});
-            estado('El video volvió a Videos sin publicar. La copia recibida en el celular se conserva.');
+            const solicitud = {id_operacion: envio.id_operacion};
+            if (local) {
+              const retorno = await peticion('deshacer-archivo-simular', solicitud);
+              if (!confirm('¿Volver a colocar este archivo en Videos sin publicar?\n\n' + retorno.origen + '\n→ ' + retorno.destino)) return;
+              Object.assign(solicitud, {token: retorno.token, confirmacion: true});
+            } else if (!confirm('¿Volver a colocar este video en Videos sin publicar? Se conservará el archivo y no se quitará la copia del celular.')) return;
+            await peticion('deshacer', solicitud);
             await cargar();
-          } catch (error) { estado(error.message); boton.disabled = false; }
+            texto('wifi-historial-estado', local ? 'El archivo volvió a Videos sin publicar.' : 'El video volvió a Videos sin publicar. La copia recibida en el celular se conserva.');
+          } catch (error) { texto('wifi-historial-estado', error.message); }
+          finally { boton.disabled = false; }
         });
         fila.append(etiqueta, boton);
         historial.append(fila);
@@ -482,14 +490,8 @@
     finally { conectando = false; dibujarConteo(); }
   }
 
-  async function preparar() {
-    if (trabajo || enviando || revisando || buscando || conectando) return;
-    if (!seleccion.size || !el('wifi-dispositivo').value) {
-      estado('Seleccioná al menos un video y elegí el celular receptor.');
-      return;
-    }
-    el('wifi-preparar').disabled = true;
-    estado('Calculando integridad y revisando los destinos…');
+  async function preparar(local) {
+    if (el(local ? 'wifi-archivar' : 'wifi-preparar').disabled) return;
     invalidarPlan();
     const version = revision;
     revisando = true;
@@ -503,27 +505,36 @@
           personajes[id] = personajesElegidos.get(id);
         }
       }
-      const resultado = await peticion('simular', {seleccion: [...seleccion], dispositivo_id: el('wifi-dispositivo').value, personajes, receptor: appElegida()});
+      const solicitud = {seleccion: [...seleccion], personajes};
+      if (!local) Object.assign(solicitud, {dispositivo_id: el('wifi-dispositivo').value, receptor: appElegida()});
+      const resultado = await peticion(local ? 'archivar-simular' : 'simular', solicitud);
       if (revision !== version || trabajo) return;
-      if (tipoDispositivo(resultado.dispositivo) !== appElegida()) throw new Error('La app receptora cambió. Buscá y elegí nuevamente el celular.');
+      if (!local && tipoDispositivo(resultado.dispositivo) !== appElegida()) throw new Error('La app receptora cambió. Buscá y elegí nuevamente el celular.');
       plan = resultado;
       const cont = el('wifi-plan');
       cont.style.display = 'block';
       const titulo = document.createElement('h3');
-      titulo.textContent = nombreApp(plan.dispositivo.receptor || appElegida()) + ' · ' + aliasDispositivo(plan.dispositivo) + ' · ' + bytes(plan.total_bytes);
+      titulo.textContent = (local ? 'Guardar en el pendrive' : nombreApp(plan.dispositivo.receptor || appElegida()) + ' · ' + aliasDispositivo(plan.dispositivo)) + ' · ' + bytes(plan.total_bytes);
       const detalle = document.createElement('ul');
       for (const archivo of plan.archivos) {
         const item = document.createElement('li');
         item.textContent = archivo.nombre + ' · ' + bytes(archivo.tamano);
         const destino = document.createElement('details'); destino.className = 'wifi-detalles';
-        const resumen = document.createElement('summary'); resumen.textContent = 'Ubicación después de recibir';
-        const ruta = document.createElement('p'); ruta.textContent = archivo.destino_rel;
-        destino.append(resumen, ruta); item.append(destino);
+        const resumen = document.createElement('summary'); resumen.textContent = local ? 'Origen y destino' : 'Ubicación después de recibir';
+        const ruta = document.createElement('p'); ruta.textContent = local ? archivo.destino : archivo.destino_rel;
+        destino.append(resumen);
+        if (local) {
+          destino.open = true;
+          const origen = document.createElement('p'); origen.textContent = archivo.origen;
+          destino.append(origen);
+          ruta.textContent = '→ ' + ruta.textContent;
+        }
+        destino.append(ruta); item.append(destino);
         detalle.append(item);
       }
       const aviso = document.createElement('div'); aviso.className = 'wifi-ayuda';
       aviso.textContent = plan.aviso;
-      if (plan.dispositivo.protocol === 'https' && plan.dispositivo.fingerprint) {
+      if (!local && plan.dispositivo.protocol === 'https' && plan.dispositivo.fingerprint) {
         const identidad = document.createElement('details'); identidad.className = 'wifi-detalles';
         const tituloIdentidad = document.createElement('summary'); tituloIdentidad.textContent = 'Comparar identidad HTTPS del celular';
         const huella = document.createElement('p'); huella.textContent = plan.dispositivo.fingerprint;
@@ -531,27 +542,34 @@
       }
       const confirmar = document.createElement('button');
       confirmar.className = 'btn-sm wifi-principal';
-      confirmar.textContent = 'Confirmar y enviar al celular';
+      confirmar.textContent = local ? 'Confirmar y guardar en el pendrive' : 'Confirmar y enviar al celular';
       const token = plan.token;
-      confirmar.addEventListener('click', () => iniciar(token));
+      confirmar.addEventListener('click', () => iniciar(token, local));
       const cancelar = document.createElement('button');
       cancelar.className = 'btn-sm btn-secundario';
       cancelar.textContent = 'Cancelar revisión';
       cancelar.addEventListener('click', invalidarPlan);
       cont.replaceChildren(titulo, detalle, aviso, confirmar, cancelar);
       cont.scrollIntoView?.({behavior: 'smooth', block: 'nearest'});
-      estado('Revisá los archivos y destinos. Todavía no se envió ni movió ningún video.');
+      estado('Revisá los archivos y destinos antes de confirmar.');
     } catch (error) { estado(error.message); }
     finally { revisando = false; dibujarConteo(); }
   }
 
-  async function iniciar(tokenEsperado) {
+  async function iniciar(tokenEsperado, local) {
     if (!plan || plan.token !== tokenEsperado || trabajo || enviando) return;
     const token = plan.token;
     enviando = true;
     invalidarPlan();
     el('wifi-preparar').disabled = true;
     try {
+      if (local) {
+        estado('Guardando los archivos seleccionados en el pendrive…');
+        const datos = await peticion('archivar', {token, confirmacion: true});
+        await cargar();
+        estado(datos.archivados.length + (datos.archivados.length === 1 ? ' archivo guardado' : ' archivos guardados') + ' en Videos completos.');
+        return;
+      }
       const datos = await peticion('enviar', {token, confirmacion: true, pin: el('wifi-pin').value});
       el('wifi-pin').value = '';
       trabajo = datos.id;
@@ -561,7 +579,10 @@
       dibujarArchivos();
       estado('Aceptá la recepción en ' + nombreApp(appElegida()) + ' en el celular.');
       await seguir();
-    } catch (error) { estado(error.message); }
+    } catch (error) {
+      if (local) await cargar();
+      estado(error.message);
+    }
     finally { enviando = false; dibujarConteo(); }
   }
 
@@ -648,7 +669,8 @@
   });
   el('wifi-buscar').addEventListener('click', buscar);
   el('wifi-conectar').addEventListener('click', conectar);
-  el('wifi-preparar').addEventListener('click', preparar);
+  el('wifi-preparar').addEventListener('click', () => preparar(false));
+  el('wifi-archivar').addEventListener('click', () => preparar(true));
   el('wifi-cancelar').addEventListener('click', async () => {
     if (!trabajo) return;
     el('wifi-cancelar').disabled = true;

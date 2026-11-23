@@ -696,6 +696,7 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
 
         if ruta in ("/api/publicacion/buscar", "/api/publicacion/conectar", "/api/publicacion/simular",
                     "/api/publicacion/enviar", "/api/publicacion/cancelar", "/api/publicacion/deshacer",
+                    "/api/publicacion/archivar-simular", "/api/publicacion/archivar", "/api/publicacion/deshacer-archivo-simular",
                     "/api/publicacion/resguardar", "/api/publicacion/resguardar-simular", "/api/publicacion/organizar-simular",
                     "/api/publicacion/volver-a-editar", "/api/publicacion/volver-a-editar-simular",
                     "/api/publicacion/organizar", "/api/publicacion/deshacer-organizacion"):
@@ -791,10 +792,16 @@ class HandlerServidorBandeja(BaseHTTPRequestHandler):
                 resultado = self.publicacion.organizacion.deshacer(body.get("id_organizacion"))
             elif ruta.endswith("/enviar"):
                 resultado = self.publicacion.iniciar_envio(body.get("token"), body.get("confirmacion"), body.get("pin", ""))
+            elif ruta.endswith("/archivar-simular"):
+                resultado = self.publicacion.simular_archivo(body.get("seleccion"), body.get("personajes"))
+            elif ruta.endswith("/archivar"):
+                resultado = self.publicacion.archivar(body.get("token"), body.get("confirmacion"))
+            elif ruta.endswith("/deshacer-archivo-simular"):
+                resultado = self.publicacion.simular_deshacer_archivo(body.get("id_operacion"))
             elif ruta.endswith("/cancelar"):
                 resultado = self.publicacion.cancelar(body.get("id"))
             elif ruta.endswith("/deshacer"):
-                resultado = self.publicacion.deshacer(body.get("id_operacion"))
+                resultado = self.publicacion.deshacer(body.get("id_operacion"), body.get("token"), body.get("confirmacion"))
             elif ruta.endswith("/resguardar-simular"):
                 resultado = self.publicacion.simular_resguardo(body.get("export_id"), body.get("titulo"), body.get("personaje"))
             elif ruta.endswith("/volver-a-editar-simular"):

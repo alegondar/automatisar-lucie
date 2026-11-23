@@ -6674,6 +6674,44 @@ class TestModoEdicionCapCutServidor(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(b"LocalSend", contenido)
 
+    def test_archivar_completo_api_exige_revision_confirmacion_y_csrf(self):
+        from unittest.mock import patch
+        carpeta = os.path.join(self.raiz_pen, "videos completos", "videos sin publicar", "lucie")
+        os.makedirs(carpeta, exist_ok=True)
+        video = os.path.join(carpeta, "Cafe.mp4")
+        with open(video, "xb") as archivo:
+            archivo.write(b"video final temporal")
+        pen = {"conectado": True, "id": "pen-prueba", "punto_montaje": self.pendrive_dir}
+        with patch("bandeja.publicacion.detectar_pendrive", return_value=pen):
+            status, listado, _ = self._get("/api/publicacion/lista")
+            self.assertEqual(status, 200)
+            seleccion = {"seleccion": [listado["archivos"][0]["id"]]}
+            self.assertEqual(self._post("/api/publicacion/archivar-simular", seleccion, csrf="incorrecto")[0], 403)
+            status, plan = self._post("/api/publicacion/archivar-simular", seleccion)
+            self.assertEqual(status, 200)
+            destino = plan["archivos"][0]["destino"]
+            self.assertTrue(os.path.isfile(video))
+            self.assertFalse(os.path.lexists(destino))
+            token = {"token": plan["token"], "confirmacion": True}
+            self.assertEqual(self._post("/api/publicacion/archivar", {**token, "confirmacion": False})[0], 409)
+            self.assertEqual(self._post("/api/publicacion/enviar", token)[0], 409)
+            self.assertEqual(self._post("/api/publicacion/archivar", token, csrf="incorrecto")[0], 403)
+            status, resultado = self._post("/api/publicacion/archivar", token)
+            self.assertEqual(status, 200)
+            self.assertFalse(os.path.lexists(video))
+            self.assertTrue(os.path.isfile(destino))
+            self.assertEqual(self._post("/api/publicacion/archivar", token)[0], 409)
+            operacion = {"id_operacion": resultado["archivados"][0]["id_operacion"]}
+            self.assertEqual(self._post("/api/publicacion/deshacer", operacion)[0], 409)
+            status, retorno = self._post("/api/publicacion/deshacer-archivo-simular", operacion)
+            self.assertEqual(status, 200)
+            self.assertEqual(retorno["origen"], destino)
+            self.assertEqual(retorno["destino"], video)
+            self.assertEqual(self._post("/api/publicacion/deshacer", {
+                **operacion, "token": retorno["token"], "confirmacion": True})[0], 200)
+            self.assertTrue(os.path.isfile(video))
+            self.assertFalse(os.path.lexists(destino))
+
     def test_resguardar_export_api_exige_plan_titulo_personaje_y_csrf(self):
         capcut = os.path.join(self.tmp_dir, "CapCut")
         os.makedirs(capcut)

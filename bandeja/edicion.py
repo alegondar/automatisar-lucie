@@ -514,7 +514,7 @@ def obtener_secciones_edicion(
                     ruta_abs = os.path.join(raiz, arch)
                     rel = os.path.relpath(ruta_abs, dir_completos)
                     partes = rel.split(os.sep)
-                    if partes[0] in ("videos sin publicar", "videosPublicados"):
+                    if partes[0] in ("videos sin publicar", "videosPublicados", "videos archivados"):
                         partes = partes[1:]
                     capitulo = capitulos_por_ruta.get(os.path.normcase(os.path.abspath(ruta_abs))) or partes_capitulo(partes)[1]
                     _asegurar_conteo(capitulo)
@@ -1217,8 +1217,9 @@ def deshacer_copia_completo(
     completos = os.path.join(pendrive_raiz, "videos completos")
     if not esta_confinado_en_raiz(video_completo_ruta, completos) or not _sin_enlaces(video_completo_ruta):
         raise ValueError("El video debe estar dentro de videos completos del pendrive vinculado.")
-    if esta_confinado_en_raiz(video_completo_ruta, os.path.join(completos, "videosPublicados")):
-        raise ValueError("Primero usá Volver a Sin publicar desde el historial del envío al celular.")
+    if any(esta_confinado_en_raiz(video_completo_ruta, os.path.join(completos, carpeta))
+           for carpeta in ("videosPublicados", "videos archivados")):
+        raise ValueError("Primero usá Volver a Sin publicar desde el historial de Enviar al celular.")
     if not os.path.isfile(video_completo_ruta):
         raise FileNotFoundError(f"El archivo no existe: '{video_completo_ruta}'")
 

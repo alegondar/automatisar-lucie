@@ -1,4 +1,25 @@
-# Estado actual del sistema — 2026-11-22
+# Estado actual del sistema — 2026-11-23
+
+## Guardar videos completos en el pendrive desde la cola (2026-11-23)
+
+En «Enviar al celular», marcar los videos terminados y elegir «Guardar en el
+pendrive» o «Enviar al celular». El guardado directo muestra origen y destino
+antes de confirmar y usa `videos completos/videos archivados/<personaje>/<mes - año>/`.
+La recepción Wi-Fi confirmada conserva su destino `videos completos/videosPublicados`.
+«Enviados y guardados» distingue ambos resultados. «Volver a Sin publicar»
+permite revisar y confirmar el retorno de un video guardado directamente.
+
+El traslado valida la identidad del pendrive, la selección y el SHA-256,
+rechaza colisiones y usa renombrado sin reemplazo. El manifiesto registra cada
+archivo y las referencias de edición usan su ruta efectiva. Los exports siguen
+entrando en la cola al terminar la edición, donde esperan la elección del usuario.
+
+Validación en Windows con Python 3.13.0. La suite hermética ejecutó 543 pruebas
+con 24 omisiones. Pasaron las cinco suites de interfaz, las auditorías de
+borrado y repositorio, y la validación estricta de OpenSpec. El manifiesto
+real conservó 1728 líneas durante la suite. Lucie se reabrió para uso habitual
+y el panel sirvió el botón nuevo y su JavaScript. Los traslados de prueba
+usaron archivos temporales y el Wi-Fi se comprobó con receptores de prueba.
 
 ## Eliminación manual desde Sin identificar (2026-11-22)
 

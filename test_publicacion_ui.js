@@ -65,12 +65,14 @@ async function probar(personajeAlternativo = 'mailen') {
   const llamadas = [];
   const evento = {id_operacion: 'operacion-temporal', ruta_destino: 'videos completos/videosPublicados/' + personajeAlternativo + '/Foto.png',
     dispositivo: receptor.alias, fecha: '2026-10-12'};
+  const archivoLocal = {...evento, id_operacion: 'archivo-local', modo: 'pendrive', dispositivo: undefined,
+    ruta_origen: datos[2].ruta, ruta_destino: 'videos completos/videos archivados/roli/Roli.mp4'};
   async function apiFetch(url, opciones) {
     const cuerpo = opciones ? JSON.parse(opciones.body) : null;
     llamadas.push({url, cuerpo});
     if (url.endsWith('/lista')) {
       const respuesta = {conectado: true, carpeta: 'Pendrive temporal',
-      archivos: datos.filter(a => !archivados.has(a.id)), historial: archivados.size ? [evento] : [],
+      archivos: datos.filter(a => !archivados.has(a.id)), historial: archivados.has('archivo-2') ? [archivoLocal] : archivados.size ? [evento] : [],
       organizacion_pendiente: [{id: 'carpeta-antigua', ruta: 'videos completos/roli', tipo: 'carpeta_pendiente', personaje: 'roli'}]};
       if (retenerLista) return new Promise(resolve => listasPendientes.push(() => resolve(respuesta)));
       return respuesta;
@@ -80,6 +82,20 @@ async function probar(personajeAlternativo = 'mailen') {
       return {dispositivos: [receptor, oficial]};
     }
     if (url.endsWith('/conectar')) return {dispositivo: conexionRespuesta};
+    if (url.endsWith('/archivar-simular')) {
+      assert.deepStrictEqual(cuerpo, {seleccion: ['archivo-2'], personajes: {}});
+      return {token: 'plan-local', total_bytes: 5000, archivos: [{...datos[2],
+        origen: 'Pendrive/' + archivoLocal.ruta_origen, destino: 'Pendrive/' + archivoLocal.ruta_destino}]};
+    }
+    if (url.endsWith('/archivar')) {
+      assert.deepStrictEqual(cuerpo, {token: 'plan-local', confirmacion: true});
+      archivados.add('archivo-2');
+      return {archivados: [archivoLocal]};
+    }
+    if (url.endsWith('/deshacer-archivo-simular')) {
+      assert.deepStrictEqual(cuerpo, {id_operacion: archivoLocal.id_operacion});
+      return {token: 'retorno-local', origen: archivoLocal.ruta_destino, destino: archivoLocal.ruta_origen};
+    }
     if (url.endsWith('/simular')) {
       assert.deepStrictEqual(cuerpo.seleccion, esperados, 'Se incluyeron archivos ajenos al filtro.');
       assert.strictEqual(cuerpo.dispositivo_id, receptor.id);
@@ -105,6 +121,11 @@ async function probar(personajeAlternativo = 'mailen') {
         recibidos: ['Foto.png'], publicados: [evento], dispositivo: receptor};
     }
     if (url.endsWith('/deshacer')) {
+      if (cuerpo.id_operacion === archivoLocal.id_operacion) {
+        assert.deepStrictEqual(cuerpo, {id_operacion: archivoLocal.id_operacion, token: 'retorno-local', confirmacion: true});
+        archivados.delete('archivo-2');
+        return {exito: true};
+      }
       assert.strictEqual(cuerpo.id_operacion, evento.id_operacion);
       archivados.clear();
       deshechos++;
@@ -163,6 +184,25 @@ async function probar(personajeAlternativo = 'mailen') {
   await el('wifi-personaje').emitir('change');
   assert.strictEqual(tarjetas().length, 1);
   assert.strictEqual(tilde(tarjetas()[0]).checked, false);
+  await el('wifi-todos').emitir('click');
+  assert.strictEqual(el('wifi-preparar').disabled, true);
+  assert.strictEqual(el('wifi-archivar').disabled, false, 'Guardar no requiere elegir un celular.');
+  await el('wifi-archivar').emitir('click');
+  const detalleLocal = el('wifi-plan').children[1].children[0].children[0];
+  assert(detalleLocal.children[1].textContent.endsWith(archivoLocal.ruta_origen));
+  assert(detalleLocal.children[2].textContent.endsWith(archivoLocal.ruta_destino));
+  assert.strictEqual(tarjetas().length, 1, 'Revisar mantiene el video en la cola.');
+  await el('wifi-plan').children[4].emitir('click');
+  assert(!llamadas.some(l => l.url.endsWith('/archivar')), 'Cancelar la revisión conserva el archivo.');
+  await el('wifi-archivar').emitir('click');
+  await el('wifi-plan').children[3].emitir('click');
+  assert.strictEqual(tarjetas().length, 0);
+  assert(el('wifi-estado').textContent.includes('1 archivo guardado'));
+  assert(!llamadas.some(l => l.url.endsWith('/buscar') || l.url.endsWith('/enviar')));
+  const filaLocal = el('wifi-historial').children[0];
+  assert(filaLocal.children[0].children[1].textContent.includes('Guardado en el pendrive'));
+  await filaLocal.children[1].emitir('click');
+  assert.strictEqual(tarjetas().length, 1);
   await el('wifi-todos').emitir('click');
   await el('wifi-buscar').emitir('click');
   assert.strictEqual(el('wifi-dispositivo').value, '', 'Buscar no elige un receptor automáticamente.');

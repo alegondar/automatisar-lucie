@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#101011">
   <meta name="csrf-token" content="__TOKEN_CSRF__">
   <title>Lucie Sin Reglas · Bandeja de Descargas</title>
-  <link rel="stylesheet" href="/panel.css?v=20261122-eliminar-local">
+  <link rel="stylesheet" href="/panel.css?v=20261123-archivo-pendrive">
 </head>
 <body>
   <a class="saltar-contenido" href="#contenido-principal">Saltar al contenido</a>
@@ -85,13 +85,13 @@
 
     <section id="sec-publicacion" style="display:none;">
       <div class="wifi-cabecera">
-        <div><p class="wifi-eyebrow">DEL PENDRIVE AL CELULAR</p><h2>Enviar al celular</h2>
-          <p>Elegí los archivos, revisá el destino y confirmá. Vos decidís cada envío.</p></div>
+        <div><h2>Enviar al celular</h2>
+          <p>Seleccioná los videos terminados para enviarlos al celular o guardarlos en el pendrive.</p></div>
         <button class="btn-sm btn-secundario" id="wifi-actualizar">Actualizar archivos</button>
       </div>
       <div class="wifi-vistas" role="group" aria-label="Vistas de envío">
         <button id="wifi-tab-envio" class="wifi-tab" aria-pressed="true">Preparar envío</button>
-        <button id="wifi-tab-historial" class="wifi-tab" aria-pressed="false">Enviados <span id="wifi-historial-conteo">0</span></button>
+        <button id="wifi-tab-historial" class="wifi-tab" aria-pressed="false">Enviados y guardados <span id="wifi-historial-conteo">0</span></button>
         <button id="wifi-tab-organizacion" class="wifi-tab" aria-pressed="false">Organizar anteriores</button>
       </div>
       <div id="wifi-vista-envio" class="wifi-distribucion">
@@ -144,11 +144,14 @@
         </details>
       </div>
       <div class="card wifi-revision" id="wifi-paso-revision">
-        <div class="wifi-paso"><span>3</span><div><h3>Revisá y enviá</h3><p>El envío empieza recién cuando lo confirmás.</p></div></div>
+        <div class="wifi-paso"><span>3</span><div><h3>Elegí el destino y revisá</h3><p>Los archivos se trasladan cuando confirmás.</p></div></div>
         <p id="wifi-resumen-seleccion" class="wifi-resumen">Ningún archivo seleccionado.</p>
         <div id="wifi-seleccion-detalle" class="wifi-seleccion-detalle" aria-label="Archivos elegidos para enviar"></div>
         <p id="wifi-siguiente" class="wifi-siguiente" role="status" aria-live="polite">Marcá el video que querés enviar.</p>
-        <button class="btn-sm wifi-principal" id="wifi-preparar" aria-describedby="wifi-siguiente" disabled>Revisar envío</button>
+        <div class="wifi-opciones-destino">
+          <button class="btn-sm wifi-principal" id="wifi-preparar" aria-describedby="wifi-siguiente" disabled>Enviar al celular</button>
+          <button class="btn-sm btn-secundario" id="wifi-archivar" aria-describedby="wifi-siguiente" disabled>Guardar en el pendrive</button>
+        </div>
         <details class="wifi-detalles"><summary>Mi celular pide un PIN</summary>
           <label class="wifi-campo">PIN del receptor <input id="wifi-pin" type="password" autocomplete="off"></label></details>
         <div id="wifi-plan" style="display:none;"></div>
@@ -160,8 +163,8 @@
       </aside>
       </div>
       <div id="wifi-vista-historial" style="display:none;" class="card">
-        <h3>Enviados al celular</h3><p class="wifi-ayuda">Recibidos y archivados por personaje. Volver a Sin publicar conserva la copia del celular.</p>
-        <label class="wifi-campo">Buscar en enviados <input id="wifi-historial-filtro" type="search" placeholder="Archivo, personaje o celular"></label>
+        <h3>Enviados y guardados</h3><p class="wifi-ayuda" id="wifi-historial-estado" role="status"></p>
+        <label class="wifi-campo">Buscar en el historial <input id="wifi-historial-filtro" type="search" placeholder="Archivo, personaje o destino"></label>
         <div id="wifi-historial"></div>
       </div>
       <div id="wifi-vista-organizacion" style="display:none;" class="card">
@@ -763,8 +766,8 @@
   <script>
     const REFRESCO_PANEL_SEGUNDOS = __REFRESCO__;
   </script>
-  <script src="/panel.js?v=20261122-eliminar-local"></script>
-  <script src="/wifi.js?v=20261122-cola"></script>
+  <script src="/panel.js?v=20261123-archivo-pendrive"></script>
+  <script src="/wifi.js?v=20261123-archivo-pendrive"></script>
   <div id="toast-llegada" class="toast-llegada"></div>
 </body>
 </html>

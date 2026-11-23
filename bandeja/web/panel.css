@@ -967,6 +967,8 @@
 .wifi-destino { padding: 12px; border-radius: 8px; background: var(--card-alt); color: var(--text-muted); font-size: .8rem; overflow-wrap: anywhere; }
 .wifi-resumen { font-size: .9rem; line-height: 1.6; margin: 8px 0 16px; }
 .wifi-revision > .btn-sm, #wifi-buscar { width: 100%; margin: 0; }
+.wifi-opciones-destino { display: grid; gap: 8px; }
+.wifi-opciones-destino > button { width: 100%; margin: 0; }
 .wifi-lateral .card { padding: 20px; }
 .wifi-lateral .wifi-paso { margin-bottom: 14px; }
 .wifi-lateral .wifi-campo { margin: 10px 0; }
