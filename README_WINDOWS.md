@@ -84,8 +84,13 @@ conserva sus configuraciones y SQLite locales; no copiarlos entre sistemas.
 
 ## 3. Primer Uso y Configuración Local
 
-- En el primer inicio en Windows, la bandeja detecta automáticamente su carpeta de descargas real del usuario mediante la API de Windows (`SHGetKnownFolderPath`).
+- En Windows, la bandeja detecta la carpeta Descargas del usuario mediante
+  `SHGetKnownFolderPath`. Los capítulos se crean en `_lucie` dentro de la carpeta
+  detectada o de la `ruta_descargas` que elijas para este equipo.
 - Si necesita personalizar rutas o puertos sin afectar otros equipos, cree o edite el archivo **`config_bandeja.local.json`**. Este archivo tiene prioridad sobre `config_bandeja.json` y nunca se sube al repositorio Git.
+- Para usar la carpeta de Windows y su subcarpeta `_lucie`, podés indicar
+  `"ruta_descargas": "auto"` y `"ruta_destino_base": "auto"` en ese archivo.
+  Una ruta de destino explícita para capítulos debe quedar dentro de Descargas.
 - Si no existe dicho archivo, en el primer arranque se generará automáticamente de manera segura sin sobreescribir configuraciones previas.
 
 ---

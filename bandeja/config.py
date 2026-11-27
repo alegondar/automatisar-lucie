@@ -142,6 +142,13 @@ class ConfiguracionBandeja:
         if os.path.exists(self.ruta_config):
             with open(self.ruta_config, "r", encoding="utf-8", newline="\n") as f:
                 datos = json.load(f)
+            if os.name == "nt":
+                # Los valores históricos de Linux son automáticos en Windows.
+                # Aplicar antes de leer la configuración local, que tiene prioridad.
+                if datos.get("ruta_descargas") == "~/Descargas":
+                    datos["ruta_descargas"] = "auto"
+                if datos.get("ruta_destino_base") == "~/Descargas/_lucie":
+                    datos["ruta_destino_base"] = "auto"
 
         if self.ruta_config_local and os.path.exists(self.ruta_config_local):
             try:

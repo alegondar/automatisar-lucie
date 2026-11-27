@@ -1,4 +1,19 @@
-# Estado actual del sistema — 2026-11-23
+# Estado actual del sistema — 2026-11-27
+
+## Crear capítulos desde Descargas de Windows (2026-11-27)
+
+Windows detectaba `Downloads` como origen, pero heredaba `~/Descargas/_lucie`
+del archivo compartido. Eso dejaba el destino fuera de la carpeta vigilada y
+bloqueaba la revisión del movimiento. En Windows, los valores heredados ahora
+se resuelven con la carpeta Descargas del equipo y su subcarpeta `_lucie`. Se
+respetan los valores explícitos de `config_bandeja.local.json` y se conserva
+el comportamiento de configuración en Kali/Linux.
+
+En Windows con Python 3.13.0 pasaron las siete pruebas de configuración y la
+suite de 545 pruebas, con 24 omisiones. Se comprobó la creación de un capítulo
+de Roli y la revisión del movimiento de un video con archivos temporales. Las
+auditorías pasaron y el manifiesto del pendrive conservó 1781 líneas durante
+la suite.
 
 ## Guardar videos completos en el pendrive desde la cola (2026-11-23)
 

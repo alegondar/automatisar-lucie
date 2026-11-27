@@ -114,6 +114,54 @@ class TestConfiguracionLocalWindows(unittest.TestCase):
         self.assertTrue(os.path.isabs(cfg.ruta_descargas))
         self.assertTrue(cfg.ruta_destino_base.startswith(cfg.ruta_descargas))
 
+    def test_windows_crea_capitulo_y_simula_lote_bajo_descargas_detectadas(self):
+        descargas = os.path.join(self.temp_dir.name, "Downloads")
+        os.makedirs(descargas)
+        with open(self.ruta_base, "x", encoding="utf-8") as f:
+            json.dump({"ruta_descargas": "~/Descargas", "ruta_destino_base": "~/Descargas/_lucie"}, f)
+        with open(self.ruta_local, "x", encoding="utf-8") as f:
+            json.dump({"ruta_descargas": "auto"}, f)
+        with patch("os.name", "nt"), patch("bandeja.config.obtener_ruta_descargas_defecto", return_value=descargas):
+            config = ConfiguracionBandeja(self.ruta_base, self.ruta_local)
+        destino = os.path.join(descargas, "_lucie")
+        self.assertEqual(config.ruta_descargas, descargas)
+        self.assertEqual(config.ruta_destino_base, destino)
+        db = GestorBaseDatosBandeja(os.path.join(self.temp_dir.name, "lucie.sqlite"),
+                                    ruta_descargas=descargas, ruta_destino_base=destino)
+        movimientos = GestorMovimientosBandeja(config.ruta_descargas, config.ruta_destino_base, db,
+                                              os.path.join(self.temp_dir.name, "bitacora.jsonl"),
+                                              ruta_alias=os.path.join(self.temp_dir.name, "alias.json"))
+        capitulo = db.empezar_capitulo("roli", "Prueba capítulo")
+        carpeta = capitulo["carpeta_info"]["carpeta"]
+        self.assertEqual(carpeta, os.path.join(destino, "roli", "Prueba capítulo"))
+        self.assertTrue(os.path.isdir(carpeta))
+        video = os.path.join(descargas, "prueba.mp4")
+        with open(video, "xb") as f:
+            f.write(b"video temporal")
+        plan = movimientos.simular_movimiento_lote([{"ruta": video, "id_db": 1}],
+                                                    personaje="roli", nombre_escena=capitulo["nombre"])
+        self.assertTrue(plan["valido"], plan)
+        traslado, = plan["movimientos"]
+        self.assertEqual(os.path.dirname(traslado["destino"]), os.path.realpath(os.path.join(carpeta, "videos")))
+        self.assertTrue(os.path.isfile(video))
+        self.assertFalse(os.path.lexists(traslado["destino"]))
+
+    def test_rutas_explicitas_locales_y_config_linux_conservan_prioridad(self):
+        descargas = os.path.join(self.temp_dir.name, "Descargas elegidas")
+        destino = os.path.join(descargas, "capitulos")
+        with open(self.ruta_base, "x", encoding="utf-8") as f:
+            json.dump({"ruta_descargas": "~/Descargas", "ruta_destino_base": "~/Descargas/_lucie"}, f)
+        with open(self.ruta_local, "x", encoding="utf-8") as f:
+            json.dump({"ruta_descargas": descargas, "ruta_destino_base": destino}, f)
+        with patch("os.name", "nt"):
+            config_windows = ConfiguracionBandeja(self.ruta_base, self.ruta_local)
+        with patch("os.name", "posix"):
+            config_linux = ConfiguracionBandeja(self.ruta_base, "")
+        self.assertEqual(config_windows.ruta_descargas, descargas)
+        self.assertEqual(config_windows.ruta_destino_base, destino)
+        self.assertEqual(config_linux.ruta_descargas, os.path.abspath(os.path.expanduser("~/Descargas")))
+        self.assertEqual(config_linux.ruta_destino_base, os.path.join(config_linux.ruta_descargas, "_lucie"))
+
     def test_creacion_exclusiva_config_local_en_windows(self):
         with open(self.ruta_base, "w", encoding="utf-8", newline="\n") as f:
             json.dump({"puerto_servidor": 8766}, f)
